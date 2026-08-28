@@ -6,12 +6,17 @@ Every inbound message goes through the same stages in the same order. The
 ordering is the contract, and it is enforced in `internal/gateway.Ingest`.
 
 ```
-bytes from a link
+bytes from a partner
+      │
+      ▼
+┌─────────────┐  from the certificate presented, the network connected from, or
+│ 0. identify │  a listener dedicated to one partner. Never from the payload.
+└─────────────┘  An unmapped certificate is refused, not defaulted.
       │
       ▼
 ┌─────────────┐  the raw bytes and their digest are written and durable before
-│ 1. capture  │  anything reads them. The transport acknowledges the peer only
-└─────────────┘  after this succeeds.
+│ 1. capture  │  anything reads them -- to the spool when one is configured, so
+└─────────────┘  acknowledging does not depend on the database being up.
       │
       ▼
 ┌─────────────┐  by content, not by link configuration. A link configured as
@@ -94,8 +99,12 @@ concurrent-writers test that requires exactly one of eight writers to win.
         │              │               │
         └──────────────┴───────────────┘
                        │
-        internal/api ──┴── internal/gateway ── internal/transport
-                                 │
+   internal/config ────┤
+   internal/ingress ───┤                          internal/metrics
+   internal/egress ────┼── internal/gateway ── internal/transport
+   internal/spool ─────┤
+   internal/api ───────┘
+                       │
                        internal/store  (mem | postgres)
                                  │
    ┌─────────────────────────────┴──────────────────────────────┐
@@ -135,7 +144,9 @@ produces bookings that quietly disagree with the partner holding the other copy.
 | --- | --- | --- |
 | Seat inventory | `gateway.Responder` | `gateway.Inventory`, a simulator |
 | Persistence | `store.Store` | `store.Mem` or `store.Postgres` |
-| Link transport | `transport.Framer`, `transport.Sender` | length-prefix over TCP |
+| Inbound transport | `ingress.Ingress` | HTTPS, TCP, file drop |
+| Outbound transport | `egress.Sender` | post, dial, reply-in-session, file drop |
+| Link framing | `transport.Framer` | length-prefix or sentinel, from config |
 | Teletype dialect | `airimp.Profile` | `airimp.Default` |
 | EDIFACT dialect | `padis.Profile` | `padis.Default` |
 

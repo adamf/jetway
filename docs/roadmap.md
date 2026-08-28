@@ -2,6 +2,11 @@
 
 An honest list. Things in the first two sections block a production deployment.
 
+Recently closed: partner-facing ingress over HTTPS, TCP and file drop; peer
+identity from mutual TLS; outbound retry with restart recovery; a durable
+inbound spool; health, readiness and metrics endpoints; graceful drain;
+container images.
+
 ## Blocks handling real passenger data
 
 - **Field-level encryption at rest.** `DOCS`, `DOCA`, `DOCO` and `FOID` are
@@ -15,17 +20,15 @@ An honest list. Things in the first two sections block a production deployment.
 
 ## Blocks a production link
 
-- **Peer authentication.** The link handshake takes a peer at its word. Identity
-  must be bound to the transport's credentials — mutual TLS, or the leased
-  circuit itself.
-- **TLS on links.** Plain TCP today.
 - **MATIP session layer.** Only the length framing is implemented, not RFC 2351
-  session control. Validate against the carrier's ICD.
-- **IBM MQ transport.** Many carriers offer MQ rather than a socket. The
-  `Transport` interface accommodates it; nobody has written it.
-- **Outbound retry and store-and-forward.** An undeliverable message is recorded
-  and left. There is no retry schedule and no queue that survives a restart.
+  session control. Validate against the carrier's ICD before going live.
+- **IBM MQ transport.** Many carriers offer MQ rather than a socket. Ingress is
+  an interface and MQ fits it; nobody has written it.
+- **SITA and ARINC network access.** Reaching a carrier over Type B needs a
+  commercial contract and an assigned address, not code.
 - **Backpressure.** No admission control if a partner floods a link.
+- **Certificate rotation.** Server and client certificates are read once at
+  start. Rolling one means a restart.
 
 ## Protocol coverage
 
@@ -45,11 +48,9 @@ An honest list. Things in the first two sections block a production deployment.
 
 ## Engineering
 
-- **Pre-database durability.** Capture writes straight to the store. If the
-  database is unavailable the transport declines to acknowledge and the peer
-  retransmits, which is correct but leans on the partner. A local fsync'd spool
-  drained into the store would not.
-- **Metrics.** Structured logs and the event bus only. No Prometheus endpoint.
+- **The spool is not bounded.** It grows until the disk does. A depth limit that
+  starts refusing rather than filling the volume would be better.
+- **Spool draining is serial.** One slow message holds up the queue behind it.
 - **The AIRIMP profile is thin.** It covers the elements a reservation gateway
   must act on. Expect to extend it per link.
 - **Locator normalisation is strict.** Characters outside the alphabet are

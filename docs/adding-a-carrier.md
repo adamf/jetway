@@ -1,49 +1,96 @@
 # Adding a carrier link
 
-Onboarding a partner is four questions. None of them require modifying this
-repository.
+Onboarding a partner is four questions. The first two are configuration; the
+rest only come up when their dialect differs from the shipped profile.
 
-## 1. How do the bytes arrive?
+## 1. How do the bytes arrive, and how is the sender identified?
 
-Pick or configure a framer. Most carrier interface control documents describe a
-length-prefixed TCP stream that differs from the next one only in header width,
-byte order, and whether the count includes the header:
+These are one question, because a listener answers both.
 
-```go
-framer := transport.LengthPrefix{
-    HeaderBytes:  2,     // or 4
-    LittleEndian: false, // network links are almost always big endian
-    Inclusive:    true,  // does the count include the header?
-    Max:          1 << 20,
-    Label:        "carrier-xx",
-}
+**Over HTTPS.** The easiest partner to onboard, and the only one that needs no
+network contract and no agreed framing:
+
+```yaml
+ingress:
+  - name: partners-https
+    type: https
+    addr: 0.0.0.0:8443
+    tls:
+      cert: /etc/jetway/tls/server.crt
+      key: /etc/jetway/tls/server.key
+      client_ca: /etc/jetway/tls/partners-ca.crt
+    identify:
+      by_cert_cn:
+        gateway.xx.example.com: XX
+    synchronous: true    # hold the request open and return the reply inline
 ```
 
-For links carrying the classic teletype end-of-message, frame on the sentinel
-instead:
+**Over a circuit.** Most carrier interface control documents describe a
+length-prefixed stream differing only in header width, byte order, and whether
+the count includes the header:
 
-```go
-framer := transport.TypeBSentinel()   // terminates on "\nNNNN\n"
+```yaml
+  - name: link-xx
+    type: tcp
+    addr: 0.0.0.0:9110
+    framing:
+      kind: length_prefix
+      header_bytes: 2
+      inclusive: true
+      max_bytes: 1048576
+    tls: {cert: ..., key: ..., client_ca: ...}
+    identify:
+      by_cert_cn: {res.xx.example.com: XX}
 ```
 
-Get this wrong and every symptom looks like a parser bug. Verify it against a
-capture before anything else: a correctly framed message decodes or produces
-coherent diagnostics, whereas a misframed one produces nonsense at a random
-offset.
+For links carrying the classic teletype end-of-message, use
+`framing: {kind: sentinel, terminator: "\nNNNN\n"}` instead.
 
-## 2. Who is on the other end?
+Get the framing wrong and every symptom looks like a parser bug. Verify it
+against a capture before anything else: a correctly framed message decodes or
+produces coherent diagnostics, whereas a misframed one produces nonsense at a
+random offset.
 
-```go
-gw.AddPeer(&gateway.Peer{
-    Name:       "XX",                  // link name; the store's peer key
-    Carrier:    "XX",                  // designator whose segments this link owns
-    Format:     store.FormatTypeB,     // or store.FormatEDIFACT
-    TTYAddress: "XXXRMXX",             // their Type B address
-})
+**By file drop.** Run a real SFTP server and point Jetway at the directory it
+writes into:
+
+```yaml
+  - name: xx-batch
+    type: filedrop
+    dir: /var/spool/jetway/in/xx
+    pattern: "*.msg"
+    stable_for: 5s       # do not read a file the partner is still uploading
+    identify: {peer: XX}
 ```
 
-`Carrier` is what routes an outbound request: a booking on `XX0175` goes to the
-link whose `Carrier` is `XX`.
+Note what `identify` never offers: a way to take the peer name from the message.
+A certificate signed by your CA but not listed under `by_cert_cn` is refused,
+not treated as a default. `by_cidr` is weaker and only defensible on a private
+circuit; `identify.peer` assumes nothing else can reach the port.
+
+## 2. How do we reach them?
+
+```yaml
+peers:
+  - name: XX
+    carrier: XX          # routes outbound: a booking on XX0175 goes to this link
+    format: typeb        # or edifact
+    tty_address: XXXRMXX
+    egress:
+      type: https_post   # or tcp_accept, tcp_dial, filedrop
+      url: https://gateway.xx.example.com/jetway/messages
+      tls: {cert: ..., key: ..., client_ca: ...}
+      retry: {max_attempts: 12, initial: 2s, max: 10m}
+```
+
+`tcp_accept` means they connect to us and replies go back down that session,
+which is the usual arrangement when we host the listener.
+
+Check it before starting anything:
+
+```sh
+jetwayd -config /etc/jetway/jetway.yaml -print-config
+```
 
 ## 3. What dialect do they speak?
 
@@ -105,11 +152,23 @@ requested state; re-answering one already at `HK` double-counts the seats.
 
 ## Testing a new link
 
-Point a `carriersim` at your gateway and drive it from the other side:
+Post a captured message as the partner would, using their certificate:
+
+```sh
+curl --cacert ca.crt --cert xx.crt --key xx.key \
+     --data-binary @captured.tty \
+     -H 'Content-Type: application/octet-stream' \
+     https://gateway.example.com:8443/messages
+```
+
+A 202 means the bytes are durable. A 403 means the certificate did not map to a
+peer. A 503 means the pipeline would not take it and they should retransmit.
+
+Or point a `carriersim` at your gateway and drive it from the other side:
 
 ```sh
 go run ./cmd/carriersim -carrier XX -format typeb -tty XXXRMXX \
-  -link 127.0.0.1:9100 -http 127.0.0.1:9500
+  -link 127.0.0.1:9110 -http 127.0.0.1:9500
 
 curl -s localhost:9500/pnrs        # what the carrier believes
 curl -s localhost:9500/inventory   # what it has sold
@@ -124,6 +183,9 @@ asserts on both records, both message logs, and the event trail.
 
 ## Checklist before going live
 
+- [ ] `jetwayd -print-config` shows the listener with `mtls=true`.
+- [ ] The partner's certificate common name is mapped under `by_cert_cn`, and an
+      unmapped certificate is confirmed to get a 403.
 - [ ] Framing confirmed against the interface control document, not inferred.
 - [ ] A captured message from the partner decodes with no `error` diagnostics.
 - [ ] Unparsed fragments reviewed; anything meaningful has a recognizer.

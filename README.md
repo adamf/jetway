@@ -14,20 +14,25 @@ traffic actually uses:
 Point a carrier's stream at it and it will capture, decode, apply and reply —
 and when it meets something it does not understand, it keeps that too.
 
+A partner reaches it over HTTPS with mutual TLS, over a framed TCP circuit, or
+by dropping files in a directory. Their identity comes from the certificate
+they present or the circuit they arrive on, never from a name they assert.
+
 ```
    agent / API                                        carrier reservation systems
         │                                                    │
-        ▼                                                    │
-  ┌───────────────────────────────────────────┐   Type B     │   ┌──────────┐
+        ▼                          ingress                   │
+  ┌───────────────────────────────────────────┐  https+mTLS  │   ┌──────────┐
   │  jetwayd                                  │◄─────────────┼──►│ BA res   │
   │                                           │              │   └──────────┘
-  │  capture ▸ classify ▸ decode ▸ dedupe     │   EDIFACT    │   ┌──────────┐
+  │  capture ▸ classify ▸ decode ▸ dedupe     │  tcp+mTLS    │   ┌──────────┐
   │          ▸ apply ▸ respond                │◄─────────────┼──►│ AA res   │
   │                                           │              │   └──────────┘
-  │  ┌────────────┐   ┌────────────────────┐  │   Type B     │   ┌──────────┐
-  │  │ message log│   │ PNR store + events │  │◄─────────────┴──►│ LH res   │
-  │  └────────────┘   └────────────────────┘  │                  └──────────┘
+  │  ┌───────┐ ┌────────────┐ ┌────────────┐  │  file drop   │   ┌──────────┐
+  │  │ spool │ │ message log│ │ PNR + events│ │◄─────────────┴──►│ LH res   │
+  │  └───────┘ └────────────┘ └────────────┘  │                  └──────────┘
   └───────────────────────────────────────────┘
+     fsync before ack           retry with backoff on the way out
 ```
 
 ## Try it
@@ -67,9 +72,58 @@ partner sends something puzzling:
 go run ./cmd/jetwayctl decode captured.tty
 ```
 
+## Connecting a partner
+
+Ingress is configuration, not code. Each listener declares how bytes are framed
+and how the sender is identified:
+
+```yaml
+ingress:
+  - name: partners-https
+    type: https
+    addr: 0.0.0.0:8443
+    tls:
+      cert: /etc/jetway/tls/server.crt
+      key: /etc/jetway/tls/server.key
+      client_ca: /etc/jetway/tls/partners-ca.crt   # requires a client certificate
+    identify:
+      by_cert_cn:
+        gateway.ba.example.com: BA
+    synchronous: true          # return the reply in the response body
+
+  - name: link-lh
+    type: tcp
+    addr: 0.0.0.0:9103
+    framing: {kind: length_prefix, header_bytes: 2, inclusive: true}
+    tls: {cert: ..., key: ..., client_ca: ...}
+    identify:
+      by_cert_cn: {res.lh.example.com: LH}
+
+  - name: ba-batch
+    type: filedrop
+    dir: /var/spool/jetway/in/ba
+    stable_for: 5s             # do not read a file still being uploaded
+    identify: {peer: BA}
+```
+
+A certificate signed by the right CA but not mapped to a peer is **refused**,
+not fallen back to a default. That is the case that matters: the TLS handshake
+succeeds, so only the mapping stands between a stranger and writing to somebody
+else's records.
+
+Replies go out over each peer's configured egress — back down the inbound
+session, dialled out, posted, or dropped in a directory — and are retried with
+backoff. A restart recovers the backlog from the message log rather than
+trusting an in-memory queue to have survived.
+
+Worked examples: [deploy/jetway.example.yaml](deploy/jetway.example.yaml) for a
+real deployment, [deploy/jetway.compose.yaml](deploy/jetway.compose.yaml) for
+the container stack. Full walkthrough in
+[docs/adding-a-carrier.md](docs/adding-a-carrier.md).
+
 ## Design
 
-Four decisions shape everything else.
+Five decisions shape everything else.
 
 **Raw bytes are made durable before anything interprets them.** Capture is the
 first stage of the pipeline and it is unconditional. Every later stage is a
@@ -90,6 +144,13 @@ reads; `pnr_event` holds every change with the id of the message that caused
 it. A gateway and a carrier can be modifying one record at the same instant, so
 writes carry the version they read and a stale write is refused rather than
 allowed to overwrite what it never saw.
+
+**Acknowledging a partner does not depend on the database.** Ingest fsyncs the
+raw bytes to a local spool and acknowledges; a drainer moves them into the store
+afterwards and retries for as long as it takes. Without that, a Postgres
+failover becomes refused acknowledgements and a bet on every partner's
+retransmission behaviour. With it, `/readyz` goes 503 so a load balancer backs
+off while partners still get a clean 202.
 
 **Wire syntax is exact; message grammar is a profile.** ISO 9735 and the Type B
 envelope are stable and universal, so those layers are strict about what they
@@ -112,7 +173,12 @@ See [Provenance](#provenance-and-what-this-is-not).
 | `pkg/pnr` | The canonical passenger name record, date resolution and record locator allocation |
 | `internal/store` | Append-only message log and event-sourced PNR store; in-memory and Postgres |
 | `internal/gateway` | The pipeline, routing, response generation and seat inventory |
-| `internal/transport` | Framing, link sessions, reconnection |
+| `internal/ingress` | HTTPS, TCP and file-drop listeners, and peer identity |
+| `internal/egress` | Outbound delivery with backoff and restart recovery |
+| `internal/spool` | Durable write-ahead buffer for inbound messages |
+| `internal/config` | Deployment configuration |
+| `internal/metrics` | Prometheus exposition, no client library |
+| `internal/transport` | Framing and link sessions |
 
 The `pkg/...` tree is the part you would import to build something else. It has
 no dependency on the gateway, the store, or each other beyond the canonical
@@ -139,35 +205,45 @@ because locators get read aloud.
 ## Running it for real
 
 ```sh
-createdb jetway
-go run ./cmd/jetwayd \
-  -store postgres \
-  -dsn "postgres://user@host/jetway?sslmode=disable" \
-  -demo-carriers=false \
-  -designator 1J -tty LONRM1J
+docker compose up --build          # gateway + Postgres + the simulated fleet
 ```
 
-The schema is embedded and applied on start; `jetwayctl schema` prints it if a
-DBA would rather review it first.
-
-Set `JETWAY_LOCATOR_SECRET` to a stable value. It keys locator allocation, and
-changing it remaps the code space, which will eventually reissue a locator that
-is already in use. `jetwayd` generates an ephemeral one and warns loudly if you
-do not.
-
-Carriers connect to the link server (`-link`). To run a simulated carrier as its
-own process, which is the shape a real deployment has:
+or directly:
 
 ```sh
-go run ./cmd/carriersim -carrier BA -format typeb -tty LHRRMBA -link 127.0.0.1:9100
+createdb jetway
+export JETWAY_DSN="postgres://user@host/jetway?sslmode=disable"
+export JETWAY_LOCATOR_SECRET=$(openssl rand -hex 32)
+jetwayd -config /etc/jetway/jetway.yaml
+```
+
+`jetwayd -print-config` shows the effective configuration without starting
+anything. The schema is embedded and applied on start; `jetwayctl schema` prints
+it if a DBA would rather review it first.
+
+`JETWAY_LOCATOR_SECRET` must be stable. It keys record locator allocation, and
+changing it remaps the code space, so a locator already issued will eventually
+be issued again to a different booking. `jetwayd` generates an ephemeral one and
+warns; treat that warning as a blocker.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `/healthz` | Liveness. Never touches a dependency — restarting because the database blipped makes the outage worse. |
+| `/readyz` | Readiness. 503 when the store is unusable, so a load balancer backs off. |
+| `/metrics` | Prometheus. Watch `jetway_spool_depth`, `jetway_egress_retry_queue`, and `jetway_ingress_rejected_total`. |
+
+To run a simulated carrier as its own process:
+
+```sh
+go run ./cmd/carriersim -carrier BA -format typeb -tty LHRRMBA -link 127.0.0.1:9101
 ```
 
 ## Adding a carrier
 
-Most links need three things: a `gateway.Peer`, a framing profile, and — when
-the partner's dialect differs from the shipped profile — a recognizer or segment
-handler. None of that requires modifying this repository. See
-[docs/adding-a-carrier.md](docs/adding-a-carrier.md).
+Most links need three things: an ingress entry saying how they are framed and
+identified, a peer entry saying how to reach them, and — when their dialect
+differs from the shipped profile — a recognizer or segment handler. The first
+two are configuration. See [docs/adding-a-carrier.md](docs/adding-a-carrier.md).
 
 ## Provenance, and what this is not
 
@@ -209,9 +285,10 @@ transport's own credentials. See [SECURITY.md](SECURITY.md).
 ## Contributing
 
 Tests are the interesting part of this codebase: the store conformance suite
-runs the same assertions against both backends, and the EDIFACT codec is fuzzed
-for round-trip stability — a property that has already caught five real
-defects. See [CONTRIBUTING.md](CONTRIBUTING.md).
+runs the same assertions against both backends, the EDIFACT codec is fuzzed for
+round-trip stability — a property that has already caught six real defects —
+and the ingress tests mint a throwaway certificate authority to prove that an
+unmapped certificate is refused rather than accepted as a default peer. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```sh
 make check       # format, vet, test

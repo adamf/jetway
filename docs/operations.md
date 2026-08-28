@@ -3,29 +3,49 @@
 ## Running
 
 ```sh
-jetwayd \
-  -http 0.0.0.0:8080 \
-  -link 0.0.0.0:9100 \
-  -store postgres -dsn "$JETWAY_DSN" \
-  -designator 1J -tty LONRM1J \
-  -demo-carriers=false
+docker compose up --build              # evaluation stack
+jetwayd -config /etc/jetway/jetway.yaml
+```
+
+Configuration is a YAML file; see [deploy/jetway.example.yaml](../deploy/jetway.example.yaml).
+`${VAR}` is substituted from the environment. A misspelled key is a hard error
+rather than a silently ignored line — an ops file gets edited under pressure and
+a typo must not quietly leave a listener unauthenticated.
+
+```sh
+jetwayd -config jetway.yaml -print-config    # effective config, starts nothing
 ```
 
 | Flag | Meaning |
 | --- | --- |
-| `-http` | Console and API |
-| `-link` | Carrier link server |
-| `-store` | `mem` or `postgres` |
-| `-dsn` | PostgreSQL DSN, or `JETWAY_DSN` |
-| `-migrate` | Apply the schema on start; idempotent, default on |
-| `-designator` | Our two-character company code |
-| `-tty` | Our seven-character Type B address |
-| `-demo-carriers` | Run the simulated fleet in-process |
+| `-config` | Configuration file, or `JETWAY_CONFIG`. Without one, the loopback demo runs. |
+| `-http`, `-store`, `-dsn` | Override the corresponding config fields |
+| `-no-demo-carriers` | Do not run the simulated fleet |
+| `-print-config` | Show the effective configuration and exit |
 
 `JETWAY_LOCATOR_SECRET` must be set to a stable value in any real deployment. It
 keys record locator allocation. Changing it remaps the code space, so a locator
 already issued will eventually be issued again to a different booking. `jetwayd`
 generates an ephemeral one and warns; treat that warning as a blocker.
+
+## Health and readiness
+
+| Endpoint | Behaviour |
+| --- | --- |
+| `/healthz` | Always 200 while the process is alive. It deliberately touches no dependency: restarting because the database blipped makes the outage worse. |
+| `/readyz` | 503 when the store is unusable, so a load balancer stops sending traffic. |
+| `/metrics` | Prometheus text format. |
+
+With the spool enabled, `/readyz` going 503 does **not** mean partners are being
+refused. Their messages are still accepted and fsynced; only the store is
+behind. That is the intended split, and it is why the two signals differ.
+
+## Shutdown
+
+On SIGTERM the gateway stops accepting, waits up to 20 seconds for in-flight
+work, then closes links and the HTTP server. Cutting sessions without draining
+loses whatever was mid-pipeline, which on a store-and-forward link means a
+partner believes a message was delivered that was never finished.
 
 ## Message states
 
@@ -77,6 +97,16 @@ Replay re-runs the whole pipeline. If the message was already applied, dedup
 recognises it and refuses — which is also how you can verify dedup is working.
 
 ## What to watch
+
+| Metric | Meaning |
+| --- | --- |
+| `jetway_spool_depth` | Inbound messages accepted but not yet persisted. Rising means the store is behind or down. |
+| `jetway_spool_oldest_seconds` | Age of the oldest unpersisted message. The number to page on. |
+| `jetway_egress_retry_queue` | Messages awaiting redelivery. A depth that stops falling means a partner is unreachable. |
+| `jetway_egress_abandoned_total` | Deliveries given up on. Should be zero. |
+| `jetway_ingress_rejected_total` | Connections refused before any message — usually a certificate that is not mapped. |
+| `jetway_ingress_refused_total` | Messages the pipeline would not accept. Should be zero. |
+| `jetway_ingest_seconds` | Time to accept an inbound message. |
 
 - **Dead letter depth.** Should be zero. Any sustained non-zero value is a
   dialect or framing problem that is still happening.
