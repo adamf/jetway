@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: jetway
+          POSTGRES_PASSWORD: jetway
+          POSTGRES_DB: jetway_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports: ['5432:5432']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Formatting
+        run: |
+          unformatted=$(gofmt -l $(find . -name '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # The store suite runs against both backends. Skipping Postgres here would
+      # leave optimistic concurrency untested where it is actually implemented.
+      - name: Test
+        env:
+          JETWAY_TEST_DSN: postgres://jetway:jetway@127.0.0.1:5432/jetway_test?sslmode=disable
+        run: go test -race ./...
+
+      # The codecs parse bytes from partners we do not control, so the corpus is
+      # exercised on every change and extended on a schedule.
+      - name: Fuzz seed corpus
+        run: go test ./pkg/edifact/ ./pkg/typeb/ -run=Fuzz
+
+  fuzz:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - name: Fuzz the EDIFACT codec
+        run: go test ./pkg/edifact/ -run=FuzzRoundTrip -fuzz=FuzzRoundTrip -fuzztime=5m
+      - name: Upload failing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus
+          path: pkg/edifact/testdata/fuzz/

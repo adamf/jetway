@@ -1,0 +1,240 @@
+package gateway
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/pkg/airimp"
+	"github.com/adamf/jetway/pkg/edifact"
+	"github.com/adamf/jetway/pkg/padis"
+	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/typeb"
+)
+
+// change is one effect a message had, normalised across codecs.
+type change struct{ Op, Detail string }
+
+// decoded is a message that has been classified and parsed but not yet applied.
+type decoded struct {
+	Format      store.Format
+	Kind        string
+	DedupKey    string
+	Diagnostics []store.Diagnostic
+
+	// Locators are the record locators the message refers to, in the order to
+	// try them when finding the record it belongs to.
+	Locators []string
+
+	// NeedsReply reports that the sender is waiting for an answer.
+	NeedsReply bool
+	// CreatesRecord reports that this message class may open a new booking.
+	// Replies and amendments may not: for those, a locator that matches nothing
+	// is a divergence to investigate, not a new record to create.
+	CreatesRecord bool
+	// Test reports that the sender marked this as test traffic.
+	Test bool
+
+	TypeB   *typeb.Message
+	Airimp  *airimp.Message
+	ReplyTo typeb.Address
+
+	Edifact       edifact.Message
+	EdifactSender string
+
+	peer *Peer
+	// self is the receiving node's designator.
+	self string
+}
+
+// applyTo folds the decoded message into a record.
+func (d *decoded) applyTo(rec *pnr.PNR, peer *Peer, at time.Time) []change {
+	var out []change
+	switch d.Format {
+	case store.FormatTypeB:
+		if d.Airimp == nil {
+			return nil
+		}
+		for _, c := range airimp.Apply(rec, d.Airimp, airimp.ApplyOptions{
+			ReceivedAt: at, Party: peer.Carrier, Inbound: true, Self: d.self,
+		}) {
+			out = append(out, change{c.Op, c.Detail})
+		}
+		if rec.Origin.Party == "" {
+			rec.Origin.Party = peer.Carrier
+			rec.Origin.Channel = "typeb"
+		}
+	case store.FormatEDIFACT:
+		for _, c := range peer.padis().Apply(rec, d.Edifact, padis.ApplyOptions{
+			ReceivedAt: at, Party: d.EdifactSender, Inbound: true, Self: d.self,
+		}) {
+			out = append(out, change{c.Op, c.Detail})
+		}
+		if rec.Origin.Party == "" {
+			rec.Origin.Party = d.EdifactSender
+			rec.Origin.Channel = "edifact"
+		}
+	}
+	return out
+}
+
+// looksLikeEDIFACT reports whether the bytes carry an EDIFACT interchange.
+//
+// Classification is by content, not by link configuration. A link that is
+// configured as teletype but starts carrying EDIFACT should be processed, and
+// noticed, rather than mangled by the wrong decoder.
+func looksLikeEDIFACT(raw []byte) bool {
+	head := raw
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	trimmed := bytes.TrimLeft(head, " \r\n\t")
+	return bytes.HasPrefix(trimmed, []byte("UNA")) ||
+		bytes.HasPrefix(trimmed, []byte("UNB")) ||
+		bytes.Contains(head, []byte("UNB+"))
+}
+
+// decode classifies and parses a captured message.
+func (g *Gateway) decode(peer *Peer, msg *store.Message) (*decoded, error) {
+	raw := msg.Raw
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, fmt.Errorf("gateway: empty message")
+	}
+	var (
+		d   *decoded
+		err error
+	)
+	if looksLikeEDIFACT(raw) {
+		d, err = g.decodeEDIFACT(peer, raw)
+	} else {
+		d, err = g.decodeTypeB(peer, raw)
+	}
+	if d != nil {
+		d.self = g.Identity.Designator
+	}
+	return d, err
+}
+
+func (g *Gateway) decodeEDIFACT(peer *Peer, raw []byte) (*decoded, error) {
+	ic, err := edifact.Parse(raw, edifact.ParseOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("gateway: edifact decode: %w", err)
+	}
+	d := &decoded{Format: store.FormatEDIFACT, peer: peer}
+	for _, x := range ic.Diagnostics {
+		d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+			Layer: "edifact", Severity: x.Severity.String(), Code: x.Code, Detail: x.Detail,
+		})
+	}
+	if len(ic.Messages) == 0 {
+		return nil, fmt.Errorf("gateway: edifact interchange carries no messages")
+	}
+	// One message per interchange is the norm for interactive reservation
+	// traffic. Batches exist; processing the first and recording the rest as a
+	// diagnostic is honest about what this build does.
+	if len(ic.Messages) > 1 {
+		d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+			Layer: "edifact", Severity: "warn", Code: "multi_message_interchange",
+			Detail: fmt.Sprintf("interchange carries %d messages; only the first was applied", len(ic.Messages)),
+		})
+	}
+	d.Edifact = ic.Messages[0]
+	d.EdifactSender = ic.Sender().ID
+	d.Kind = d.Edifact.ID().Type
+	d.Test = ic.TestIndicator()
+
+	// The interchange control reference is the sender's own idempotency key and
+	// is exactly what a retransmission repeats.
+	if ref := ic.ControlRef(); ref != "" {
+		d.DedupKey = "unb:" + ref
+	}
+
+	for _, seg := range d.Edifact.Find("RCI") {
+		for i := range seg.Elements {
+			for _, c := range seg.Elem(i) {
+				if loc := c.Get(1); loc != "" {
+					d.Locators = append(d.Locators, loc)
+				}
+			}
+		}
+	}
+	d.NeedsReply = d.Kind == padis.MsgPAOREQ
+	d.CreatesRecord = d.Kind == padis.MsgPAOREQ
+	return d, nil
+}
+
+func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
+	tb, err := typeb.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: type b decode: %w", err)
+	}
+	d := &decoded{Format: store.FormatTypeB, TypeB: tb, ReplyTo: tb.Origin, peer: peer}
+	for _, x := range tb.Diagnostics {
+		d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+			Layer: "typeb", Severity: x.Severity.String(), Code: x.Code,
+			Detail: x.Detail, Line: x.Line,
+		})
+	}
+	if tb.Text == "" {
+		return nil, fmt.Errorf("gateway: type b message has no text")
+	}
+
+	am := peer.airimp().Parse(tb.Text)
+	d.Airimp = am
+	for _, x := range am.Diagnostics {
+		d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+			Layer: "airimp", Severity: x.Severity.String(), Code: x.Code,
+			Detail: x.Detail, Line: x.Line,
+		})
+	}
+	d.Kind = "AIRIMP/" + string(am.Intent())
+	d.NeedsReply = am.Intent() == airimp.IntentSell
+	d.CreatesRecord = am.Intent() == airimp.IntentSell
+
+	for _, l := range am.Locators() {
+		d.Locators = append(d.Locators, l.Value)
+	}
+	d.DedupKey = typeBDedupKey(tb)
+
+	// A reply must go back to the originator. Fall back to the configured
+	// address so a message with a damaged origin line is still answerable.
+	if d.ReplyTo.IsZero() && peer.TTYAddress != "" {
+		d.ReplyTo = mustAddress(peer.TTYAddress)
+	}
+	return d, nil
+}
+
+// typeBDedupKey derives an idempotency key for a teletype message.
+//
+// Type B carries no mandatory message identifier, so there is nothing as clean
+// as an EDIFACT control reference to key on. The key here combines the
+// originator, the origin time group and a digest of the text: the same text,
+// from the same sender, stamped with the same minute is a retransmission in
+// every practical case.
+//
+// The limitation is real and worth stating. Two genuinely distinct messages
+// that are byte-identical and stamped within the same minute will be treated as
+// one. For a sell request that is the safer error -- booking the same seats
+// twice is worse than declining a repeat -- but a link whose traffic is
+// legitimately repetitive should carry a sender-supplied reference instead, and
+// the key should be configured to use it.
+func typeBDedupKey(tb *typeb.Message) string {
+	if tb.Origin.IsZero() || !tb.OriginTime.Present {
+		return ""
+	}
+	// A carrier-supplied sequence number on the origin line is a better key
+	// than a digest, so prefer it when one is present.
+	for _, extra := range tb.OriginExtra {
+		if len(extra) >= 3 && strings.IndexFunc(extra, func(r rune) bool {
+			return r < '0' || r > '9'
+		}) < 0 {
+			return "tty:" + tb.Origin.String() + ":" + extra
+		}
+	}
+	sum := sha256.Sum256([]byte(tb.Text))
+	return "tty:" + tb.Origin.String() + ":" + tb.OriginTime.String() + ":" + hex.EncodeToString(sum[:8])
+}
