@@ -8,13 +8,16 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/adamf/jetway/internal/demo"
 	"github.com/adamf/jetway/internal/gateway"
+	"github.com/adamf/jetway/internal/metrics"
 	"github.com/adamf/jetway/internal/store"
 	"github.com/adamf/jetway/internal/transport"
 )
@@ -33,13 +36,37 @@ type Server struct {
 	// Fleet is the simulated carrier fleet, when one is running. Nil in a
 	// deployment with real partners.
 	Fleet *demo.RunningFleet
+
+	// Console serves the operations console. It is unauthenticated, so a
+	// deployment reachable beyond a trusted network should turn it off.
+	Console bool
+	// Metrics serves /metrics.
+	Metrics bool
+	// Ready reports whether dependencies are usable. A nil Ready means always
+	// ready, which is only right for the demo.
+	Ready func(ctx context.Context) error
+	// LinkPeers lists peers with a live link, for /api/status.
+	LinkPeers func() []string
 }
 
 // Handler returns the HTTP routes.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /{$}", s.console)
+	// Liveness never depends on anything external: a process that answers is
+	// alive, and restarting it because a database blipped makes the outage
+	// worse. Readiness is where dependencies belong.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "ok") //nolint:errcheck
+	})
+	mux.HandleFunc("GET /readyz", s.readyz)
+	if s.Metrics {
+		mux.HandleFunc("GET /metrics", s.metrics)
+	}
+	if s.Console {
+		mux.HandleFunc("GET /{$}", s.console)
+	}
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("GET /api/flights", s.flights)
 	mux.HandleFunc("POST /api/book", s.book)
@@ -80,6 +107,27 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
 }
 
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	if s.Ready != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		if err := s.Ready(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintf(w, "not ready: %v\n", err) //nolint:errcheck
+			return
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, "ready") //nolint:errcheck
+}
+
+func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
+	var b strings.Builder
+	metrics.Default.Write(&b)
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	io.WriteString(w, b.String()) //nolint:errcheck
+}
+
 func (s *Server) console(w http.ResponseWriter, r *http.Request) {
 	b, err := consoleFS.ReadFile("console.html")
 	if err != nil {
@@ -92,6 +140,11 @@ func (s *Server) console(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	connected := map[string]bool{}
+	if s.LinkPeers != nil {
+		for _, p := range s.LinkPeers() {
+			connected[p] = true
+		}
+	}
 	if s.Links != nil {
 		for _, p := range s.Links.Peers() {
 			connected[p] = true

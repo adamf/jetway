@@ -251,6 +251,11 @@ type Client struct {
 	OnMessage Handler
 	// OnUp is called each time the link is established.
 	OnUp func()
+	// SkipHello suppresses the identification frame. Set it when connecting to
+	// a listener that identifies peers from the transport itself -- a client
+	// certificate or the circuit -- which is what a real link does. The hello
+	// exists only for the demo handshake server.
+	SkipHello bool
 
 	mu   sync.Mutex
 	link *Link
@@ -293,14 +298,16 @@ func (c *Client) session(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	hello, err := json.Marshal(c.Hello)
-	if err != nil {
-		conn.Close()
-		return err
-	}
-	if err := c.Framer.WriteFrame(conn, hello); err != nil {
-		conn.Close()
-		return err
+	if !c.SkipHello {
+		hello, err := json.Marshal(c.Hello)
+		if err != nil {
+			conn.Close()
+			return err
+		}
+		if err := c.Framer.WriteFrame(conn, hello); err != nil {
+			conn.Close()
+			return err
+		}
 	}
 	l := &Link{Peer: c.Hello.Peer, Format: c.Hello.Format, conn: conn, framer: c.Framer, log: c.Log}
 	c.mu.Lock()

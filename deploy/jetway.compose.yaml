@@ -1,0 +1,49 @@
+# Configuration used by docker-compose: Postgres, the spool, and the simulated
+# carrier fleet so there is something to look at immediately.
+identity:
+  designator: 1J
+  tty_address: LONRM1J
+  name: jetway
+
+store:
+  backend: postgres
+  dsn: ${JETWAY_DSN}
+  migrate: true
+
+spool:
+  enabled: true
+  dir: /var/lib/jetway/spool
+  drain_interval: 5s
+
+http:
+  addr: 0.0.0.0:8080
+  console: true
+  metrics: true
+
+# One listener per partner circuit. Identity comes from which listener the
+# partner reached, which is safe here only because these ports are not exposed
+# beyond the compose network in a real deployment.
+ingress:
+  - name: link-ba
+    type: tcp
+    addr: 0.0.0.0:9101
+    framing: {kind: length_prefix, header_bytes: 4}
+    identify: {peer: BA}
+  - name: link-aa
+    type: tcp
+    addr: 0.0.0.0:9102
+    framing: {kind: length_prefix, header_bytes: 4}
+    identify: {peer: AA}
+  - name: link-lh
+    type: tcp
+    addr: 0.0.0.0:9103
+    framing: {kind: length_prefix, header_bytes: 4}
+    identify: {peer: LH}
+
+peers:
+  - {name: BA, carrier: BA, format: typeb,   tty_address: LHRRMBA, egress: {type: tcp_accept}}
+  - {name: AA, carrier: AA, format: edifact, tty_address: DFWRMAA, egress: {type: tcp_accept}}
+  - {name: LH, carrier: LH, format: typeb,   tty_address: FRARMLH, egress: {type: tcp_accept}}
+
+demo:
+  carriers: true

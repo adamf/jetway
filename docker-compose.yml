@@ -1,0 +1,48 @@
+# A single-node Jetway with its database, for evaluation and for developing a
+# carrier profile against something that behaves like production.
+#
+# Not a production topology: the console is unauthenticated, the database
+# password is in this file, and there is no TLS on the partner listeners.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jetway
+      POSTGRES_PASSWORD: jetway
+      POSTGRES_DB: jetway
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jetway"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  jetwayd:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      JETWAY_DSN: postgres://jetway:jetway@postgres:5432/jetway?sslmode=disable
+      # Fixed here so a restart does not remap the record locator space. Use a
+      # secret manager for anything real.
+      JETWAY_LOCATOR_SECRET: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+      JETWAY_CONFIG: /etc/jetway/jetway.yaml
+    volumes:
+      - ./deploy/jetway.compose.yaml:/etc/jetway/jetway.yaml:ro
+      - spool:/var/lib/jetway
+    ports:
+      - "8080:8080"   # console and API
+      - "9101:9101"   # BA link
+      - "9102:9102"   # AA link
+      - "9103:9103"   # LH link
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/jetwayctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  spool:

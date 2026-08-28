@@ -1,0 +1,121 @@
+# A deployment carrying real partner traffic.
+#
+# Every listener here identifies its peer from something the sender cannot
+# choose. Nothing takes a peer name from the message.
+
+identity:
+  designator: 1J          # your IATA-assigned company code
+  tty_address: LONRM1J    # your Type B address
+  name: jetway
+
+store:
+  backend: postgres
+  dsn: ${JETWAY_DSN}
+  migrate: true
+
+# Without this, acknowledging a partner requires the database to be up. Mount a
+# real volume: the whole point is that these bytes outlive the process.
+spool:
+  enabled: true
+  dir: /var/lib/jetway/spool
+  drain_interval: 5s
+
+http:
+  # The console is unauthenticated. Bind it to a trusted interface and put
+  # authentication in front of it, or set console: false.
+  addr: 127.0.0.1:8080
+  console: false
+  metrics: true
+
+ingress:
+  # Modern partners: HTTPS with mutual TLS. This is the link you can onboard
+  # somebody onto today, with no network contract and no agreed socket framing.
+  - name: partners-https
+    type: https
+    addr: 0.0.0.0:8443
+    tls:
+      cert: /etc/jetway/tls/server.crt
+      key: /etc/jetway/tls/server.key
+      # Requiring a client certificate is what makes this an authenticated
+      # link rather than merely an encrypted one.
+      client_ca: /etc/jetway/tls/partners-ca.crt
+      min_version: "1.3"
+    identify:
+      by_cert_cn:
+        gateway.ba.example.com: BA
+        edi.aa.example.com: AA
+    # Hold the request open and return the reply in the response body. Suits a
+    # partner doing request-response over HTTP.
+    synchronous: true
+
+  # A private circuit carrying framed teletype. The framing must come from the
+  # carrier's interface control document, not from a guess.
+  - name: link-lh
+    type: tcp
+    addr: 0.0.0.0:9103
+    framing:
+      kind: length_prefix
+      header_bytes: 2
+      inclusive: true
+      max_bytes: 1048576
+    tls:
+      cert: /etc/jetway/tls/server.crt
+      key: /etc/jetway/tls/server.key
+      client_ca: /etc/jetway/tls/partners-ca.crt
+    identify:
+      by_cert_cn:
+        res.lh.example.com: LH
+
+  # Batch traffic. Run a real SFTP server and point this at the directory it
+  # writes into; authentication and key management stay with software built
+  # for them.
+  - name: ba-batch
+    type: filedrop
+    dir: /var/spool/jetway/in/ba
+    archive_dir: /var/spool/jetway/processed/ba
+    pattern: "*.msg"
+    poll: 10s
+    stable_for: 5s      # do not read a file a partner is still uploading
+    identify:
+      peer: BA
+
+peers:
+  - name: BA
+    carrier: BA
+    format: typeb
+    tty_address: LHRRMBA
+    egress:
+      type: https_post
+      url: https://gateway.ba.example.com/jetway/messages
+      tls:
+        cert: /etc/jetway/tls/client.crt
+        key: /etc/jetway/tls/client.key
+        client_ca: /etc/jetway/tls/partners-ca.crt
+      retry:
+        max_attempts: 12
+        initial: 2s
+        max: 10m
+
+  - name: AA
+    carrier: AA
+    format: edifact
+    tty_address: DFWRMAA
+    egress:
+      # The partner connects to us, so replies go back down that session.
+      type: tcp_accept
+
+  - name: LH
+    carrier: LH
+    format: typeb
+    tty_address: FRARMLH
+    egress:
+      type: tcp_dial
+      addr: res.lh.example.com:9200
+      framing: {kind: length_prefix, header_bytes: 2, inclusive: true}
+      tls:
+        cert: /etc/jetway/tls/client.crt
+        key: /etc/jetway/tls/client.key
+        client_ca: /etc/jetway/tls/partners-ca.crt
+
+demo:
+  carriers: false

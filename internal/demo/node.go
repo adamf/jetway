@@ -43,6 +43,9 @@ func StartCarrier(ctx context.Context, c Carrier, addr string, bus *gateway.Bus,
 		Hello:  transport.Hello{Peer: c.Designator, Role: "carrier", Format: string(c.Format)},
 		Framer: transport.DefaultFramer(),
 		Log:    log.With("node", c.Designator),
+		// The gateway identifies this carrier from the listener it dialled,
+		// the way a real circuit does, so there is nothing to announce.
+		SkipHello: true,
 	}
 	gw.Sender = client
 
@@ -78,10 +81,17 @@ type RunningFleet struct {
 	Nodes map[string]*Node
 }
 
-// StartFleet brings up every carrier in the fleet.
-func StartFleet(ctx context.Context, carriers []Carrier, addr string, bus *gateway.Bus, log *slog.Logger) (*RunningFleet, error) {
+// StartFleet brings up every carrier in the fleet. addrFor supplies the
+// gateway listener each carrier dials; a carrier with no address is skipped.
+func StartFleet(ctx context.Context, carriers []Carrier, addrFor func(Carrier) string,
+	bus *gateway.Bus, log *slog.Logger) (*RunningFleet, error) {
 	f := &RunningFleet{Nodes: map[string]*Node{}}
 	for _, c := range carriers {
+		addr := addrFor(c)
+		if addr == "" {
+			log.Warn("no gateway listener for simulated carrier", "carrier", c.Designator)
+			continue
+		}
 		n, err := StartCarrier(ctx, c, addr, bus, log)
 		if err != nil {
 			return nil, fmt.Errorf("demo: start carrier %s: %w", c.Designator, err)

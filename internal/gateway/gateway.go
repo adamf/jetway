@@ -160,6 +160,21 @@ type Responder interface {
 	Decide(ctx context.Context, p *pnr.PNR, peer *Peer) (map[string]string, error)
 }
 
+// IngestOptions parameterises a single inbound message.
+type IngestOptions struct {
+	// Transport names the ingress that accepted the message, for the audit
+	// trail. Empty defaults to "link".
+	Transport string
+	// Remote describes where it came from: an address, a certificate subject,
+	// or a file path.
+	Remote string
+	// HoldReply returns a generated reply in the Result instead of sending it
+	// over the peer's egress. A partner posting over HTTP and waiting on the
+	// response has no egress to receive a reply on, and attempting one would
+	// queue an undeliverable message for a link that does not exist.
+	HoldReply bool
+}
+
 // Result reports what processing a message did.
 type Result struct {
 	MessageID string
@@ -169,8 +184,15 @@ type Result struct {
 	Duplicate bool
 	Changes   []string
 	Replies   []string // ids of messages sent in response
-	Err       error
+	// Reply carries the generated response when HoldReply was set.
+	Reply []byte
+	Err   error
 }
+
+// NewMessageID mints an identifier for a message that will enter the pipeline
+// later, so a spooled message keeps one identity from the moment it lands on
+// disk through to the store.
+func NewMessageID() string { return ulid.New() }
 
 // trace publishes a pipeline step.
 func (g *Gateway) trace(msgID, step, detail string) {
@@ -185,6 +207,11 @@ func (g *Gateway) trace(msgID, step, detail string) {
 // deduplicate, then apply, then respond. Capture happens first and
 // unconditionally so that nothing after it can lose the message.
 func (g *Gateway) Ingest(ctx context.Context, peerName string, raw []byte) (*Result, error) {
+	return g.IngestWith(ctx, peerName, raw, IngestOptions{})
+}
+
+// IngestWith is Ingest with per-message options.
+func (g *Gateway) IngestWith(ctx context.Context, peerName string, raw []byte, opts IngestOptions) (*Result, error) {
 	now := time.Now().UTC()
 	sum := sha256.Sum256(raw)
 
@@ -196,9 +223,13 @@ func (g *Gateway) Ingest(ctx context.Context, peerName string, raw []byte) (*Res
 		peer = &Peer{Name: peerName, Format: store.FormatUnknown}
 	}
 
+	transport := opts.Transport
+	if transport == "" {
+		transport = "link"
+	}
 	msg := &store.Message{
 		ID: ulid.NewAt(now), Direction: store.Inbound, At: now,
-		Transport: "link", Peer: peerName, Format: store.FormatUnknown,
+		Transport: transport, Peer: peerName, Format: store.FormatUnknown,
 		Raw: raw, SHA256: hex.EncodeToString(sum[:]), Size: len(raw),
 		Status: store.StatusReceived,
 	}
@@ -211,7 +242,7 @@ func (g *Gateway) Ingest(ctx context.Context, peerName string, raw []byte) (*Res
 	g.trace(msg.ID, "captured", fmt.Sprintf("%d bytes from %s", len(raw), peerName))
 
 	res := &Result{MessageID: msg.ID}
-	if err := g.process(ctx, peer, msg, res); err != nil {
+	if err := g.process(ctx, peer, msg, res, opts); err != nil {
 		msg.Status = store.StatusDLQ
 		msg.Error = err.Error()
 		res.Status = store.StatusDLQ
@@ -228,7 +259,7 @@ func (g *Gateway) Ingest(ctx context.Context, peerName string, raw []byte) (*Res
 }
 
 // process decodes and applies a captured message.
-func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, res *Result) error {
+func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, res *Result, opts IngestOptions) error {
 	dec, err := g.decode(peer, msg)
 	if err != nil {
 		return err
@@ -262,11 +293,11 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 		return nil
 	}
 
-	return g.apply(ctx, peer, msg, dec, res)
+	return g.apply(ctx, peer, msg, dec, res, opts)
 }
 
 // apply folds a decoded message into a record, retrying on a version conflict.
-func (g *Gateway) apply(ctx context.Context, peer *Peer, msg *store.Message, dec *decoded, res *Result) error {
+func (g *Gateway) apply(ctx context.Context, peer *Peer, msg *store.Message, dec *decoded, res *Result, opts IngestOptions) error {
 	const maxAttempts = 5
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
@@ -308,7 +339,7 @@ func (g *Gateway) apply(ctx context.Context, peer *Peer, msg *store.Message, dec
 			g.Bus.Publish(EvPNR, g.pnrView(rec))
 			g.trace(msg.ID, "applied", fmt.Sprintf("%s v%d, %d change(s)",
 				rec.RecordLocator, rec.Version, len(changes)))
-			return g.respond(ctx, peer, msg, dec, rec, res)
+			return g.respond(ctx, peer, msg, dec, rec, res, opts)
 
 		case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrDuplicate):
 			// Another writer got there first. Re-read and reapply: the message
@@ -360,7 +391,7 @@ func (g *Gateway) newLocator(ctx context.Context) (string, error) {
 }
 
 // respond generates and sends a reply when the message requires one.
-func (g *Gateway) respond(ctx context.Context, peer *Peer, msg *store.Message, dec *decoded, rec *pnr.PNR, res *Result) error {
+func (g *Gateway) respond(ctx context.Context, peer *Peer, msg *store.Message, dec *decoded, rec *pnr.PNR, res *Result, opts IngestOptions) error {
 	if g.Responder == nil || !dec.NeedsReply {
 		return nil
 	}
@@ -401,6 +432,18 @@ func (g *Gateway) respond(ctx context.Context, peer *Peer, msg *store.Message, d
 		return err
 	}
 	if len(raw) == 0 {
+		return nil
+	}
+	if opts.HoldReply {
+		// The reply travels back in the same exchange, so record it as sent
+		// without handing it to a transport there is no session for.
+		outID, err := g.record(ctx, peer, raw, kind, rec.ID, msg.ID, store.StatusSent)
+		if err != nil {
+			return err
+		}
+		res.Replies = append(res.Replies, outID)
+		res.Reply = raw
+		g.trace(msg.ID, "replied inline", kind)
 		return nil
 	}
 	outID, err := g.Send(ctx, peer, raw, kind, rec.ID, msg.ID)
@@ -450,7 +493,27 @@ func (g *Gateway) buildReply(peer *Peer, dec *decoded, rec *pnr.PNR, outcomes ma
 	return nil, "", nil
 }
 
+// record writes an outbound message to the log without transmitting it.
+func (g *Gateway) record(ctx context.Context, peer *Peer, raw []byte, kind, pnrID, correlationID string, st store.Status) (string, error) {
+	now := time.Now().UTC()
+	sum := sha256.Sum256(raw)
+	out := &store.Message{
+		ID: ulid.NewAt(now), Direction: store.Outbound, At: now,
+		Transport: "link", Peer: peer.Name, Format: peer.Format, Kind: kind,
+		Raw: raw, SHA256: hex.EncodeToString(sum[:]), Size: len(raw),
+		Status: st, PNRID: pnrID, CorrelationID: correlationID,
+	}
+	if err := g.Store.AppendMessage(ctx, out); err != nil {
+		return "", fmt.Errorf("gateway: capture outbound: %w", err)
+	}
+	g.Bus.Publish(EvMessage, g.msgView(out))
+	return out.ID, nil
+}
+
 // Send records and transmits an outbound message.
+//
+// Capture precedes transmission for the same reason it does inbound: a message
+// that went out must be in the log even if recording what happened to it fails.
 func (g *Gateway) Send(ctx context.Context, peer *Peer, raw []byte, kind, pnrID, correlationID string) (string, error) {
 	now := time.Now().UTC()
 	sum := sha256.Sum256(raw)
