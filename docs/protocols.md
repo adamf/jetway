@@ -107,10 +107,12 @@ Implemented:
   and are entirely mechanical to avoid.
 
 `FuzzRoundTrip` asserts that anything decodable re-encodes and re-decodes to the
-same bytes. It has found five real defects so far: a whitespace-only segment
+same bytes. It has found six real defects so far: a whitespace-only segment
 tag, a released line break, a six-character tag colliding with `UNA`, an
-out-of-range syntax version driving a rescan, and a `UNA`-implied repetition
-setting being dropped on re-encode. Run it in CI.
+out-of-range syntax version driving a rescan, a `UNA`-implied repetition setting
+dropped on re-encode, and an explicit `UNA` dropped when the syntax happened to
+match the defaults. Every one of them is the same shape — decoding depending on
+its own output — and none would have been found by hand. Run it in CI.
 
 ## PADIS (`pkg/padis`)
 

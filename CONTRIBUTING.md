@@ -31,7 +31,7 @@ malformed traffic loses messages that a partner considers delivered.
 - `internal/store/store_test.go` runs the same assertions against both backends.
   A test that only runs against memory does not exercise optimistic concurrency
   where it is actually implemented.
-- `pkg/edifact` fuzzes round-trip stability. Five real defects so far, each one
+- `pkg/edifact` fuzzes round-trip stability. Six real defects so far, each one
   a case no hand-written test would have thought of.
 
 **Explain why in comments, not what.** The code says what it does. Comments
