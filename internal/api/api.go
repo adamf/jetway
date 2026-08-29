@@ -81,6 +81,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/pnr/{locator}/ticket", s.issueTickets)
 	mux.HandleFunc("POST /api/pnr/{locator}/cancel", s.cancelRecord)
 	mux.HandleFunc("POST /api/pnr/{locator}/emd", s.issueEMD)
+	mux.HandleFunc("POST /api/pnr/{locator}/split", s.splitRecord)
 	mux.HandleFunc("GET /api/carrier/{designator}/pnrs", s.carrierPNRs)
 	mux.HandleFunc("GET /api/carrier/{designator}/inventory", s.carrierInventory)
 	mux.HandleFunc("GET /api/availability", s.availability)
@@ -676,4 +677,36 @@ func queryOr(r *http.Request, key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// splitRecord divides passengers onto their own record.
+func (s *Server) splitRecord(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Passengers []int  `json:"passengers"`
+		Reason     string `json:"reason"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("malformed request: %w", err))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	res, err := s.Gateway.Split(ctx, gateway.SplitRequest{
+		Locator: r.PathValue("locator"), Passengers: body.Passengers,
+		By: queryOr(r, "by", "console"), Reason: body.Reason,
+	})
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, store.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		writeErr(w, status, err)
+		return
+	}
+	// Unadvised is reported because it is the state of the world, not an
+	// error: the carriers still hold one record covering both halves.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"parent": res.Parent, "child": res.Child, "unadvised": res.Unadvised,
+	})
 }

@@ -2,7 +2,8 @@
 
 An honest list. Things in the first two sections block a production deployment.
 
-Recently closed: EMD -- associated and standalone documents, reason for
+Recently closed: split and divide, with seats apportioned and every
+per-passenger reference remapped; EMD -- associated and standalone documents, reason for
 issuance, association to flight coupons and lifting with them;
 interline ticket control -- TKCREQ and TKCRES, so a ticket
 exists somewhere other than the node that issued it, and the published coupon
@@ -57,8 +58,11 @@ container images.
   no path produces one, and schedule messages update no schedule of our own --
   they only raise work against records.
 - **`PNL`/`ADL`** passenger lists to departure control are not implemented.
-- **Split and divide.** `StatusSplit` exists in the model; the operation does
-  not.
+- **The divide message.** A booking can be split, but the carriers are not told:
+  the AIRIMP message for it is in a manual this build does not have, selling the
+  child again would double-book, and cancelling and reselling risks losing the
+  seats. Both halves therefore carry the same carrier locator, and each division
+  raises a divergence naming the carriers that still hold one record.
 - **NDC shopping.** Orders are implemented; AirShopping and OfferPrice are not
   and will not be. An offer is a priced thing, pricing needs fares, and fares
   are out of scope. An OrderCreateRQ naming only an offer this node never made

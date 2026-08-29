@@ -1008,6 +1008,70 @@ function renderEMDCard(box, p){
   c.appendChild(b); box.appendChild(c);
 }
 
+// putLink adds a row of locators that open the record they name. A divided
+// booking is one booking to the passenger, so either half has to lead to the
+// other.
+function putLink(kv, label, locators){
+  kv.appendChild(el("dt", null, label));
+  const dd = el("dd");
+  locators.forEach((loc, i) => {
+    if (i) dd.appendChild(document.createTextNode(", "));
+    const a = el("span", "loc", loc);
+    a.style.cssText = "cursor:pointer;color:var(--accent)";
+    a.addEventListener("click", () => selectPnr(loc));
+    dd.appendChild(a);
+  });
+  kv.appendChild(dd);
+}
+
+// renderSplitCard offers to divide passengers onto their own record.
+function renderSplitCard(box, p){
+  const pax = p.passengers || [];
+  // Splitting one passenger off a one-passenger record is a rename, not a
+  // split, so there is nothing to offer.
+  if (pax.length < 2 || p.status === "cancelled") return;
+
+  const c = el("div","card");
+  c.appendChild(el("h2",null,"Split"));
+  const b = el("div","body");
+  b.appendChild(el("div","dim",
+    "Move passengers onto their own record. Seats are divided with them; the carriers still hold one record until they are advised."));
+
+  const boxes = [];
+  for (const x of pax){
+    const row = el("label","qtoggle");
+    row.style.cssText = "display:flex;margin:6px 0 0";
+    const cb = el("input"); cb.type = "checkbox"; cb.value = String(x.ref);
+    row.appendChild(cb);
+    row.appendChild(document.createTextNode(" " + x.surname + "/" + x.given + (x.title ? " " + x.title : "")));
+    boxes.push(cb); b.appendChild(row);
+  }
+
+  const go = el("button","ghost","Split selected");
+  go.style.cssText = "width:auto;margin-top:10px";
+  const err = el("div","err"); err.style.display = "none";
+  go.addEventListener("click", async () => {
+    const chosen = boxes.filter(x => x.checked).map(x => Number(x.value));
+    err.style.display = "none";
+    if (!chosen.length || chosen.length >= pax.length){
+      err.textContent = chosen.length ? "Moving everybody is a rename, not a split." : "Choose at least one passenger.";
+      err.style.display = ""; return;
+    }
+    go.disabled = true;
+    try {
+      const r = await fetch(`/api/pnr/${encodeURIComponent(p.record_locator)}/split?by=console`,
+        {method:"POST", headers:{"content-type":"application/json"},
+         body: JSON.stringify({passengers: chosen})});
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok){ err.textContent = d.error || ("split failed: " + r.status); err.style.display = ""; return; }
+      refreshPnrs().then(() => selectPnr(d.child.record_locator));
+      refreshQueues();
+    } finally { go.disabled = false; }
+  });
+  b.appendChild(go); b.appendChild(err);
+  c.appendChild(b); box.appendChild(c);
+}
+
 function renderTicketCard(box, p){
   // Flight tickets only. An EMD is a document, not a ticket, and a record
   // carrying only a baggage document is not ticketed.
@@ -1136,6 +1200,8 @@ function renderRecordCards(box, d, p){
       (x.title ? " " + x.title : "")).join(", ") || "—");
   put("Origin", (p.origin && p.origin.party || "—") + (p.origin && p.origin.agent ? " · " + p.origin.agent : ""));
   for (const l of (p.locators||[])) put("Locator " + l.owner, l.value);
+  if (p.split_from) putLink(kv, "Split from", [p.split_from]);
+  if ((p.split_to||[]).length) putLink(kv, "Split to", p.split_to);
   put("Updated", new Date(p.updated_at).toLocaleTimeString());
   hb.appendChild(kv); hc.appendChild(hb); box.appendChild(hc);
 
@@ -1155,6 +1221,7 @@ function renderRecordCards(box, d, p){
 
   renderTicketCard(box, p);
   renderEMDCard(box, p);
+  renderSplitCard(box, p);
   renderCancelCard(box, p);
 
   if ((p.ssrs||[]).length){

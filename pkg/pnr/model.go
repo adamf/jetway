@@ -21,7 +21,6 @@ const (
 	StatusOpen      Status = "open"      // active, held or requested segments
 	StatusTicketed  Status = "ticketed"  // a ticket number is associated
 	StatusCancelled Status = "cancelled" // all segments cancelled
-	StatusSplit     Status = "split"     // divided into a child record
 )
 
 // SegmentType distinguishes flown segments from the placeholders that keep an
@@ -239,6 +238,17 @@ type PNR struct {
 	// ticket is a booking that will be cancelled when its time limit passes.
 	Tickets []Ticket `json:"tickets,omitempty"`
 
+	// SplitFrom is the locator this record was divided out of. SplitTo lists
+	// the records divided out of it.
+	//
+	// Both sides are kept because a divided booking is one booking as far as
+	// the passengers and the carriers are concerned, and an agent holding
+	// either half has to be able to find the other. There is deliberately no
+	// "split" status: both records are live and ordinary afterwards, and a
+	// status saying otherwise would make them look settled when they are not.
+	SplitFrom string   `json:"split_from,omitempty"`
+	SplitTo   []string `json:"split_to,omitempty"`
+
 	ReceivedFrom string     `json:"received_from,omitempty"`
 	Origin       Origin     `json:"origin"`
 	Unparsed     []Fragment `json:"unparsed,omitempty"`
@@ -318,9 +328,6 @@ func (p *PNR) Recompute() {
 	}
 	for i := range p.Passengers {
 		p.Passengers[i].Ref = i + 1
-	}
-	if p.Status == StatusSplit {
-		return
 	}
 	live := 0
 	for _, s := range p.Segments {
