@@ -458,6 +458,10 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 		}
 	}
 
+	if dec.TicketControl != nil {
+		return g.applyTicketControl(ctx, peer, msg, dec, res)
+	}
+
 	// A partner telling us what they made of something we sent.
 	if dec.CONTRL != nil {
 		return g.applyCONTRL(ctx, peer, msg, dec, res)

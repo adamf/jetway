@@ -35,6 +35,46 @@ func (c *Charset) FirstInvalid(s string) (rune, bool) {
 	return 0, true
 }
 
+// Sanitise uppercases s and replaces every rune the repertoire does not permit
+// with a space, collapsing runs.
+//
+// It exists for free text this node writes itself -- a refusal reason, an
+// operator note -- which has to reach a partner on whatever repertoire the link
+// declares. UNOA has no lowercase, so a plainly-worded reason will not encode
+// at all, and dropping the reason to make it fit tells the partner nothing
+// about why they were refused.
+//
+// It is emphatically not for content received from a partner. Those bytes are
+// evidence and are kept exactly as they arrived.
+func (c *Charset) Sanitise(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	lastSpace := false
+	for _, r := range strings.ToUpper(s) {
+		if !c.permits(r) {
+			r = ' '
+		}
+		if r == ' ' {
+			if lastSpace {
+				continue
+			}
+			lastSpace = true
+		} else {
+			lastSpace = false
+		}
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// permits reports whether one rune is in the repertoire, by set or predicate.
+func (c *Charset) permits(r rune) bool {
+	if c.pred != nil {
+		return c.pred(r)
+	}
+	return c.allowed[r]
+}
+
 // Valid reports whether every rune of s is in the repertoire.
 func (c *Charset) Valid(s string) bool {
 	_, ok := c.FirstInvalid(s)

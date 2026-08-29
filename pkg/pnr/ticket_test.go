@@ -62,17 +62,59 @@ func TestCheckDigit(t *testing.T) {
 	}
 }
 
-func TestCouponUsability(t *testing.T) {
-	if !CouponOpen.Usable() || !CouponCheckedIn.Usable() {
-		t.Error("an open or checked-in coupon is still usable")
+// The vocabulary and the three-way split come from IATA's Airline Guide to EMD
+// Implementation, which publishes the electronic ticket coupon status
+// indicators in full. An earlier version of this file guessed and got three of
+// them wrong, so these assertions name the source.
+func TestCouponStatusMatchesThePublishedList(t *testing.T) {
+	open := []CouponStatus{CouponOpen}
+	interim := []CouponStatus{
+		CouponAirport, CouponRefundTaxes, CouponSuspended, CouponUnavailable,
+		CouponCheckedIn, CouponIrregular, CouponLifted, CouponPrinted, CouponPrintExchange,
 	}
-	for _, c := range []CouponStatus{CouponFlown, CouponRefunded, CouponVoid, CouponExchanged} {
-		if c.Usable() {
-			t.Errorf("%s (%s) must not count as usable", c, c.Meaning())
+	final := []CouponStatus{
+		CouponExchanged, CouponExchFIM, CouponFlown, CouponRefunded, CouponVoid, CouponClosed,
+	}
+
+	for _, c := range open {
+		if c.Class() != ClassOpen || !c.Usable() || c.Final() {
+			t.Errorf("%s should be open and usable", c)
 		}
 	}
-	if CouponStatus("Q").Meaning() != "" {
-		t.Error("an unknown coupon status must not claim a meaning")
+	for _, c := range interim {
+		if c.Class() != ClassInterim {
+			t.Errorf("%s (%s) should be interim", c, c.Meaning())
+		}
+		if !c.Usable() || c.Final() {
+			t.Errorf("%s is interim, so it still stands", c)
+		}
+	}
+	for _, c := range final {
+		if c.Class() != ClassFinal {
+			t.Errorf("%s (%s) should be final", c, c.Meaning())
+		}
+		if c.Usable() || !c.Final() {
+			t.Errorf("%s is final; no follow-up is permitted", c)
+		}
+	}
+	if len(open)+len(interim)+len(final) != 16 {
+		t.Errorf("the published list has sixteen indicators, this has %d",
+			len(open)+len(interim)+len(final))
+	}
+
+	// Codes the guide does not list.
+	for _, c := range []CouponStatus{"N", "D", "Q", ""} {
+		if c.Meaning() != "" {
+			t.Errorf("%s is not in the published list and must not claim a meaning", c)
+		}
+		if c.Class() != ClassUnknown {
+			t.Errorf("%s should be unknown", c)
+		}
+		// A coupon this build cannot interpret must not be claimed to cover
+		// anybody.
+		if c.Usable() {
+			t.Errorf("an unknown status must not count as usable: %q", c)
+		}
 	}
 }
 

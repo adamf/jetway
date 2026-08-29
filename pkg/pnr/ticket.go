@@ -103,46 +103,104 @@ func NewTicketNumber(airlineCode, serial9 string) (TicketNumber, error) {
 }
 
 // CouponStatus is the status of one flight coupon.
+//
+// The vocabulary and its three-way split are taken from IATA's Airline Guide to
+// EMD Implementation, which publishes the electronic ticket coupon status
+// indicators in full and is free. An earlier version of this file guessed the
+// list and got it wrong in three places: it invented "N", mislabelled "X", and
+// omitted "Y" and "G".
 type CouponStatus string
 
-// Coupon status codes from the IATA electronic ticket vocabulary.
+// CouponClass groups a status by what can still happen to the coupon.
+type CouponClass int
+
 const (
-	CouponOpen          CouponStatus = "O" // open for use
-	CouponAirport       CouponStatus = "A" // airport control
-	CouponCheckedIn     CouponStatus = "C"
-	CouponLifted        CouponStatus = "L" // boarded
-	CouponFlown         CouponStatus = "F" // used
-	CouponExchanged     CouponStatus = "E" // reissued
-	CouponRefunded      CouponStatus = "R"
-	CouponVoid          CouponStatus = "V"
-	CouponPrinted       CouponStatus = "P"
-	CouponIrregular     CouponStatus = "I" // irregular operations
-	CouponSuspended     CouponStatus = "S"
-	CouponClosed        CouponStatus = "Z"
-	CouponUnavailable   CouponStatus = "U"
-	CouponNotValid      CouponStatus = "N"
-	CouponPrintExchange CouponStatus = "D" // deleted
+	// ClassOpen is the one status that means untouched and available.
+	ClassOpen CouponClass = iota
+	// ClassInterim means something is happening to the coupon but it has not
+	// been finished with. An interim coupon can still end up flown or refunded.
+	ClassInterim
+	// ClassFinal means the coupon is done with and no follow-up is permitted.
+	ClassFinal
+	// ClassUnknown covers codes not in the published list.
+	ClassUnknown
 )
 
-// CouponStatusMeaning explains a coupon status code.
-var CouponStatusMeaning = map[CouponStatus]string{
-	CouponOpen: "open for use", CouponAirport: "airport control",
-	CouponCheckedIn: "checked in", CouponLifted: "boarded",
-	CouponFlown: "flown", CouponExchanged: "exchanged or reissued",
-	CouponRefunded: "refunded", CouponVoid: "void", CouponPrinted: "printed",
-	CouponIrregular: "irregular operations", CouponSuspended: "suspended",
-	CouponClosed: "closed", CouponUnavailable: "unavailable",
-	CouponNotValid: "not valid", CouponPrintExchange: "deleted",
+// Coupon status indicators.
+const (
+	CouponOpen CouponStatus = "O" // open for use
+
+	// Interim.
+	CouponAirport       CouponStatus = "A" // airport control
+	CouponRefundTaxes   CouponStatus = "Y" // refund taxes, fees and charges only
+	CouponSuspended     CouponStatus = "S"
+	CouponUnavailable   CouponStatus = "U"
+	CouponCheckedIn     CouponStatus = "C"
+	CouponIrregular     CouponStatus = "I" // irregular operations
+	CouponLifted        CouponStatus = "L" // boarded
+	CouponPrinted       CouponStatus = "P"
+	CouponPrintExchange CouponStatus = "X"
+
+	// Final.
+	CouponExchanged CouponStatus = "E" // exchanged or reissued
+	CouponExchFIM   CouponStatus = "G" // exchanged against a flight interruption manifest
+	CouponFlown     CouponStatus = "F" // used
+	CouponRefunded  CouponStatus = "R"
+	CouponVoid      CouponStatus = "V"
+	CouponClosed    CouponStatus = "Z"
+)
+
+type couponInfo struct {
+	Meaning string
+	Class   CouponClass
 }
 
-// Meaning returns the code's meaning, or "" when it is not in the known set.
-func (c CouponStatus) Meaning() string { return CouponStatusMeaning[c] }
+var couponStatuses = map[CouponStatus]couponInfo{
+	CouponOpen: {"open for use", ClassOpen},
 
-// Usable reports whether the coupon can still be flown. It is what decides
-// whether a segment is covered by a ticket.
+	CouponAirport:       {"airport control", ClassInterim},
+	CouponRefundTaxes:   {"refund taxes, fees and charges only", ClassInterim},
+	CouponSuspended:     {"suspended", ClassInterim},
+	CouponUnavailable:   {"unavailable", ClassInterim},
+	CouponCheckedIn:     {"checked in", ClassInterim},
+	CouponIrregular:     {"irregular operations", ClassInterim},
+	CouponLifted:        {"lifted or boarded", ClassInterim},
+	CouponPrinted:       {"printed", ClassInterim},
+	CouponPrintExchange: {"print exchange", ClassInterim},
+
+	CouponExchanged: {"exchanged or reissued", ClassFinal},
+	CouponExchFIM:   {"exchanged against a flight interruption manifest", ClassFinal},
+	CouponFlown:     {"used", ClassFinal},
+	CouponRefunded:  {"refunded", ClassFinal},
+	CouponVoid:      {"void", ClassFinal},
+	CouponClosed:    {"closed", ClassFinal},
+}
+
+// Meaning returns the code's meaning, or "" when it is not in the published set.
+func (c CouponStatus) Meaning() string { return couponStatuses[c].Meaning }
+
+// Class returns what can still happen to a coupon in this status.
+func (c CouponStatus) Class() CouponClass {
+	info, ok := couponStatuses[c]
+	if !ok {
+		return ClassUnknown
+	}
+	return info.Class
+}
+
+// Final reports whether the coupon is finished with. No follow-up is permitted
+// on a final coupon, which is what makes it the wrong thing to reissue against.
+func (c CouponStatus) Final() bool { return c.Class() == ClassFinal }
+
+// Usable reports whether the coupon still stands: open, or interim and
+// therefore not yet finished with. It is what decides whether a segment is
+// covered by a ticket.
+//
+// An unknown code is not usable. A coupon whose status this build cannot
+// interpret is one it must not claim covers a passenger.
 func (c CouponStatus) Usable() bool {
-	switch c {
-	case CouponOpen, CouponAirport, CouponCheckedIn, CouponPrinted, CouponIrregular:
+	switch c.Class() {
+	case ClassOpen, ClassInterim:
 		return true
 	}
 	return false
@@ -160,6 +218,14 @@ type Coupon struct {
 // MaxCoupons is how many flight coupons one ticket carries. An itinerary with
 // more needs conjunction tickets.
 const MaxCoupons = 4
+
+// MaxConjunction is how many documents may be issued in conjunction. Four
+// documents of four coupons is sixteen, which is the ceiling IATA publishes for
+// a single electronic document set.
+const MaxConjunction = 4
+
+// MaxItinerary is the longest itinerary one conjunction set can cover.
+const MaxItinerary = MaxCoupons * MaxConjunction
 
 // Ticket is a document issued against this record for one passenger.
 type Ticket struct {

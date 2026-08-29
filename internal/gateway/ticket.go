@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/pkg/edifact"
+	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
 )
 
@@ -101,6 +103,9 @@ func (g *Gateway) IssueTickets(ctx context.Context, locator string, opts IssueOp
 		case err == nil:
 			g.Bus.Publish(EvPNR, g.pnrView(rec))
 			g.workTicketingQueue(ctx, rec, opts.IssuedBy)
+			// A ticket the operating carrier does not know about is a ticket
+			// that exists only here.
+			g.notifyTicketed(ctx, rec, opts.IssuedBy)
 			return rec, nil
 		case errors.Is(err, store.ErrConflict):
 			lastErr = err
@@ -132,6 +137,14 @@ func ticketableSegments(rec *pnr.PNR) []*pnr.Segment {
 // holding one can find the rest.
 func (g *Gateway) issueFor(ctx context.Context, pax pnr.Passenger, segs []*pnr.Segment,
 	opts IssueOptions, now time.Time) ([]pnr.Ticket, error) {
+	// Four documents of four coupons is the published ceiling for one
+	// conjunction set. Beyond it the itinerary needs more than one set, which
+	// is a fare construction decision rather than something to do silently.
+	if len(segs) > pnr.MaxItinerary {
+		return nil, fmt.Errorf(
+			"gateway: %d segments needs more than one conjunction set; the limit is %d coupons across %d documents",
+			len(segs), pnr.MaxItinerary, pnr.MaxConjunction)
+	}
 	var chunks [][]*pnr.Segment
 	for i := 0; i < len(segs); i += pnr.MaxCoupons {
 		end := min(i+pnr.MaxCoupons, len(segs))
@@ -219,4 +232,359 @@ func TicketSummary(rec *pnr.PNR) string {
 		b.WriteString(t.Number.String())
 	}
 	return b.String()
+}
+
+// notifyTicketed tells each operating carrier that a document now covers their
+// segment.
+//
+// Until this existed, a ticket was real only where it was issued. The carrier
+// flying the passenger had no way to know a document backed the segment they
+// were holding, which is the difference between a booking and a ticketed
+// booking everywhere except in this node's own store.
+func (g *Gateway) notifyTicketed(ctx context.Context, rec *pnr.PNR, by string) {
+	for _, t := range rec.Tickets {
+		byCarrier := map[string][]padis.CouponRef{}
+		for _, c := range t.Coupons {
+			seg := segmentByRef(rec, c.SegmentRef)
+			if seg == nil {
+				continue
+			}
+			carrier := seg.OperatingCarrier
+			if carrier == "" {
+				carrier = seg.Carrier
+			}
+			byCarrier[carrier] = append(byCarrier[carrier], padis.CouponRef{
+				Number: c.Number, Status: c.Status, SegmentRef: c.SegmentRef,
+			})
+		}
+		for carrier, coupons := range byCarrier {
+			if err := g.sendTicketControl(ctx, rec, t, carrier, coupons); err != nil {
+				// The ticket exists either way. What is lost is the carrier
+				// knowing, so it goes in front of somebody rather than being
+				// swallowed.
+				g.Log.Error("could not tell a carrier about a ticket",
+					"locator", rec.RecordLocator, "carrier", carrier,
+					"ticket", t.Number.String(), "err", err)
+				g.queueTicketDivergence(ctx, rec, carrier, t.Number, err, by)
+			}
+		}
+	}
+}
+
+func segmentByRef(rec *pnr.PNR, ref int) *pnr.Segment {
+	for i := range rec.Segments {
+		if rec.Segments[i].Ref == ref {
+			return &rec.Segments[i]
+		}
+	}
+	return nil
+}
+
+func (g *Gateway) sendTicketControl(ctx context.Context, rec *pnr.PNR, t pnr.Ticket,
+	carrier string, coupons []padis.CouponRef) error {
+	peer := g.PeerForCarrier(carrier)
+	if peer == nil {
+		return fmt.Errorf("no link configured for carrier %q", carrier)
+	}
+	if peer.Format != store.FormatEDIFACT {
+		// Ticket control is an EDIFACT message. A teletype link has no
+		// equivalent here, and pretending otherwise would send a carrier
+		// something they cannot read.
+		return fmt.Errorf("peer %s is a teletype link and carries no ticket control", peer.Name)
+	}
+	ref := nextControlRef()
+	ic, err := padis.BuildTKCREQ(rec, t.Number, len(t.Coupons), coupons, padis.BuildOptions{
+		Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
+		Recipient:  edifact.Party{ID: carrier, Qualifier: "ZZ"},
+		ControlRef: ref, MessageRef: "1",
+	})
+	if err != nil {
+		return err
+	}
+	raw, err := ic.Encode(edifact.EncodeOptions{SegmentPerLine: true, Charset: edifact.CharsetUNOA})
+	if err != nil {
+		return err
+	}
+	_, err = g.SendKeyed(ctx, peer, raw, padis.MsgTKCREQ, rec.ID, "", "unb:"+ref)
+	return err
+}
+
+func (g *Gateway) queueTicketDivergence(ctx context.Context, rec *pnr.PNR, carrier string,
+	number pnr.TicketNumber, cause error, by string) {
+	if g.Queues == nil {
+		return
+	}
+	if _, err := g.Queues.Place(ctx, &store.QueueItem{
+		Queue: store.QueueDivergence, PNRID: rec.ID, Locator: rec.RecordLocator,
+		Code: "ticket_not_advised_" + carrier,
+		Reason: fmt.Sprintf("%s was not told that %s covers their segment: %v",
+			carrier, number, cause),
+		PlacedBy: by,
+	}); err != nil {
+		g.Log.Error("could not queue an unadvised ticket", "locator", rec.RecordLocator, "err", err)
+	}
+}
+
+// applyTicketControl handles a partner's ticket control message.
+//
+// A request is a carrier saying what became of a coupon on a document this node
+// issued: checked in, flown, not accepted. It is applied and answered. A
+// response is their acknowledgement of something we said, and is recorded.
+func (g *Gateway) applyTicketControl(ctx context.Context, peer *Peer, msg *store.Message,
+	dec *decoded, res *Result) error {
+	tc := dec.TicketControl
+	msg.Kind = padis.MsgTKCREQ
+	if tc.Response {
+		msg.Kind = padis.MsgTKCRES
+	}
+	g.trace(msg.ID, "ticket", tc.Describe())
+
+	rec, coupIdx, err := g.findTicket(ctx, tc.Number)
+	if err != nil {
+		return err
+	}
+	if rec == nil {
+		// Not a status change on a document we issued. It may instead be the
+		// validating carrier advising us that a document now covers a segment
+		// we operate, which is the other half of interline ticketing and the
+		// half a node only sees when it is the carrier rather than the issuer.
+		if !tc.Response {
+			if advised, err := g.acceptTicketAdvice(ctx, peer, msg, tc); err != nil {
+				return err
+			} else if advised != nil {
+				msg.Status = store.StatusApplied
+				msg.PNRID = advised.ID
+				res.Status = store.StatusApplied
+				res.PNRID = advised.ID
+				res.Locator = advised.RecordLocator
+				return g.answerTicketControl(ctx, peer, msg, tc, tc.Coupons, len(tc.Coupons), "")
+			}
+		}
+		msg.Status = store.StatusRejected
+		msg.Error = "no record holds document " + tc.Number.String()
+		res.Status = store.StatusRejected
+		if !tc.Response {
+			return g.answerTicketControl(ctx, peer, msg, tc, nil, 0,
+				"no record holds this document")
+		}
+		return nil
+	}
+	msg.PNRID = rec.ID
+	res.PNRID = rec.ID
+	res.Locator = rec.RecordLocator
+
+	if tc.Response {
+		msg.Status = store.StatusApplied
+		res.Status = store.StatusApplied
+		if tc.Refusal != "" {
+			msg.Error = "carrier refused: " + tc.Refusal
+			g.queueTicketDivergence(ctx, rec, peer.Carrier, tc.Number,
+				errors.New(tc.Refusal), "partner")
+		}
+		return nil
+	}
+
+	applied, refusal := g.applyCouponChanges(ctx, rec, coupIdx, peer, tc, msg)
+	msg.Status = store.StatusApplied
+	res.Status = store.StatusApplied
+	if refusal != "" {
+		msg.Error = refusal
+	}
+	return g.answerTicketControl(ctx, peer, msg, tc, applied, len(rec.Tickets[coupIdx].Coupons), refusal)
+}
+
+// findTicket locates the record holding a document, and the index of the
+// ticket within it.
+func (g *Gateway) findTicket(ctx context.Context, number pnr.TicketNumber) (*pnr.PNR, int, error) {
+	limit := g.ScheduleScanLimit
+	if limit <= 0 {
+		limit = defaultScheduleScanLimit
+	}
+	recs, err := g.Store.ListPNRs(ctx, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("gateway: scan records for a document: %w", err)
+	}
+	for _, rec := range recs {
+		for i, t := range rec.Tickets {
+			if t.Number.Compact() == number.Compact() {
+				return rec, i, nil
+			}
+		}
+	}
+	return nil, 0, nil
+}
+
+// applyCouponChanges folds a carrier's coupon status changes into the record.
+//
+// Two things are refused. A coupon already at a final status cannot move,
+// because no follow-up is permitted on one. And a carrier may only touch a
+// coupon covering a segment they operate: letting any partner move any coupon
+// would make the document worth nothing.
+func (g *Gateway) applyCouponChanges(ctx context.Context, rec *pnr.PNR, ticketIdx int,
+	peer *Peer, tc *padis.TicketControl, msg *store.Message) ([]padis.CouponRef, string) {
+	now := time.Now().UTC()
+	var applied []padis.CouponRef
+	var refusal string
+	var events []store.Event
+	expected := rec.Version
+	t := &rec.Tickets[ticketIdx]
+
+	for _, want := range tc.Coupons {
+		var c *pnr.Coupon
+		for i := range t.Coupons {
+			if t.Coupons[i].Number == want.Number {
+				c = &t.Coupons[i]
+				break
+			}
+		}
+		if c == nil {
+			refusal = fmt.Sprintf("document has no coupon %d", want.Number)
+			continue
+		}
+		if c.Status.Final() {
+			refusal = fmt.Sprintf("coupon %d is %s (%s) and no follow-up is permitted",
+				c.Number, c.Status, c.Status.Meaning())
+			continue
+		}
+		if want.Status.Class() == pnr.ClassUnknown {
+			refusal = fmt.Sprintf("coupon status %q is not in the published list", want.Status)
+			continue
+		}
+		if seg := segmentByRef(rec, c.SegmentRef); seg != nil && !operates(peer, seg) {
+			refusal = fmt.Sprintf("%s does not operate the segment coupon %d covers",
+				peer.Carrier, c.Number)
+			continue
+		}
+		if c.Status == want.Status {
+			applied = append(applied, padis.CouponRef{Number: c.Number, Status: c.Status})
+			continue
+		}
+		events = append(events, store.Event{
+			Type: "coupon_status", At: now, Actor: peer.Name, MessageID: msg.ID,
+			Detail: fmt.Sprintf("coupon %d of %s: %s -> %s (%s)",
+				c.Number, t.Number, c.Status, want.Status, want.Status.Meaning()),
+		})
+		c.Status = want.Status
+		applied = append(applied, padis.CouponRef{Number: c.Number, Status: c.Status})
+	}
+
+	if len(events) > 0 {
+		rec.UpdatedAt = now
+		if err := g.Store.UpdatePNR(ctx, rec, expected, events); err != nil {
+			g.Log.Error("could not record a coupon status change",
+				"locator", rec.RecordLocator, "err", err)
+			return applied, "could not record the change"
+		}
+		g.Bus.Publish(EvPNR, g.pnrView(rec))
+	}
+	return applied, refusal
+}
+
+// operates reports whether a peer flies a segment.
+func operates(peer *Peer, seg *pnr.Segment) bool {
+	carrier := seg.OperatingCarrier
+	if carrier == "" {
+		carrier = seg.Carrier
+	}
+	return peer.Carrier == carrier
+}
+
+func (g *Gateway) answerTicketControl(ctx context.Context, peer *Peer, msg *store.Message,
+	tc *padis.TicketControl, applied []padis.CouponRef, total int, refusal string) error {
+	ref := nextControlRef()
+	ic, err := padis.BuildTKCRES(tc.Number, total, applied, refusal, padis.BuildOptions{
+		Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
+		Recipient:  edifact.Party{ID: peer.Carrier, Qualifier: "ZZ"},
+		ControlRef: ref, MessageRef: "1",
+	})
+	if err != nil {
+		return fmt.Errorf("gateway: build ticket control response: %w", err)
+	}
+	raw, err := ic.Encode(edifact.EncodeOptions{SegmentPerLine: true, Charset: edifact.CharsetUNOA})
+	if err != nil {
+		return fmt.Errorf("gateway: encode ticket control response: %w", err)
+	}
+	_, err = g.SendKeyed(ctx, peer, raw, padis.MsgTKCRES, msg.PNRID, msg.ID, "unb:"+ref)
+	return err
+}
+
+// acceptTicketAdvice records a document the validating carrier says covers a
+// segment this node operates.
+//
+// It is matched by the sender's own record locator, which they put in RCI,
+// because their document number means nothing here yet and their locator is the
+// one reference both sides already share. Returns nil when no record matches,
+// which leaves the caller to refuse.
+func (g *Gateway) acceptTicketAdvice(ctx context.Context, peer *Peer, msg *store.Message,
+	tc *padis.TicketControl) (*pnr.PNR, error) {
+	if tc.Locator == "" {
+		return nil, nil
+	}
+	rec, err := g.findByExternalLocator(ctx, tc.Party, tc.Locator)
+	if err != nil || rec == nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	expected := rec.Version
+	t := pnr.Ticket{
+		Number: tc.Number, IssuedAt: now, IssuedBy: tc.Party,
+	}
+	if len(rec.Passengers) > 0 {
+		t.PaxRef = rec.Passengers[0].Ref
+	}
+	// The coupons are theirs; only the ones covering a segment this node
+	// actually holds are worth recording against it.
+	for _, c := range tc.Coupons {
+		t.Coupons = append(t.Coupons, pnr.Coupon{
+			Number: c.Number, SegmentRef: firstSegmentFor(rec, peer), Status: c.Status,
+		})
+	}
+	rec.Tickets = append(rec.Tickets, t)
+	rec.UpdatedAt = now
+
+	events := []store.Event{{
+		Type: "ticket_advised", At: now, Actor: peer.Name, MessageID: msg.ID,
+		Detail: fmt.Sprintf("%s advised %s covers this booking over %d coupon(s)",
+			tc.Party, tc.Number, len(t.Coupons)),
+	}}
+	if err := g.Store.UpdatePNR(ctx, rec, expected, events); err != nil {
+		return nil, fmt.Errorf("gateway: record an advised ticket: %w", err)
+	}
+	g.Bus.Publish(EvPNR, g.pnrView(rec))
+	g.trace(msg.ID, "ticket", "recorded "+tc.Number.String()+" against "+rec.RecordLocator)
+	return rec, nil
+}
+
+// findByExternalLocator locates a record by another system's locator for it.
+func (g *Gateway) findByExternalLocator(ctx context.Context, owner, value string) (*pnr.PNR, error) {
+	limit := g.ScheduleScanLimit
+	if limit <= 0 {
+		limit = defaultScheduleScanLimit
+	}
+	recs, err := g.Store.ListPNRs(ctx, limit)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: scan records for a locator: %w", err)
+	}
+	for _, rec := range recs {
+		for _, l := range rec.Locators {
+			if l.Value == value && (owner == "" || l.Owner == owner) {
+				return rec, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// firstSegmentFor returns the reference of the first segment a peer operates.
+func firstSegmentFor(rec *pnr.PNR, peer *Peer) int {
+	for i := range rec.Segments {
+		if rec.Segments[i].Type == pnr.SegmentAir && operates(peer, &rec.Segments[i]) {
+			return rec.Segments[i].Ref
+		}
+	}
+	if len(rec.Segments) > 0 {
+		return rec.Segments[0].Ref
+	}
+	return 0
 }

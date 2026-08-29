@@ -94,6 +94,44 @@ When to send one defaults to honouring UNB 0031, the sender's own
 acknowledgement request. Per-link policy overrides it: `always`, `errors`,
 `never`.
 
+## Ticket control (`pkg/padis`)
+
+`TKCREQ` and `TKCRES`: the interline half of electronic ticketing. A ticket is
+issued by one carrier and flown on another's aircraft, so the carrier taking the
+passenger has to be able to tell the carrier that issued the document what
+became of the coupon.
+
+**A profile for the segments, a specification for the codes.** The PADIS message
+directories are paid and were not bought, so the layout here is inferred: `TKT`
+carrying the document number, `CPN` carrying coupon number and status, alongside
+the `MSG`, `ORG`, `RCI` and `TIF` segments the reservation messages already use.
+
+The coupon status vocabulary is *not* inferred. IATA publishes it in the free
+Airline Guide to EMD Implementation, and `pkg/pnr` takes it from there —
+sixteen indicators in three classes: open, interim, final. An earlier version of
+this repository guessed that list and had it wrong in three places, inventing
+`N`, mislabelling `X`, and omitting `Y` and `G`.
+
+What the gateway does with it:
+
+- On issuance, each operating carrier is told a document now covers its segment.
+  A carrier that cannot be told — a teletype link has no equivalent message —
+  lands on the divergence queue, because a ticket the operating carrier does not
+  know about exists only here.
+- An inbound request applies a coupon status change and answers. Two things are
+  refused: a coupon already at a final status cannot move, since no follow-up is
+  permitted on one, and **a carrier may only touch a coupon covering a segment
+  it operates**. Letting any partner move any coupon would make the document
+  worth nothing.
+- A refusal travels in `ERC` and is uppercased to fit UNOA, which has no
+  lowercase. Dropping the reason to make it encode would tell the partner
+  nothing about why they were refused.
+
+**EMD is not implemented.** It is a separate document family with its own form
+code, its own association process to flight coupons, and its own data elements.
+It shares this coupon status vocabulary, which is why the vocabulary came from
+the EMD guide, but it is not a variation on a ticket.
+
 ## SSM and ASM (`pkg/ssim`)
 
 Schedule messages over Type B: the Standard Schedules Message for a repeating

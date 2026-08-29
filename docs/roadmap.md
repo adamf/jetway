@@ -2,7 +2,9 @@
 
 An honest list. Things in the first two sections block a production deployment.
 
-Recently closed: cancellation -- a carrier can now be told a booking is off,
+Recently closed: interline ticket control -- TKCREQ and TKCRES, so a ticket
+exists somewhere other than the node that issued it, and the published coupon
+status vocabulary replacing a guessed one; cancellation -- a carrier can now be told a booking is off,
 which is what unblocked NDC order cancellation, auto-cancel on a ticketing
 limit, and cancelling from the console; ticketing -- document numbers, coupons, conjunction sets, and
 issuance that satisfies a ticketing time limit; priority-ordered redelivery and
@@ -65,11 +67,14 @@ container images.
   202 carrying both the order and an error, because reporting only the success
   would tell the requester their seats are released when they may not be.
 - **ONE Order.** Not started.
-- **Ticketing is local only.** Documents are issued, numbered and couponed, and
-  issuance clears the time limit. What is missing is the wire: no TKCREQ or
-  TKCRES to a ticketing system, no interline e-ticket exchange, no EMD, and no
-  coupon status changes driven by a partner. Nothing tells anybody else that a
-  ticket exists.
+- **EMD.** A separate document family: its own form code, its own association
+  to flight coupons, its own data elements. It shares the coupon status
+  vocabulary and nothing else.
+- **Ticket control is EDIFACT only.** A teletype partner cannot be told a ticket
+  covers their segment, because there is no equivalent message; those carriers
+  land on the divergence queue at issuance instead.
+- **No refund or exchange.** Coupons can be reported refunded or exchanged by a
+  carrier, and this node records it. Originating either is a fares operation.
 - **Auto-cancel is opt-in.** `Sweeper.Cancel` cancels a booking whose ticketing
   limit has passed and tells the carriers. It is nil by default: giving seats
   back is a real action and a deployment should ask for it rather than discover

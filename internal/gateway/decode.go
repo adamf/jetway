@@ -62,6 +62,9 @@ type decoded struct {
 	// CONTRL is set when the inbound message is itself a syntax and service
 	// report, in which case it says what a partner made of something we sent.
 	CONTRL *edifact.Report
+	// TicketControl is set for TKCREQ and TKCRES: what a partner says has
+	// become of a coupon on a document.
+	TicketControl *padis.TicketControl
 
 	peer *Peer
 	// self is the receiving node's designator.
@@ -167,6 +170,19 @@ func (g *Gateway) decodeEDIFACT(peer *Peer, raw []byte, opts IngestOptions) (*de
 	d.Kind = d.Edifact.ID().Type
 	d.Test = ic.TestIndicator()
 	d.Interchange = ic
+
+	// Ticket control is about a document, not a booking, so it branches before
+	// the record grammar. Feeding it through would produce a message of
+	// unrecognised segments and touch the wrong thing.
+	if padis.IsTicketControl(d.Edifact) {
+		tc, err := padis.ParseTicketControl(d.Edifact)
+		if err != nil {
+			return nil, fmt.Errorf("gateway: %w", err)
+		}
+		d.TicketControl = tc
+		d.NeedsReply = !tc.Response
+		return d, nil
+	}
 
 	// A CONTRL is about an interchange we sent, so it touches no record and
 	// must not be run through the record grammar.
