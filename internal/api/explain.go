@@ -3,9 +3,12 @@ package api
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/adamf/jetway/internal/store"
 	"github.com/adamf/jetway/pkg/airimp"
+	"github.com/adamf/jetway/pkg/avail"
+	"github.com/adamf/jetway/pkg/avs"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/typeb"
 )
@@ -74,6 +77,10 @@ func explainTypeB(raw []byte, e *Explained) *Explained {
 		})
 	}
 
+	if avs.IsAvailability(tb.Text) {
+		return explainAVS(tb.Text, e)
+	}
+
 	m := airimp.Parse(tb.Text)
 	e.Summary = "AIRIMP " + string(m.Intent())
 	for _, d := range m.Diagnostics {
@@ -83,6 +90,57 @@ func explainTypeB(raw []byte, e *Explained) *Explained {
 	}
 	for _, el := range m.Elements {
 		e.Parts = append(e.Parts, explainElement(el))
+	}
+	return e
+}
+
+// explainAVS renders an availability message as the beliefs it asserts, which
+// is what an operator wants to see: what is sellable, on what, and how sure.
+func explainAVS(text string, e *Explained) *Explained {
+	e.Format = "Type B / AVS"
+	m := avs.Parse(text, time.Now().UTC())
+	e.Summary = fmt.Sprintf("availability status, %d entries", len(m.Entries))
+
+	for _, d := range m.Diagnostics {
+		e.Diagnostics = append(e.Diagnostics, store.Diagnostic{
+			Layer: "avs", Severity: d.Severity.String(), Code: d.Code, Detail: d.Detail, Line: d.Line,
+		})
+	}
+
+	// Group by segment, the way a carrier publishes it.
+	type group struct {
+		head    string
+		entries []avail.Entry
+	}
+	var order []string
+	byFlight := map[string]*group{}
+	for _, en := range m.Entries {
+		head := fmt.Sprintf("%s%s  %s-%s  %s",
+			en.Key.Carrier, en.Key.FlightNum, en.Key.Board, en.Key.Off, en.Key.Date)
+		g, ok := byFlight[head]
+		if !ok {
+			g = &group{head: head}
+			byFlight[head] = g
+			order = append(order, head)
+		}
+		g.entries = append(g.entries, en)
+	}
+	for _, head := range order {
+		g := byFlight[head]
+		p := Part{Kind: "flight", Wire: g.head}
+		for _, en := range g.entries {
+			note := string(en.Status)
+			if en.SeatsKnown {
+				note = fmt.Sprintf("%s, %d seats offered", en.Status, en.Seats)
+			}
+			if en.Status == avail.Open {
+				note += " — sellable without asking"
+			}
+			p.Fields = append(p.Fields, Field{Name: "Class " + en.Key.Class,
+				Value: string(en.Status), Note: note})
+		}
+		p.Note = "availability granted in advance; a booking against an open class needs no round trip"
+		e.Parts = append(e.Parts, p)
 	}
 	return e
 }

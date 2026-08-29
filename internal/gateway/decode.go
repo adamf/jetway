@@ -192,7 +192,7 @@ func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 	// Availability messages are Type B but say nothing about any booking, so
 	// they branch before the reservation grammar rather than being fed to it
 	// and producing a message full of unrecognised elements.
-	if isAVS(tb.Text) {
+	if avs.IsAvailability(tb.Text) {
 		am := peer.avs().Parse(tb.Text, msgTime(peer))
 		d.AVS = am
 		d.Kind = "AVS"
@@ -259,16 +259,6 @@ func typeBDedupKey(tb *typeb.Message) string {
 	}
 	sum := sha256.Sum256([]byte(tb.Text))
 	return "tty:" + tb.Origin.String() + ":" + tb.OriginTime.String() + ":" + hex.EncodeToString(sum[:8])
-}
-
-// isAVS reports whether Type B text carries availability rather than a booking.
-func isAVS(text string) bool {
-	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
-		if l := strings.TrimSpace(line); l != "" {
-			return strings.HasPrefix(l, avs.MessageIdentifier)
-		}
-	}
-	return false
 }
 
 // msgTime anchors date resolution. Kept as a hook so replay can pin it.

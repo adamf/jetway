@@ -38,6 +38,24 @@ import (
 // MessageIdentifier is the identifier an AVS message carries.
 const MessageIdentifier = "AVS"
 
+// IsAvailability reports whether Type B text carries availability rather than a
+// booking.
+//
+// Exported because two places need the same answer -- the pipeline, to route
+// the message, and the console, to explain it. When they disagreed, the console
+// ran availability through the reservation grammar and reported every line as
+// unrecognised.
+func IsAvailability(text string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		l := strings.TrimSpace(line)
+		if l == "" {
+			continue
+		}
+		return l == MessageIdentifier || strings.HasPrefix(l, MessageIdentifier+" ")
+	}
+	return false
+}
+
 // StatusMap translates a carrier's status codes into distribution statuses.
 type StatusMap map[string]avail.Status
 

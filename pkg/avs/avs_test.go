@@ -230,3 +230,32 @@ func TestDefaultMapHoldsOnlyUnambiguousCodes(t *testing.T) {
 		}
 	}
 }
+
+// The pipeline and the console must agree on what an availability message is.
+// When they did not, the console ran availability through the reservation
+// grammar and reported every line as unrecognised.
+func TestIsAvailability(t *testing.T) {
+	yes := []string{
+		"AVS\nBA0175/27SEP/LHRJFK\nY/O",
+		"  AVS  \nBA0175/27SEP/LHRJFK",
+		"\n\nAVS ABC\nBA0175/27SEP/LHRJFK",
+	}
+	for _, in := range yes {
+		if !IsAvailability(in) {
+			t.Errorf("should be availability: %q", in)
+		}
+	}
+	no := []string{
+		"",
+		"SS\nBA0175Y15JUNLHRJFKNN1",
+		"BA0175Y15JUNLHRJFKNN1",
+		// A booking whose text merely mentions the letters must not be caught.
+		"OSI BA AVS FOLLOWS",
+		"AVSOMETHING\nX",
+	}
+	for _, in := range no {
+		if IsAvailability(in) {
+			t.Errorf("should not be availability: %q", in)
+		}
+	}
+}
