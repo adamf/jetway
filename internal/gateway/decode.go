@@ -14,6 +14,7 @@ import (
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/ssim"
 	"github.com/adamf/jetway/pkg/typeb"
 )
 
@@ -47,8 +48,11 @@ type decoded struct {
 	TypeB  *typeb.Message
 	Airimp *airimp.Message
 	// AVS is set when the message carries availability rather than a booking.
-	AVS     *avs.Message
-	ReplyTo typeb.Address
+	AVS *avs.Message
+	// Schedule is set when the message is an SSM or ASM. Like availability, a
+	// schedule change touches no single record and must not create one.
+	Schedule *ssim.Message
+	ReplyTo  typeb.Address
 
 	Edifact       edifact.Message
 	EdifactSender string
@@ -209,6 +213,25 @@ func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 	}
 	if tb.Text == "" {
 		return nil, fmt.Errorf("gateway: type b message has no text")
+	}
+
+	// Schedule messages are Type B and say nothing about any one booking, so
+	// like availability they branch before the reservation grammar rather than
+	// being fed to it and producing a message full of unrecognised elements.
+	if ssim.IsSchedule(tb.Text) {
+		sm, err := peer.ssim().Parse(tb.Text)
+		if err != nil {
+			return nil, fmt.Errorf("gateway: schedule decode: %w", err)
+		}
+		d.Schedule = sm
+		d.Kind = string(sm.Kind) + "/" + string(sm.Action)
+		for _, x := range sm.Diagnostics {
+			d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+				Layer: "ssim", Severity: x.Severity.String(), Code: x.Code,
+				Detail: x.Detail, Line: x.Line,
+			})
+		}
+		return d, nil
 	}
 
 	// Availability messages are Type B but say nothing about any booking, so

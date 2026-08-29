@@ -28,6 +28,7 @@ import (
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/ssim"
 	"github.com/adamf/jetway/pkg/typeb"
 )
 
@@ -67,6 +68,8 @@ type Peer struct {
 	AirimpProfile *airimp.Profile
 	// PadisProfile overrides the PADIS segment handlers for this link.
 	PadisProfile *padis.Profile
+	// SSIMProfile overrides the SSM and ASM grammar for this link.
+	SSIMProfile *ssim.Profile
 	// AvsProfile overrides the availability grammar and status-code meanings
 	// for this link. The standard makes numeric availability bilateral, so a
 	// per-link map is the normal case rather than an escape hatch.
@@ -85,6 +88,14 @@ func (p *Peer) airimp() *airimp.Profile {
 		return p.AirimpProfile
 	}
 	return airimp.Default
+}
+
+// SSIMProfile overrides the schedule message grammar for this link.
+func (p *Peer) ssim() *ssim.Profile {
+	if p.SSIMProfile != nil {
+		return p.SSIMProfile
+	}
+	return ssim.Default
 }
 
 func (p *Peer) padis() *padis.Profile {
@@ -127,6 +138,10 @@ type Gateway struct {
 	// Queues turns partner answers into work. Nil means this node keeps no
 	// queues, which is right for a simulated carrier and wrong for a GDS.
 	Queues *queue.Manager
+
+	// ScheduleScanLimit bounds the record scan a schedule message triggers.
+	// Zero uses defaultScheduleScanLimit.
+	ScheduleScanLimit int
 
 	locators *pnr.LocatorAllocator
 
@@ -437,6 +452,10 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 	// Report on the syntax before acting on the content: the two are separate
 	// answers, and a partner is owed the first even when the second fails.
 	g.sendCONTRL(ctx, peer, msg, dec)
+
+	if dec.Schedule != nil {
+		return g.applySchedule(ctx, peer, msg, dec, res)
+	}
 
 	if dec.AVS != nil {
 		return g.applyAvailability(ctx, msg, dec, res)
@@ -1030,4 +1049,103 @@ func (g *Gateway) applyCONTRL(ctx context.Context, peer *Peer, msg *store.Messag
 		}
 	}
 	return nil
+}
+
+// applySchedule matches a schedule change against the records that hold the
+// flight, and puts each of them in front of somebody.
+//
+// A schedule message touches no single record, so it never creates one: like
+// availability, treating it as a booking update would manufacture a record per
+// broadcast. What it does is turn "this flight moved" into "these passengers
+// need telling", which is the only reason a distribution system wants the
+// message at all.
+//
+// Matching is a scan over held records. That is honest at these volumes and
+// wrong at scale, where the flight key wants an index; ScheduleScanLimit bounds
+// it in the meantime.
+func (g *Gateway) applySchedule(ctx context.Context, peer *Peer, msg *store.Message, dec *decoded, res *Result) error {
+	sm := dec.Schedule
+	msg.Status = store.StatusApplied
+	res.Status = store.StatusApplied
+	g.trace(msg.ID, "schedule", sm.Describe())
+
+	if g.Queues == nil {
+		return nil
+	}
+	if sm.Flight.Carrier == "" {
+		return nil
+	}
+	limit := g.ScheduleScanLimit
+	if limit <= 0 {
+		limit = defaultScheduleScanLimit
+	}
+	recs, err := g.Store.ListPNRs(ctx, limit)
+	if err != nil {
+		return fmt.Errorf("gateway: scan records for a schedule change: %w", err)
+	}
+
+	want := sm.Flight.Key()
+	placed := 0
+	for _, rec := range recs {
+		if rec.Status == pnr.StatusCancelled {
+			continue
+		}
+		for i := range rec.Segments {
+			seg := &rec.Segments[i]
+			if seg.Type != pnr.SegmentAir {
+				continue
+			}
+			if !flightMatches(seg, want, sm) {
+				continue
+			}
+			// The action is part of the reason code, so a later cancellation of
+			// a flight already retimed raises a second, distinct task rather
+			// than being swallowed as a duplicate of the first.
+			code := "schedule_" + strings.ToLower(string(sm.Action))
+			reason := fmt.Sprintf("%s: %s", seg.Describe(), sm.Describe())
+			ok, err := g.Queues.PlaceForSegment(ctx, rec, seg,
+				store.QueueScheduleChange, code, reason, msg.ID)
+			if err != nil {
+				g.Log.Error("could not queue a schedule change",
+					"locator", rec.RecordLocator, "err", err)
+				continue
+			}
+			if ok {
+				placed++
+			}
+		}
+	}
+	g.trace(msg.ID, "schedule", fmt.Sprintf("%d segment(s) affected", placed))
+	g.Bus.Publish(EvTrace, map[string]any{
+		"node": g.Identity.Name, "message_id": msg.ID, "step": "schedule",
+		"detail": sm.Describe(), "affected": placed,
+	})
+	return nil
+}
+
+// defaultScheduleScanLimit bounds the record scan a schedule change triggers.
+const defaultScheduleScanLimit = 1000
+
+// flightMatches reports whether a held segment is on the flight a schedule
+// message is about.
+//
+// The date has to agree as well as the flight. A cancellation for one day must
+// not sweep up every passenger booked on that flight number all season, which
+// is what matching on the designator alone would do.
+func flightMatches(seg *pnr.Segment, flightKey string, sm *ssim.Message) bool {
+	if seg.Carrier+strings.TrimLeft(seg.FlightNum, "0") != flightKey {
+		return false
+	}
+	if sm.Period.From == "" {
+		// No date stated: the message is about the flight as such, so every
+		// holding of it is in scope.
+		return true
+	}
+	if sm.Period.Single() {
+		return strings.EqualFold(seg.WireDate, sm.Period.From)
+	}
+	// A period covers a range this package does not resolve to dates, so the
+	// segment is included and the reason names the period. Saying "this may
+	// affect you" to a few extra records is the safe direction to be wrong in.
+	return true
 }

@@ -31,6 +31,10 @@ const (
 	QueuePending = "pending"
 	// QueueTicketing holds records whose ticketing time limit is near or past.
 	QueueTicketing = "ticketing"
+	// QueueScheduleChange holds records touched by a schedule message: the
+	// flight they are booked on has moved, changed equipment or been
+	// cancelled, and the passenger has not been told.
+	QueueScheduleChange = "schedule-change"
 	// QueueDivergence holds records where our state and a partner's disagree,
 	// which is the case a human must always see.
 	QueueDivergence = "divergence"
@@ -45,6 +49,7 @@ var Queues = []string{
 	QueueWaitlist,
 	QueuePending,
 	QueueTicketing,
+	QueueScheduleChange,
 	QueueDivergence,
 	QueueGeneral,
 }
