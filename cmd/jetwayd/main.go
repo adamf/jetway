@@ -107,7 +107,7 @@ func run() error {
 			"consequence", "a store outage becomes refused acknowledgements to partners")
 	}
 
-	bus := gateway.NewBus(1000)
+	bus := gateway.NewBus(400)
 	gw := gateway.New(gateway.Identity{
 		Designator: cfg.Identity.Designator,
 		TTYAddress: cfg.Identity.TTYAddress,

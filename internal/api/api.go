@@ -69,6 +69,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("GET /api/flights", s.flights)
+	mux.HandleFunc("GET /api/journeys", s.journeys)
 	mux.HandleFunc("POST /api/book", s.book)
 	mux.HandleFunc("GET /api/pnrs", s.listPNRs)
 	mux.HandleFunc("GET /api/pnr/{locator}", s.getPNR)
@@ -183,6 +184,26 @@ func (s *Server) flights(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"flights":      demo.Flights(),
 		"classes":      demo.BookingClasses,
+		"default_date": demo.DefaultDate().Format("02Jan"),
+	})
+}
+
+// journeys lists the itineraries the demo schedule can sell, interline first.
+func (s *Server) journeys(w http.ResponseWriter, r *http.Request) {
+	all := demo.Journeys()
+	if r.URL.Query().Get("interline") == "true" {
+		all = demo.InterlineJourneys()
+	}
+	type view struct {
+		demo.Journey
+		Label string `json:"label"`
+	}
+	out := make([]view, 0, len(all))
+	for _, j := range all {
+		out = append(out, view{Journey: j, Label: j.Label()})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"journeys": out, "classes": demo.BookingClasses,
 		"default_date": demo.DefaultDate().Format("02Jan"),
 	})
 }

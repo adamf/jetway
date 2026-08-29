@@ -636,8 +636,12 @@ func (g *Gateway) msgView(m *store.Message) map[string]any {
 		"at": m.At, "peer": m.Peer, "format": string(m.Format), "kind": m.Kind,
 		"status": string(m.Status), "size": m.Size, "error": m.Error,
 		"sha256": m.SHA256,
+		// Deliberately no raw body. The stream is a notification channel, and a
+		// console that wants the bytes fetches them for the one message it is
+		// showing. Broadcasting every payload to every observer made the
+		// backlog megabytes and the reconnect expensive.
 		"pnr_id": m.PNRID, "correlation_id": m.CorrelationID,
-		"raw": string(m.Raw), "diagnostics": m.Diagnostics,
+		"diagnostics": m.Diagnostics,
 	}
 }
 

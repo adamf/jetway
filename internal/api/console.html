@@ -36,6 +36,12 @@ header{display:flex;align-items:center;gap:16px;padding:10px 18px;background:var
 .brand small{font-weight:450;color:var(--ink-3);font-size:11px;letter-spacing:.02em}
 .ident{font:11px/1 var(--mono);color:var(--ink-3);padding:5px 8px;border:1px solid var(--line);
   border-radius:6px;background:var(--panel-2)}
+.views{display:flex;gap:3px;margin-left:14px}
+.view{font:600 11px/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;
+  color:var(--ink-3);padding:7px 12px;border:1px solid transparent;border-radius:7px;
+  background:none;cursor:pointer;width:auto}
+.view:hover{color:var(--ink)}
+.view.on{color:var(--accent);background:var(--accent-soft);border-color:var(--accent)}
 .links{display:flex;gap:7px;margin-left:auto;flex-wrap:wrap}
 .pill{display:flex;align-items:center;gap:6px;font:11px/1 var(--mono);padding:5px 9px;
   border-radius:20px;border:1px solid var(--line);background:var(--panel-2);color:var(--ink-2);
@@ -47,6 +53,30 @@ header{display:flex;align-items:center;gap:16px;padding:10px 18px;background:var
 /* ---------- layout ---------- */
 main{display:grid;grid-template-columns:320px minmax(420px,1fr) minmax(360px,460px);
   height:calc(100vh - 56px)}
+main[hidden]{display:none}
+.recbar{display:flex;align-items:center;gap:12px;padding:11px 14px;background:var(--panel);
+  border-bottom:1px solid var(--line);flex-shrink:0;flex-wrap:wrap}
+.tablewrap{flex:1;overflow:auto;min-height:0}
+table.rt{width:100%;border-collapse:collapse;font-size:12px}
+table.rt th{position:sticky;top:0;background:var(--panel);text-align:left;font:600 10px/1 var(--sans);
+  letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);padding:9px 12px;
+  border-bottom:1px solid var(--line);z-index:1;white-space:nowrap}
+table.rt td{padding:9px 12px;border-bottom:1px solid var(--line-2);vertical-align:top}
+table.rt tbody tr{cursor:pointer}
+table.rt tbody tr:hover{background:var(--panel-2)}
+table.rt tbody tr.sel{background:var(--accent-soft)}
+table.rt .loc{font:600 12px/1 var(--mono);letter-spacing:.06em}
+table.rt .mono{font:11px/1.5 var(--mono)}
+table.rt .dim{color:var(--ink-3)}
+.il{font:9px/1 var(--mono);padding:2px 5px;border-radius:3px;margin-left:6px;
+  color:var(--out);background:color-mix(in srgb,var(--out) 16%,transparent);
+  text-transform:uppercase;letter-spacing:.04em}
+.convo{display:grid;grid-template-columns:auto auto 1fr auto;gap:8px;align-items:center;
+  padding:5px 0;border-bottom:1px solid var(--line-2);font-size:11px;cursor:pointer}
+.convo:last-child{border-bottom:none}
+.convo:hover{background:var(--panel-2)}
+.convo .d{font:11px/1 var(--mono);font-weight:700;width:14px;text-align:center}
+.convo .d.out{color:var(--out)} .convo .d.in{color:var(--in)}
 .col{display:flex;flex-direction:column;min-height:0;overflow:hidden}
 .col+.col{border-left:1px solid var(--line)}
 .scroll{overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:14px;min-height:0}
@@ -150,10 +180,28 @@ pre.raw{margin:0;padding:12px;background:var(--panel-2);border:1px solid var(--l
 .diag code{font:10px/1.4 var(--mono);color:var(--ink-3)}
 
 /* ---------- pnr ---------- */
-.pnrrow{display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid var(--line);
-  border-radius:8px;cursor:pointer;font-size:12px;background:var(--panel)}
+.chips{display:flex;gap:5px;margin:7px 0 2px;flex-wrap:wrap}
+.chip{font:10px/1 var(--sans);letter-spacing:.04em;text-transform:uppercase;padding:5px 8px;
+  border:1px solid var(--line);border-radius:20px;background:var(--panel-2);color:var(--ink-3);
+  cursor:pointer;width:auto}
+.chip:hover{color:var(--ink)}
+.chip.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.chip .n{opacity:.7;margin-left:3px}
+
+.pnrrow{display:flex;flex-direction:column;gap:3px;padding:8px 10px;border:1px solid var(--line);
+  border-radius:8px;cursor:pointer;background:var(--panel)}
 .pnrrow:hover{border-color:var(--accent)}
 .pnrrow.sel{border-color:var(--accent);background:var(--accent-soft)}
+.pnrrow .top{display:flex;align-items:center;gap:8px}
+.pnrrow .who{font:12px/1.3 var(--sans);color:var(--ink);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;flex:1}
+.pnrrow .itin{font:10px/1.4 var(--mono);color:var(--ink-3);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.pnrrow .when{font:10px/1 var(--mono);color:var(--ink-3);white-space:nowrap}
+.flag{font:9px/1 var(--mono);padding:2px 5px;border-radius:3px;text-transform:uppercase;
+  letter-spacing:.04em}
+.flag.await{color:var(--wait);background:color-mix(in srgb,var(--wait) 16%,transparent)}
+.flag.frag{color:var(--warn);background:color-mix(in srgb,var(--warn) 16%,transparent)}
 .loc{font:600 13px/1 var(--mono);letter-spacing:.06em}
 .badge{font:10px/1 var(--mono);padding:3px 6px;border-radius:4px;background:var(--panel-2);
   border:1px solid var(--line);color:var(--ink-3);white-space:nowrap}
@@ -192,10 +240,14 @@ pre.raw{margin:0;padding:12px;background:var(--panel-2);border:1px solid var(--l
 <header>
   <div class="brand"><span class="dot"></span>Jetway <small>GDS &amp; AIRLINE MESSAGING GATEWAY</small></div>
   <div class="ident" id="ident">—</div>
+  <nav class="views" id="views">
+    <button class="view on" data-view="flow">Message flow</button>
+    <button class="view" data-view="records">Records</button>
+  </nav>
   <div class="links" id="links"></div>
 </header>
 
-<main>
+<main id="view-flow">
   <!-- ============ left ============ -->
   <section class="col">
     <div class="scroll">
@@ -238,13 +290,23 @@ pre.raw{margin:0;padding:12px;background:var(--panel-2);border:1px solid var(--l
           <div class="hint" id="availhint" style="margin:0 0 8px">
             What carriers have said may be sold without asking.
           </div>
-          <div id="availlist" style="max-height:190px;overflow-y:auto"></div>
+          <div id="availlist" style="max-height:132px;overflow-y:auto"></div>
         </div>
       </div>
 
-      <div class="card" style="flex:1;display:flex;flex-direction:column;min-height:180px">
+      <div class="card" style="flex:1;display:flex;flex-direction:column;min-height:240px">
         <h2>Records held here <span class="count" id="pnrcount">0</span></h2>
-        <div class="body" id="pnrlist" style="overflow-y:auto;display:flex;flex-direction:column;gap:6px">
+        <div style="padding:9px 13px 0">
+          <input id="pnrsearch" placeholder="Find by locator, name, flight or route"
+                 autocomplete="off" spellcheck="false">
+          <div class="chips" id="pnrfilters">
+            <button class="chip on" data-f="all">All</button>
+            <button class="chip" data-f="await">Awaiting reply</button>
+            <button class="chip" data-f="problem">Needs attention</button>
+          </div>
+        </div>
+        <div class="body" id="pnrlist"
+             style="overflow-y:auto;display:flex;flex-direction:column;gap:5px;padding-top:4px">
           <div class="empty">No bookings yet</div>
         </div>
       </div>
@@ -281,6 +343,36 @@ pre.raw{margin:0;padding:12px;background:var(--panel-2);border:1px solid var(--l
   </section>
 </main>
 
+<!-- ============ records view ============ -->
+<main id="view-records" hidden>
+  <section class="col" style="grid-column:1 / span 2;border-right:1px solid var(--line)">
+    <div class="recbar">
+      <input id="rsearch" placeholder="Find by locator, passenger, flight or route"
+             autocomplete="off" spellcheck="false" style="max-width:340px">
+      <div class="chips" id="rfilters" style="margin:0">
+        <button class="chip on" data-f="all">All</button>
+        <button class="chip" data-f="interline">Interline</button>
+        <button class="chip" data-f="await">Awaiting reply</button>
+        <button class="chip" data-f="problem">Needs attention</button>
+      </div>
+      <span class="badge" id="rcount" style="margin-left:auto">0</span>
+    </div>
+    <div class="tablewrap"><table class="rt" id="rtable">
+      <thead><tr>
+        <th>Locator</th><th>Passengers</th><th>Itinerary</th>
+        <th>Carriers</th><th>Their locators</th><th>Status</th><th>Updated</th>
+      </tr></thead>
+      <tbody id="rbody"></tbody>
+    </table></div>
+  </section>
+  <section class="col">
+    <div class="tabs"><span class="tab on" style="cursor:default">Record detail</span></div>
+    <div class="scroll" id="rdetail">
+      <div class="empty">Select a record.</div>
+    </div>
+  </section>
+</main>
+
 <script>
 "use strict";
 const $ = s => document.querySelector(s);
@@ -291,6 +383,7 @@ const esc = s => String(s ?? "");
 const state = {
   identity:{}, peers:[], messages:[], byId:new Map(),
   selMsg:null, selPnr:null, pane:"msg", tape:"all", pnrs:[], hidden:new Set(),
+  pnrQuery:"", pnrFilter:"all", recQuery:"", recFilter:"all",
 };
 
 /* ---------------- status & topology ---------------- */
@@ -399,13 +492,24 @@ $("#go").addEventListener("click", async () => {
   finally { btn.disabled = false; refreshPnrs(); }
 });
 
+/* ---------------- render scheduling ---------------- */
+// The stream replays a backlog on connect, so a handler that re-renders or
+// fetches per event does that work hundreds of times in a burst. Coalescing
+// turns a backlog of any size into one render.
+const pending = new Set();
+function schedule(name, fn){
+  if (pending.has(name)) return;
+  pending.add(name);
+  requestAnimationFrame(() => { pending.delete(name); fn(); });
+}
+
 /* ---------------- live stream ---------------- */
 function connect(){
   const src = new EventSource("/api/stream");
   src.addEventListener("message", e => onMessage(JSON.parse(e.data).Data ?? JSON.parse(e.data).data));
   src.addEventListener("pnr", e => { const d = payload(e); onPnr(d); });
   src.addEventListener("link", () => loadStatus());
-  src.addEventListener("avail", () => refreshAvail());
+  src.addEventListener("avail", () => schedule("avail", refreshAvail));
   src.addEventListener("trace", () => {});
   src.onerror = () => {};
 }
@@ -417,12 +521,21 @@ function onMessage(m){
     Object.assign(state.byId.get(m.id), m);
   } else {
     state.byId.set(m.id, m); state.messages.push(m);
+    if (state.messages.length > 2000){
+      const drop = state.messages.splice(0, state.messages.length - 2000);
+      for (const d of drop) state.byId.delete(d.id);
+    }
     if (m.direction === "out") pulse(m.peer === "gds" ? m.node : m.peer, m.node !== state.identity.designator);
   }
-  renderTape();
-  if (state.selMsg === m.id && state.pane === "msg") openMessage(m.id, m.node);
+  schedule("tape", renderTape);
+  if (state.selMsg === m.id && state.pane === "msg") schedule("msg", () => openMessage(m.id, m.node));
 }
-function onPnr(p){ refreshPnrs(); if (state.selPnr === p.locator && state.pane === "pnr") selectPnr(p.locator, true); }
+function onPnr(p){
+  schedule("pnrs", () => refreshPnrs().then(() => {
+    if (!$("#view-records").hidden) renderRecords();
+  }));
+  if (state.selPnr === p.locator && state.pane === "pnr") schedule("pnr", () => selectPnr(p.locator, true));
+}
 
 /* ---------------- tape ---------------- */
 document.querySelectorAll(".tab[data-tape]").forEach(b => b.addEventListener("click", () => {
@@ -441,10 +554,18 @@ function tapeFilter(m){
   return true;
 }
 
+// TapeLimit bounds the rows in the DOM. The log is complete in the store; the
+// tape is a live view, and rebuilding thousands of rows on every event is what
+// makes a page stop responding.
+const TapeLimit = 250;
+
 function renderTape(){
   const tape = $("#tape");
-  const rows = state.messages.filter(tapeFilter);
-  $("#msgcount").textContent = rows.length + " message" + (rows.length === 1 ? "" : "s");
+  let rows = state.messages.filter(tapeFilter);
+  const total = rows.length;
+  if (rows.length > TapeLimit) rows = rows.slice(-TapeLimit);
+  $("#msgcount").textContent = total + " message" + (total === 1 ? "" : "s") +
+    (total > TapeLimit ? ` (showing ${TapeLimit})` : "");
   const atBottom = tape.scrollHeight - tape.scrollTop - tape.clientHeight < 60;
   tape.innerHTML = "";
   if (!rows.length){
@@ -494,7 +615,7 @@ async function openMessage(id, node){
   } catch(e){ fetchErr = e.message; }
 
   const d = $("#detail"); d.innerHTML = "";
-  const ex = data ? data.explained : {raw: m?.raw || "", parts:[], envelope:[], diagnostics:[]};
+  const ex = data ? data.explained : {raw: "", parts:[], envelope:[], diagnostics:[]};
 
   // header card
   const hc = el("div","card"); hc.appendChild(el("h2",null, ex.format || "Message"));
@@ -622,24 +743,87 @@ async function refreshAvail(){
 
 async function refreshPnrs(){
   try{
-    const r = await fetch("/api/pnrs?limit=40"); const d = await r.json();
+    const r = await fetch("/api/pnrs?limit=200"); const d = await r.json();
     state.pnrs = d.pnrs || [];
   }catch(e){ return; }
+  renderPnrs();
+}
+
+// A record is identified by who is travelling, not by its locator. An agent
+// searching for "Garcia" should not have to know a six-character code.
+function pnrText(p){
+  const pax = (p.passengers||[]).map(x => `${x.surname}/${x.given}`).join(" ");
+  const seg = (p.segments||[]).map(s =>
+    `${s.carrier||""}${s.flight_num||""} ${s.board||""}${s.off||""} ${s.class||""}`).join(" ");
+  return (p.record_locator + " " + pax + " " + seg).toUpperCase();
+}
+const awaiting = p => (p.segments||[]).some(s => s.status === "HN" || s.status === "PN");
+const problem  = p => (p.unparsed||[]).length > 0 || p.status === "cancelled" ||
+  (p.segments||[]).some(s => ["UC","UN","XX","HX","NO"].includes(s.status));
+
+function pnrMatches(p){
+  if (state.pnrFilter === "await"   && !awaiting(p)) return false;
+  if (state.pnrFilter === "problem" && !problem(p))  return false;
+  const q = (state.pnrQuery||"").trim().toUpperCase();
+  return !q || pnrText(p).includes(q);
+}
+
+function renderPnrs(){
   const list = $("#pnrlist"); list.innerHTML = "";
-  $("#pnrcount").textContent = state.pnrs.length;
-  if (!state.pnrs.length){ list.appendChild(el("div","empty","No bookings yet")); return; }
-  for (const p of state.pnrs){
+  const all = state.pnrs || [];
+  $("#pnrcount").textContent = all.length;
+  // Keep the filter counts live so the chips are informative, not decorative.
+  const counts = {all: all.length, await: all.filter(awaiting).length,
+                  problem: all.filter(problem).length};
+  document.querySelectorAll("#pnrfilters .chip").forEach(b => {
+    b.classList.toggle("on", b.dataset.f === state.pnrFilter);
+    let n = b.querySelector(".n");
+    if (!n){ n = el("span","n"); b.appendChild(n); }
+    n.textContent = counts[b.dataset.f];
+  });
+
+  const rows = all.filter(pnrMatches);
+  if (!rows.length){
+    list.appendChild(el("div","empty", all.length ? "Nothing matches" : "No bookings yet"));
+    return;
+  }
+  for (const p of rows){
     const row = el("div","pnrrow" + (state.selPnr === p.record_locator ? " sel" : ""));
-    row.appendChild(el("span","loc", p.record_locator));
-    const statuses = (p.segments||[]).map(s => s.status);
-    row.appendChild(el("span","badge " + p.status, p.status));
-    row.appendChild(el("span","badge", "v" + p.version));
-    const s = el("span","badge", statuses.join(" ") || "no segments");
-    s.style.marginLeft = "auto"; row.appendChild(s);
+
+    const top = el("div","top");
+    top.appendChild(el("span","loc", p.record_locator));
+    const pax = (p.passengers||[]);
+    const who = pax.length
+      ? pax[0].surname + "/" + pax[0].given + (pax.length > 1 ? ` +${pax.length-1}` : "")
+      : "—";
+    top.appendChild(el("span","who", who));
+    if (awaiting(p)) top.appendChild(el("span","flag await","awaiting"));
+    if ((p.unparsed||[]).length) top.appendChild(el("span","flag frag","fragments"));
+    top.appendChild(el("span","badge " + p.status, p.status));
+    row.appendChild(top);
+
+    const segs = (p.segments||[]);
+    const itin = el("div","itin");
+    itin.textContent = segs.length
+      ? segs.map(s => s.type === "surface" ? "ARNK"
+          : `${s.carrier}${s.flight_num} ${s.class} ${s.board}\u2013${s.off} ${s.status}`).join("  ·  ")
+      : "no segments";
+    const line = el("div","top");
+    line.appendChild(itin);
+    line.appendChild(el("span","when", new Date(p.updated_at).toLocaleTimeString()));
+    row.appendChild(line);
+
     row.addEventListener("click", () => selectPnr(p.record_locator));
     list.appendChild(row);
   }
 }
+
+$("#pnrsearch").addEventListener("input", e => {
+  state.pnrQuery = e.target.value; renderPnrs();
+});
+document.querySelectorAll("#pnrfilters .chip").forEach(b =>
+  b.addEventListener("click", () => { state.pnrFilter = b.dataset.f; renderPnrs(); }));
+
 
 async function selectPnr(loc, keepPane){
   state.selPnr = loc; state.pane = "pnr";
@@ -651,7 +835,12 @@ async function selectPnr(loc, keepPane){
   const d = await r.json(); const p = d.pnr;
 
   const box = $("#detail"); box.innerHTML = "";
+  renderRecordCards(box, d, p);
+}
 
+// renderRecordCards draws the record itself: who, where, what is held, what
+// changed it. Shared so the sidebar and the records view cannot drift.
+function renderRecordCards(box, d, p){
   const hc = el("div","card");
   const h = el("h2",null,"Record " + p.record_locator);
   h.appendChild(el("span","count","v" + p.version));
@@ -727,6 +916,134 @@ async function selectPnr(loc, keepPane){
   if (!(d.events||[]).length) eb.appendChild(el("div","empty","No events"));
   ec.appendChild(eb); box.appendChild(ec);
 }
+
+/* ---------------- records view ---------------- */
+document.querySelectorAll("#views .view").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("#views .view").forEach(x => x.classList.remove("on"));
+  b.classList.add("on");
+  const records = b.dataset.view === "records";
+  $("#view-flow").hidden = records;
+  $("#view-records").hidden = !records;
+  if (records){ refreshPnrs(); renderRecords(); }
+}));
+
+const interline = p => new Set((p.segments||[]).map(s => s.carrier).filter(Boolean)).size > 1;
+
+function recMatches(p){
+  if (state.recFilter === "interline" && !interline(p)) return false;
+  if (state.recFilter === "await"     && !awaiting(p))  return false;
+  if (state.recFilter === "problem"   && !problem(p))   return false;
+  const q = (state.recQuery||"").trim().toUpperCase();
+  return !q || pnrText(p).includes(q);
+}
+
+function renderRecords(){
+  const body = $("#rbody"); body.innerHTML = "";
+  const all = state.pnrs || [];
+  const counts = {all: all.length, interline: all.filter(interline).length,
+                  await: all.filter(awaiting).length, problem: all.filter(problem).length};
+  document.querySelectorAll("#rfilters .chip").forEach(b => {
+    b.classList.toggle("on", b.dataset.f === state.recFilter);
+    let n = b.querySelector(".n");
+    if (!n){ n = el("span","n"); b.appendChild(n); }
+    n.textContent = counts[b.dataset.f];
+  });
+
+  const rows = all.filter(recMatches);
+  $("#rcount").textContent = rows.length + " of " + all.length;
+  if (!rows.length){
+    const tr = el("tr"); const td = el("td");
+    td.colSpan = 7; td.appendChild(el("div","empty", all.length ? "Nothing matches" : "No bookings yet"));
+    tr.appendChild(td); body.appendChild(tr);
+    return;
+  }
+
+  for (const p of rows){
+    const tr = el("tr"); if (state.selPnr === p.record_locator) tr.classList.add("sel");
+    const cell = (cls) => { const td = el("td"); if (cls) td.className = cls; tr.appendChild(td); return td; };
+
+    const loc = cell();
+    loc.appendChild(el("span","loc", p.record_locator));
+    if (interline(p)) loc.appendChild(el("span","il","interline"));
+
+    const pax = cell();
+    for (const x of (p.passengers||[]))
+      pax.appendChild(el("div",null, `${x.surname}/${x.given}${x.title ? " "+x.title : ""}`));
+    if (!(p.passengers||[]).length) pax.appendChild(el("span","dim","—"));
+
+    const itin = cell("mono");
+    for (const seg of (p.segments||[])){
+      const line = el("div");
+      if (seg.type === "surface"){ line.appendChild(el("span","dim","ARNK " + (seg.board||"") + "\u2013" + (seg.off||""))); }
+      else {
+        const st = el("span","stat " + seg.status, seg.status + " ");
+        line.appendChild(st);
+        line.appendChild(document.createTextNode(
+          `${seg.carrier}${seg.flight_num} ${seg.class} ${seg.board}\u2013${seg.off} ${seg.wire_date||""}`));
+      }
+      itin.appendChild(line);
+    }
+    if (!(p.segments||[]).length) itin.appendChild(el("span","dim","no segments"));
+
+    const car = cell("mono");
+    car.textContent = [...new Set((p.segments||[]).map(s => s.carrier).filter(Boolean))].join(" ") || "—";
+
+    const locs = cell("mono");
+    for (const l of (p.locators||[])) locs.appendChild(el("div",null, l.owner + " " + l.value));
+    if (!(p.locators||[]).length) locs.appendChild(el("span","dim","—"));
+
+    const st = cell();
+    st.appendChild(el("span","badge " + p.status, p.status));
+    if (awaiting(p)) st.appendChild(el("span","flag await"," awaiting"));
+    if ((p.unparsed||[]).length) st.appendChild(el("span","flag frag"," fragments"));
+
+    const when = cell("mono dim");
+    when.textContent = new Date(p.updated_at).toLocaleTimeString();
+
+    tr.addEventListener("click", () => openRecord(p.record_locator));
+    body.appendChild(tr);
+  }
+}
+
+// openRecord renders the full record, including the conversation that produced
+// it -- which is the thing a gateway can show that a reservation system cannot.
+async function openRecord(loc){
+  state.selPnr = loc;
+  renderRecords();
+  const r = await fetch("/api/pnr/" + encodeURIComponent(loc));
+  const box = $("#rdetail"); box.innerHTML = "";
+  if (!r.ok){ box.appendChild(el("div","empty","Record not found.")); return; }
+  const d = await r.json(); const p = d.pnr;
+
+  renderRecordCards(box, d, p);
+
+  // The messages that built this record.
+  const mc = el("div","card");
+  const mh = el("h2",null,"Conversation");
+  mh.appendChild(el("span","count", String((d.messages||[]).length)));
+  mc.appendChild(mh);
+  const mb = el("div","body");
+  for (const m of (d.messages||[])){
+    const row = el("div","convo");
+    row.appendChild(el("div","d " + m.direction, m.direction === "out" ? "\u25b6" : "\u25c0"));
+    row.appendChild(el("span","badge", m.peer));
+    const k = el("span","mono"); k.textContent = (m.kind || m.format) + "  " + m.size + " B";
+    row.appendChild(k);
+    row.appendChild(el("span","st " + m.status, m.status));
+    row.addEventListener("click", () => {
+      // Jump to the flow view with this message open.
+      document.querySelector('#views .view[data-view="flow"]').click();
+      openMessage(m.id);
+    });
+    mb.appendChild(row);
+  }
+  if (!(d.messages||[]).length) mb.appendChild(el("div","empty","No messages"));
+  mc.appendChild(mb); box.appendChild(mc);
+}
+
+$("#rsearch").addEventListener("input", e => { state.recQuery = e.target.value; renderRecords(); });
+document.querySelectorAll("#rfilters .chip").forEach(b =>
+  b.addEventListener("click", () => { state.recFilter = b.dataset.f; renderRecords(); }));
 
 /* ---------------- about ---------------- */
 function about(){
