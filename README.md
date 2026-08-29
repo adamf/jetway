@@ -12,7 +12,9 @@ traffic actually uses:
   `PAOREQ` and `PAORES`.
 
 Point a carrier's stream at it and it will capture, decode, apply and reply —
-and when it meets something it does not understand, it keeps that too.
+and when it meets something it does not understand, it keeps that too. Records
+that need a human land on a work queue, and messages are routed on the address
+line, so one message reaches every addressee it names.
 
 A partner reaches it over HTTPS with mutual TLS, over a framed TCP circuit, or
 by dropping files in a directory. Their identity comes from the certificate
@@ -26,11 +28,14 @@ they present or the circuit they arrive on, never from a name they assert.
   │  jetwayd                                  │◄─────────────┼──►│ BA res   │
   │                                           │              │   └──────────┘
   │  capture ▸ classify ▸ decode ▸ dedupe     │  tcp+mTLS    │   ┌──────────┐
-  │          ▸ apply ▸ respond                │◄─────────────┼──►│ AA res   │
+  │          ▸ apply ▸ queue ▸ respond        │◄─────────────┼──►│ AA res   │
   │                                           │              │   └──────────┘
-  │  ┌───────┐ ┌────────────┐ ┌────────────┐  │  file drop   │   ┌──────────┐
+  │  ┌───────┐ ┌────────────┐ ┌─────────────┐ │  file drop   │   ┌──────────┐
   │  │ spool │ │ message log│ │ PNR + events│ │◄─────────────┴──►│ LH res   │
-  │  └───────┘ └────────────┘ └────────────┘  │                  └──────────┘
+  │  └───────┘ └────────────┘ └─────────────┘ │                  └──────────┘
+  │  ┌──────────────────────┐                 │   routed on the address line,
+  │  │ work queues + sweeper│                 │   so one message reaches every
+  │  └──────────────────────┘                 │   addressee it names
   └───────────────────────────────────────────┘
      fsync before ack           retry with backoff on the way out
 ```
@@ -71,6 +76,7 @@ Things worth trying in the console:
 | Open a received message and press **Replay** | Recognised as a retransmission and refused, not booked twice |
 | Compare a Type B message with an EDIFACT one | The same booking on two very different wires |
 | Book an **interline** journey from the Records tab | One record, two carriers, two dialects, two locators |
+| Open the **Queues** tab after any of the above | Each partner answer becomes a task, one per carrier |
 
 ### Message flow
 
@@ -100,6 +106,20 @@ Airways JFK–LHR. Lufthansa was asked over EDIFACT and British Airways over Typ
 B; each answered separately and each returned its own locator. The history
 names the message behind every change, and the conversation below it links
 straight back to those messages.
+
+### Queues
+
+![The queues view, with confirmations, refusals and waitlists](docs/images/queues.png)
+
+What a record needs done to it. A partner's answer becomes a task as it
+arrives — a confirmation to pass on, a refusal to rebook, a waitlist to watch —
+and an interline booking raises one per carrier, because each answers for its
+own segment. The reason names the segment, the status it moved from, and the
+status it moved to.
+
+Two other things land here that nobody sends a message about: a request a
+partner never answered, and a ticketing time limit that passed. Only a periodic
+sweep can see those, which is why there is one.
 
 From the command line:
 
@@ -168,7 +188,7 @@ the container stack. Full walkthrough in
 
 ## Design
 
-Five decisions shape everything else.
+Six decisions shape everything else.
 
 **Raw bytes are made durable before anything interprets them.** Capture is the
 first stage of the pipeline and it is unconditional. Every later stage is a
