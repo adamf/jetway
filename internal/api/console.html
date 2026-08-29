@@ -963,8 +963,55 @@ async function selectPnr(loc, keepPane){
 // issue when there are none. A booking nobody ticketed is a booking that gets
 // cancelled when its time limit passes, so the state belongs where the record
 // is read, not on a separate screen.
+const isEMD = t => t.type === "A" || t.type === "S";
+
+const RFIC = {A:"air transportation", B:"surface transportation", C:"baggage",
+  D:"financial impact", E:"airport services", F:"merchandise", G:"in-flight services"};
+
+// renderEMDCard shows miscellaneous documents: what was bought that is not
+// carriage, and for an EMD-A which flight coupon it is lifted with.
+function renderEMDCard(box, p){
+  const emds = (p.tickets || []).filter(isEMD);
+  if (!emds.length) return;
+
+  const c = el("div","card");
+  const h = el("h2",null,"Miscellaneous documents");
+  h.appendChild(el("span","count", String(emds.length)));
+  c.appendChild(h);
+  const b = el("div","body");
+
+  for (const d of emds){
+    const row = el("div","seg");
+    row.appendChild(el("span","loc", d.number.airline_code + "-" + d.number.serial));
+    row.appendChild(el("span","badge", d.type === "A" ? "EMD-A" : "EMD-S"));
+    row.appendChild(el("span","dim", RFIC[d.rfic] || d.rfic || ""));
+    b.appendChild(row);
+    for (const cp of (d.coupons||[])){
+      const cr = el("div","seg");
+      cr.style.paddingLeft = "16px";
+      cr.appendChild(el("span","stat " + cp.status, cp.status));
+      let text = "coupon " + cp.number;
+      if (cp.rfisc) text += " · " + cp.rfisc;
+      if (cp.amount) text += " · " + cp.amount + " " + (cp.currency || "");
+      // An EMD-A says which flight coupon it is stapled to; that is what
+      // decides when it gets lifted.
+      if (cp.association && cp.association.coupon){
+        const a = cp.association;
+        text += " · with " + a.document.airline_code + "-" + a.document.serial + " coupon " + a.coupon;
+      } else if (d.type === "A"){
+        text += " · not associated";
+      }
+      cr.appendChild(el("span","dim", text));
+      b.appendChild(cr);
+    }
+  }
+  c.appendChild(b); box.appendChild(c);
+}
+
 function renderTicketCard(box, p){
-  const tickets = p.tickets || [];
+  // Flight tickets only. An EMD is a document, not a ticket, and a record
+  // carrying only a baggage document is not ticketed.
+  const tickets = (p.tickets || []).filter(t => !isEMD(t));
   const live = (p.segments||[]).some(s => s.type === "air" && s.status !== "XX");
   if (!tickets.length && !live) return;
 
@@ -1080,7 +1127,7 @@ function renderRecordCards(box, d, p){
   const kv = el("dl","kv");
   const put = (k,v) => { kv.appendChild(el("dt",null,k)); kv.appendChild(el("dd",null,v)); };
   put("Status", p.status);
-  const tkt = (p.tickets||[]);
+  const tkt = (p.tickets||[]).filter(t => !isEMD(t));
   put("Ticketed", tkt.length ? tkt.map(t => t.number.airline_code + "-" + t.number.serial).join(", ") : "no");
   for (const t of (p.ticketing||[])){
     if (t.deadline) put("Ticket by", new Date(t.deadline).toLocaleString());
@@ -1107,6 +1154,7 @@ function renderRecordCards(box, d, p){
   sc.appendChild(sb); box.appendChild(sc);
 
   renderTicketCard(box, p);
+  renderEMDCard(box, p);
   renderCancelCard(box, p);
 
   if ((p.ssrs||[]).length){

@@ -2,7 +2,9 @@
 
 An honest list. Things in the first two sections block a production deployment.
 
-Recently closed: interline ticket control -- TKCREQ and TKCRES, so a ticket
+Recently closed: EMD -- associated and standalone documents, reason for
+issuance, association to flight coupons and lifting with them;
+interline ticket control -- TKCREQ and TKCRES, so a ticket
 exists somewhere other than the node that issued it, and the published coupon
 status vocabulary replacing a guessed one; cancellation -- a carrier can now be told a booking is off,
 which is what unblocked NDC order cancellation, auto-cancel on a ticketing
@@ -67,9 +69,11 @@ container images.
   202 carrying both the order and an error, because reporting only the success
   would tell the requester their seats are released when they may not be.
 - **ONE Order.** Not started.
-- **EMD.** A separate document family: its own form code, its own association
-  to flight coupons, its own data elements. It shares the coupon status
-  vocabulary and nothing else.
+- **EMD sub-codes.** The reason-for-issuance groups are enforced; the sub-code
+  list is ATPCO's and is carried as free text rather than validated.
+- **The System Update message.** Association is recorded locally and the carrier
+  advised over ticket control. The guide names a distinct request for it without
+  giving its EDIFACT form.
 - **Ticket control is EDIFACT only.** A teletype partner cannot be told a ticket
   covers their segment, because there is no equivalent message; those carriers
   land on the divergence queue at issuance instead.

@@ -206,13 +206,30 @@ func (c CouponStatus) Usable() bool {
 	return false
 }
 
-// Coupon is one flight coupon of a ticket.
+// Coupon is one coupon of a document: a flight coupon on a ticket, or a value
+// coupon on an EMD.
 type Coupon struct {
-	// Number is the coupon number within the ticket, 1 to 4.
+	// Number is the coupon number within the document, 1 to 4.
 	Number int `json:"number"`
 	// SegmentRef is the segment this coupon covers.
 	SegmentRef int          `json:"segment_ref"`
 	Status     CouponStatus `json:"status"`
+
+	// RFISC is the Reason for Issuance Sub-Code on an EMD value coupon: what
+	// specifically was bought. Coupons of one document may carry different
+	// sub-codes so long as they belong to the document's own reason group.
+	//
+	// The sub-code list is maintained by ATPCO and is not reproduced here.
+	RFISC string `json:"rfisc,omitempty"`
+
+	// Association links an EMD-A value coupon to the flight coupon it is
+	// lifted with.
+	Association Association `json:"association,omitempty"`
+
+	// Amount and Currency are what the coupon is worth, where a value was
+	// stated. This node prices nothing; the figure is carried, not computed.
+	Amount   string `json:"amount,omitempty"`
+	Currency string `json:"currency,omitempty"`
 }
 
 // MaxCoupons is how many flight coupons one ticket carries. An itinerary with
@@ -227,9 +244,21 @@ const MaxConjunction = 4
 // MaxItinerary is the longest itinerary one conjunction set can cover.
 const MaxItinerary = MaxCoupons * MaxConjunction
 
-// Ticket is a document issued against this record for one passenger.
+// Ticket is an electronic document issued against this record for one
+// passenger: a flight ticket, or an EMD.
+//
+// One type covers both because they are the same artefact in every respect
+// that this node handles -- number format, coupon structure, status
+// vocabulary, conjunction rules. What differs is what a coupon buys, and that
+// is Type, RFIC and the sub-code on each coupon.
 type Ticket struct {
 	Number TicketNumber `json:"number"`
+	// Type is the kind of document. Empty means a flight ticket, so records
+	// written before EMD existed read correctly.
+	Type DocumentType `json:"type,omitempty"`
+	// RFIC is the reason for issuance, on an EMD only. One document carries
+	// exactly one.
+	RFIC RFIC `json:"rfic,omitempty"`
 	// PaxRef is the passenger the ticket was issued to.
 	PaxRef   int       `json:"pax_ref"`
 	IssuedAt time.Time `json:"issued_at"`
@@ -257,7 +286,11 @@ func (t Ticket) Covers(segmentRef int) bool {
 // passenger ticketed out of two is not ticketed, and letting it look ticketed
 // would let the limit pass on the passenger nobody issued for.
 func (p *PNR) Ticketed() bool {
-	if len(p.Tickets) == 0 || len(p.Passengers) == 0 {
+	// An EMD is not a ticket. A record carrying only a baggage document is not
+	// ticketed, and counting it would let the time limit pass on a booking
+	// nobody has issued carriage for.
+	flight := p.FlightTickets()
+	if len(flight) == 0 || len(p.Passengers) == 0 {
 		return false
 	}
 	for _, pax := range p.Passengers {
@@ -267,7 +300,7 @@ func (p *PNR) Ticketed() bool {
 				continue
 			}
 			covered := false
-			for _, t := range p.Tickets {
+			for _, t := range flight {
 				if t.PaxRef == pax.Ref && t.Covers(s.Ref) {
 					covered = true
 					break

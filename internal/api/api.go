@@ -21,6 +21,7 @@ import (
 	"github.com/adamf/jetway/internal/metrics"
 	"github.com/adamf/jetway/internal/store"
 	"github.com/adamf/jetway/internal/transport"
+	"github.com/adamf/jetway/pkg/pnr"
 )
 
 //go:embed console.html
@@ -79,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/message/{id}/replay", s.replay)
 	mux.HandleFunc("POST /api/pnr/{locator}/ticket", s.issueTickets)
 	mux.HandleFunc("POST /api/pnr/{locator}/cancel", s.cancelRecord)
+	mux.HandleFunc("POST /api/pnr/{locator}/emd", s.issueEMD)
 	mux.HandleFunc("GET /api/carrier/{designator}/pnrs", s.carrierPNRs)
 	mux.HandleFunc("GET /api/carrier/{designator}/inventory", s.carrierInventory)
 	mux.HandleFunc("GET /api/availability", s.availability)
@@ -617,4 +619,61 @@ func (s *Server) cancelRecord(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"pnr": res.PNR, "notified": res.Notified, "unreachable": res.Unreachable,
 	})
+}
+
+// issueEMD issues a miscellaneous document against a record.
+func (s *Server) issueEMD(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		PaxRef      int    `json:"pax_ref"`
+		Type        string `json:"type"`
+		RFIC        string `json:"rfic"`
+		AirlineCode string `json:"airline_code"`
+		Coupons     []struct {
+			RFISC              string `json:"rfisc"`
+			SegmentRef         int    `json:"segment_ref"`
+			Amount             string `json:"amount"`
+			Currency           string `json:"currency"`
+			ConsumedAtIssuance bool   `json:"consumed_at_issuance"`
+		} `json:"coupons"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("malformed request: %w", err))
+		return
+	}
+	req := gateway.EMDRequest{
+		Locator: r.PathValue("locator"), PaxRef: body.PaxRef,
+		Type:        pnr.DocumentType(strings.ToUpper(body.Type)),
+		RFIC:        pnr.RFIC(strings.ToUpper(body.RFIC)),
+		AirlineCode: body.AirlineCode, IssuedBy: queryOr(r, "by", "console"),
+	}
+	if req.PaxRef == 0 {
+		req.PaxRef = 1
+	}
+	for _, c := range body.Coupons {
+		req.Coupons = append(req.Coupons, gateway.EMDCoupon{
+			RFISC: strings.ToUpper(c.RFISC), SegmentRef: c.SegmentRef,
+			Amount: c.Amount, Currency: strings.ToUpper(c.Currency),
+			ConsumedAtIssuance: c.ConsumedAtIssuance,
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	rec, doc, err := s.Gateway.IssueEMD(ctx, req)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, store.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		writeErr(w, status, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pnr": rec, "document": doc})
+}
+
+func queryOr(r *http.Request, key, fallback string) string {
+	if v := r.URL.Query().Get(key); v != "" {
+		return v
+	}
+	return fallback
 }

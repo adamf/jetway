@@ -466,6 +466,15 @@ func (g *Gateway) applyCouponChanges(ctx context.Context, rec *pnr.PNR, ticketId
 		})
 		c.Status = want.Status
 		applied = append(applied, padis.CouponRef{Number: c.Number, Status: c.Status})
+
+		// Anything stapled to this flight coupon is lifted with it. That is
+		// what associating an EMD-A meant in the first place, and a value
+		// coupon left open behind a flown flight is revenue nobody accounts
+		// for.
+		if !t.Type.IsEMD() {
+			events = append(events,
+				liftAssociated(rec, t.Number, c.Number, want.Status, now, peer.Name)...)
+		}
 	}
 
 	if len(events) > 0 {

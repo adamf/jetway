@@ -127,10 +127,50 @@ What the gateway does with it:
   lowercase. Dropping the reason to make it encode would tell the partner
   nothing about why they were refused.
 
-**EMD is not implemented.** It is a separate document family with its own form
-code, its own association process to flight coupons, and its own data elements.
-It shares this coupon status vocabulary, which is why the vocabulary came from
-the EMD guide, but it is not a variation on a ticket.
+## EMD (`pkg/pnr`, `internal/gateway`)
+
+An electronic miscellaneous document: the same artefact as a ticket in every
+respect this node handles -- number format, coupon structure, status
+vocabulary, conjunction rules -- differing in what a coupon buys. Excess
+baggage, a meal, a residual balance, an airport service. It replaced the paper
+MCO.
+
+Everything asserted comes from IATA's free Airline Guide to EMD Implementation,
+or from Resolution 722f as that guide summarises it. Where the guide points at a
+paid document -- the sub-code list lives with ATPCO -- this carries the
+structure and not the contents.
+
+Two types, and the difference is structural rather than cosmetic:
+
+- **EMD-A** is associated: its value coupons are stapled to flight coupons and
+  lifted with them. Every coupon must name a segment that is actually ticketed.
+- **EMD-S** is standalone and names none.
+
+Refusing that mismatch is the point. A document that claims to be standalone and
+carries an association says two contradictory things about itself.
+
+What is enforced, all of it sourced: one reason-for-issuance code per document
+from the seven published groups; a sub-code on every coupon, because a coupon
+without one says a fee was charged without saying what for; neither print status,
+because an EMD is never printed; four coupons a document and four documents a
+conjunction set.
+
+The behaviour that makes association worth having: **when a flight coupon
+reaches a final status, the value coupons stapled to it are lifted with it**. A
+passenger who flies has used the meal they paid for, and a document left open
+behind a flown flight is revenue nobody accounts for. Disassociation breaks that
+link per coupon -- a passenger checks in without the excess baggage they paid
+for, and that one coupon needs unstapling while the document stands.
+
+Coupon status travels over the same ticket control messages as a flight ticket,
+because the guide says the indicators are the same. Whether a carrier expects a
+distinct message for the association itself -- the guide names a *System Update*
+request without giving its EDIFACT form -- is not something this can check, so
+association is recorded locally and the carrier is advised over ticket control.
+
+**Not implemented:** originating a refund or an exchange. A carrier can report
+either and this node records it; producing one is a fares operation, out of
+scope by the same rule that keeps NDC shopping out.
 
 ## SSM and ASM (`pkg/ssim`)
 
