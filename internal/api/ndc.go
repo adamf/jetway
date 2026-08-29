@@ -102,16 +102,32 @@ func (s *Server) ndcCancel(ctx context.Context, w http.ResponseWriter, raw []byt
 			"no record matches order "+m.OrderID())
 		return
 	}
-	// Cancelling the record is the local half. Telling the carriers is a
-	// message this build does not send yet, and claiming otherwise would leave
-	// seats held that the requester believes are released.
 	if rec.Status == pnr.StatusCancelled {
 		writeOrderView(w, http.StatusOK, rec, s.Gateway.Identity.Designator)
 		return
 	}
-	writeNDCError(w, http.StatusNotImplemented, "501", "Cancellation not available",
-		"this node can cancel its own record but does not yet send the cancellation to the carriers, "+
-			"so the order is left as it is rather than diverging from what they hold")
+	res, err := s.Gateway.Cancel(ctx, m.OrderID(), gateway.CancelOptions{
+		By: m.Party.ID(), Reason: "NDC OrderCancelRQ",
+	})
+	if err != nil {
+		writeNDCError(w, http.StatusBadRequest, "400", "Order cannot be cancelled", err.Error())
+		return
+	}
+	// The order is cancelled either way, but a carrier that could not be told
+	// is still holding seats, and the requester is owed that fact rather than
+	// a clean success.
+	if len(res.Unreachable) > 0 {
+		body, err := ndc.BuildPartialCancel(res.PNR, s.Gateway.Identity.Designator, res.Unreachable)
+		if err != nil {
+			writeNDCError(w, http.StatusInternalServerError, "500", "Cannot render order", err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write(body)
+		return
+	}
+	writeOrderView(w, http.StatusOK, res.PNR, s.Gateway.Identity.Designator)
 }
 
 // bookingFromOrder maps an order onto the booking request the gateway takes.

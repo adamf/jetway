@@ -1024,6 +1024,51 @@ function renderTicketCard(box, p){
   c.appendChild(b); box.appendChild(c);
 }
 
+// renderCancelCard offers to cancel, in two steps.
+//
+// Cancelling gives seats back and sends a message to every carrier holding
+// one; it is not something a single stray click should do. The second click is
+// the confirmation, inline rather than a browser dialog.
+function renderCancelCard(box, p){
+  if (p.status === "cancelled") return;
+  const live = (p.segments||[]).filter(s => s.type === "air" && s.status !== "XX");
+  if (!live.length) return;
+
+  const c = el("div","card");
+  c.appendChild(el("h2",null,"Cancel"));
+  const b = el("div","body");
+  const carriers = [...new Set(live.map(s => s.carrier))];
+  b.appendChild(el("div","dim",
+    "Cancels " + live.length + " segment" + (live.length === 1 ? "" : "s") +
+    " and tells " + carriers.join(", ") + ". A carrier that cannot be reached lands on the divergence queue."));
+
+  const btn = el("button","ghost","Cancel booking");
+  btn.style.cssText = "width:auto;margin-top:10px";
+  let armed = false;
+  btn.addEventListener("click", async () => {
+    if (!armed){
+      armed = true;
+      btn.textContent = "Confirm — cancel " + p.record_locator;
+      btn.style.borderColor = "var(--err)"; btn.style.color = "var(--err)";
+      setTimeout(() => { if (armed){ armed = false; btn.textContent = "Cancel booking";
+        btn.style.borderColor = ""; btn.style.color = ""; } }, 6000);
+      return;
+    }
+    btn.disabled = true;
+    try {
+      const r = await fetch(`/api/pnr/${encodeURIComponent(p.record_locator)}/cancel?by=console`, {method:"POST"});
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok){ b.appendChild(el("div","err", d.error || ("cancel failed: " + r.status))); return; }
+      if ((d.unreachable||[]).length){
+        b.appendChild(el("div","err",
+          "Cancelled, but " + d.unreachable.join(", ") + " could not be told and may still hold the seats."));
+      }
+    } finally { btn.disabled = false; selectPnr(p.record_locator, true); refreshQueues(); }
+  });
+  b.appendChild(btn);
+  c.appendChild(b); box.appendChild(c);
+}
+
 // renderRecordCards draws the record itself: who, where, what is held, what
 // changed it. Shared so the sidebar and the records view cannot drift.
 function renderRecordCards(box, d, p){
@@ -1062,6 +1107,7 @@ function renderRecordCards(box, d, p){
   sc.appendChild(sb); box.appendChild(sc);
 
   renderTicketCard(box, p);
+  renderCancelCard(box, p);
 
   if ((p.ssrs||[]).length){
     const c = el("div","card"); c.appendChild(el("h2",null,"Special services"));

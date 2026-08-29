@@ -37,7 +37,24 @@ type Sweeper struct {
 	// Limit bounds records examined per pass. Zero uses DefaultSweepLimit.
 	Limit int
 
+	// Cancel, when set, cancels a booking whose ticketing time limit has
+	// passed. Nil leaves the record alone and only raises it on a queue.
+	//
+	// It is an interface because the package that implements it imports this
+	// one, and it is optional because auto-cancel is a real cancellation: it
+	// gives seats back and tells the carriers. A deployment should have to ask
+	// for that rather than discover it.
+	Cancel Canceller
+
 	Now func() time.Time
+}
+
+// Canceller cancels a booking whose time limit has passed.
+type Canceller interface {
+	// CancelExpired withdraws every live segment and notifies the carriers.
+	// It returns the carriers that could not be told, which is the part the
+	// caller must not treat as success.
+	CancelExpired(ctx context.Context, locator, reason string) (unreachable []string, err error)
 }
 
 // Sweep defaults.
@@ -138,6 +155,21 @@ func (s *Sweeper) sweepRecord(ctx context.Context, rec *pnr.PNR, now time.Time) 
 		}
 		if ok {
 			placed++
+		}
+		// Raising it is the notification; cancelling is the consequence, and
+		// only where a deployment has asked for it.
+		if code == "tktl_expired" && s.Cancel != nil {
+			unreachable, err := s.Cancel.CancelExpired(ctx, rec.RecordLocator,
+				"ticketing time limit passed at "+tk.Deadline.Format(time.RFC3339))
+			if err != nil {
+				s.log().Error("could not cancel a record past its ticketing limit",
+					"locator", rec.RecordLocator, "err", err)
+			} else if len(unreachable) > 0 {
+				s.log().Warn("cancelled a record past its ticketing limit, but not every carrier was told",
+					"locator", rec.RecordLocator, "unreachable", unreachable)
+			}
+			// The record is cancelled now, so nothing further on it is owed.
+			return placed, nil
 		}
 	}
 

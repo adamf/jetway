@@ -60,6 +60,23 @@ type CodeInfo struct {
 	Waitlisted bool
 }
 
+// Codes callers name rather than spell. Only the ones a builder has to reach
+// for directly are here; the full vocabulary is in Codes below.
+const (
+	// Cancel withdraws a segment. It is the action that lets a booking be
+	// called off, and without a message carrying it a record can only be
+	// cancelled locally, which diverges from what the carrier still holds.
+	Cancel ActionCode = "XX"
+	// CancelNoAction withdraws a segment the recipient need not act on.
+	CancelNoAction ActionCode = "XK"
+	// Need asks a carrier to sell and report.
+	Need ActionCode = "NN"
+	// Sold reports a sale made from availability under free sale.
+	Sold ActionCode = "SS"
+	// HoldingConfirmed states a confirmed holding.
+	HoldingConfirmed ActionCode = "HK"
+)
+
 // Codes is the interline action and status code vocabulary.
 var Codes = map[ActionCode]CodeInfo{
 	// Requests.

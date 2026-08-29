@@ -7,6 +7,7 @@ import (
 
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/rescode"
 )
 
 // BuildOptions parameterises message construction.
@@ -192,4 +193,61 @@ func ssrSegments(p *pnr.PNR, carrier string) []edifact.Segment {
 			s.Code, s.Status, strconv.Itoa(s.Count), carrier, "", "", s.Text)))
 	}
 	return out
+}
+
+// BuildCancel renders a cancellation for a carrier's segments.
+//
+// The cancellation is expressed by the reservation action on each segment
+// rather than by a distinct message type: an RPI carrying XX against the
+// travel segments, inside a PAOREQ. That much follows from the action code
+// vocabulary, which is shared with the teletype side and is not in doubt.
+//
+// Whether a carrier expects a separate message function code here is the part
+// this cannot check, because the PADIS directories are paywalled. If a link
+// wants one, that is a per-link profile question, and this is the default.
+//
+// refs names the segments to cancel by record position. Nil cancels every
+// segment this carrier holds.
+func BuildCancel(p *pnr.PNR, carrier string, refs []int, o BuildOptions) (*edifact.Interchange, error) {
+	want := map[int]bool{}
+	for _, r := range refs {
+		want[r] = true
+	}
+
+	body := []edifact.Segment{
+		edifact.Seg("MSG", edifact.Comp("", "11")),
+		edifact.Seg("ORG", edifact.Comp(p.Origin.Party, p.Origin.Agent)),
+	}
+	// Both locators. A cancellation the carrier cannot match to a booking is a
+	// cancellation that does not happen.
+	if p.RecordLocator != "" {
+		body = append(body, edifact.Seg("RCI", edifact.Comp(p.Origin.Party, p.RecordLocator, "")))
+	}
+	for _, l := range p.Locators {
+		if l.Owner == carrier && l.Value != "" {
+			body = append(body, edifact.Seg("RCI", edifact.Comp(l.Owner, l.Value, "")))
+		}
+	}
+	body = append(body, tifSegments(p)...)
+
+	n := 0
+	for _, s := range p.Segments {
+		if s.Carrier != carrier || s.Type != pnr.SegmentAir || s.Status == "XX" {
+			continue
+		}
+		if len(want) > 0 && !want[s.Ref] {
+			continue
+		}
+		body = append(body, tvlSegment(s), edifact.Seg("RPI",
+			edifact.Simple(strconv.Itoa(s.Seats)), edifact.Simple(string(rescode.Cancel))))
+		n++
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("padis: record has no %s segments left to cancel", carrier)
+	}
+
+	ic := newInterchange(MsgPAOREQ, o)
+	ic.AddMessage(o.msgRef(), messageID(MsgPAOREQ), body...)
+	ic.Finalize()
+	return ic, nil
 }

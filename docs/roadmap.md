@@ -2,7 +2,9 @@
 
 An honest list. Things in the first two sections block a production deployment.
 
-Recently closed: ticketing -- document numbers, coupons, conjunction sets, and
+Recently closed: cancellation -- a carrier can now be told a booking is off,
+which is what unblocked NDC order cancellation, auto-cancel on a ticketing
+limit, and cancelling from the console; ticketing -- document numbers, coupons, conjunction sets, and
 issuance that satisfies a ticketing time limit; priority-ordered redelivery and
 channel sequence gap detection; CONTRL, sent and consumed; SSM and ASM, with schedule changes
 matched against held records; NDC order messages over HTTP;
@@ -59,18 +61,19 @@ container images.
   is refused saying exactly that.
 - **NDC 21.3.** The EDIST generation is implemented. The 21.3 generation
   renamed the messages and restructured the payload; it is a different mapping.
-- **NDC cancellation** stops at our own record: the carriers are not told, so
-  the request is refused rather than left diverging from what they hold.
+- **NDC cancellation** works. A carrier that could not be told comes back as a
+  202 carrying both the order and an error, because reporting only the success
+  would tell the requester their seats are released when they may not be.
 - **ONE Order.** Not started.
 - **Ticketing is local only.** Documents are issued, numbered and couponed, and
   issuance clears the time limit. What is missing is the wire: no TKCREQ or
   TKCRES to a ticketing system, no interline e-ticket exchange, no EMD, and no
   coupon status changes driven by a partner. Nothing tells anybody else that a
   ticket exists.
-- **No auto-cancel on expiry.** The sweeper raises a passed time limit and
-  stops there. Cancelling locally while the carriers still hold the seats is
-  the same divergence the NDC cancel path refuses to create, so the
-  cancellation message has to come first.
+- **Auto-cancel is opt-in.** `Sweeper.Cancel` cancels a booking whose ticketing
+  limit has passed and tells the carriers. It is nil by default: giving seats
+  back is a real action and a deployment should ask for it rather than discover
+  it.
 
 ## Switching
 

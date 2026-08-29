@@ -78,6 +78,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/message/{id}", s.getMessage)
 	mux.HandleFunc("POST /api/message/{id}/replay", s.replay)
 	mux.HandleFunc("POST /api/pnr/{locator}/ticket", s.issueTickets)
+	mux.HandleFunc("POST /api/pnr/{locator}/cancel", s.cancelRecord)
 	mux.HandleFunc("GET /api/carrier/{designator}/pnrs", s.carrierPNRs)
 	mux.HandleFunc("GET /api/carrier/{designator}/inventory", s.carrierInventory)
 	mux.HandleFunc("GET /api/availability", s.availability)
@@ -589,4 +590,31 @@ func (s *Server) issueTickets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pnr": rec, "tickets": rec.Tickets})
+}
+
+// cancelRecord cancels a booking and tells the carriers holding it.
+func (s *Server) cancelRecord(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	by := r.URL.Query().Get("by")
+	if by == "" {
+		by = "console"
+	}
+	res, err := s.Gateway.Cancel(ctx, r.PathValue("locator"), gateway.CancelOptions{
+		By: by, Reason: r.URL.Query().Get("reason"),
+	})
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, store.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		writeErr(w, status, err)
+		return
+	}
+	// Notified and unreachable are reported separately because they are
+	// different facts: a carrier that was not told still holds the seats.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"pnr": res.PNR, "notified": res.Notified, "unreachable": res.Unreachable,
+	})
 }

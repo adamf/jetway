@@ -26,6 +26,13 @@ const (
 // Codes is the interline action and status code vocabulary.
 var Codes = rescode.Codes
 
+// Action codes this package's builders reach for by name.
+const (
+	ActionCancel = rescode.Cancel
+	ActionNeed   = rescode.Need
+	ActionSold   = rescode.Sold
+)
+
 // ReplyTo returns the holding status a requester should record after receiving
 // reply, and whether reply is a reply code at all.
 func ReplyTo(reply ActionCode) (ActionCode, bool) { return rescode.ReplyTo(reply) }

@@ -342,3 +342,57 @@ func contactType(text string) string {
 	}
 	return "other"
 }
+
+// BuildCancel renders a cancellation for a carrier's segments.
+//
+// Cancelling is the message this package went longest without, and its absence
+// reached further than it looks: with no way to tell a carrier a booking is
+// off, nothing could safely cancel one at all. A record marked cancelled while
+// the carrier still holds the seats is worse than a record left alone, because
+// it looks settled to everybody on this side and is not.
+//
+// refs names the segments to cancel by their record position. Nil cancels every
+// segment this carrier holds, which is what cancelling a booking means.
+func BuildCancel(p *pnr.PNR, carrier string, refs []int) string {
+	want := map[int]bool{}
+	for _, r := range refs {
+		want[r] = true
+	}
+
+	var els []Element
+	for _, s := range p.Segments {
+		if s.Carrier != carrier || s.Type != pnr.SegmentAir {
+			continue
+		}
+		if len(want) > 0 && !want[s.Ref] {
+			continue
+		}
+		// Already cancelled: saying so again invites the carrier to look for a
+		// holding they no longer have.
+		if s.Status == "XX" {
+			continue
+		}
+		els = append(els, &Segment{
+			Carrier: s.Carrier, FlightNum: s.FlightNum, Class: s.Class,
+			Date: s.WireDate, Board: s.Board, Off: s.Off,
+			Action: ActionCancel, Seats: s.Seats,
+		})
+	}
+	if len(els) == 0 {
+		return ""
+	}
+	for _, grp := range groupPassengers(p) {
+		els = append(els, grp)
+	}
+	// Both locators, ours and theirs. A cancellation the carrier cannot file
+	// against a booking is a cancellation that does not happen.
+	if p.RecordLocator != "" {
+		els = append(els, &Locator{Carrier: p.Origin.Party, Value: p.RecordLocator})
+	}
+	for _, l := range p.Locators {
+		if l.Owner == carrier && l.Value != "" {
+			els = append(els, &Locator{Carrier: l.Owner, Value: l.Value})
+		}
+	}
+	return Build(string(ActionCancel), els...)
+}

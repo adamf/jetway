@@ -203,3 +203,30 @@ func ptcFor(p pnr.Passenger) string {
 		return "ADT"
 	}
 }
+
+// BuildPartialCancel renders an order that was cancelled here but which one or
+// more carriers could not be told about.
+//
+// It carries both the order and an error, which looks contradictory and is
+// exactly the situation: the order is cancelled on this side, and a carrier
+// that was not reached is still holding seats against it. Reporting only the
+// success would tell the requester their seats are released when they may not
+// be.
+func BuildPartialCancel(rec *pnr.PNR, owner string, unreachable []string) ([]byte, error) {
+	body, err := BuildOrderView(rec, owner)
+	if err != nil {
+		return nil, err
+	}
+	var rs OrderViewRS
+	if err := xml.Unmarshal(body, &rs); err != nil {
+		return nil, fmt.Errorf("ndc: encode partial cancellation: %w", err)
+	}
+	rs.NS = Namespace
+	rs.Success = nil
+	rs.Errors = &errorsBlock{Error: []Error{{
+		Type: "202", ShortText: "Cancelled, carriers not all notified",
+		Detail: "the order is cancelled here, but " + strings.Join(unreachable, ", ") +
+			" could not be told and may still hold the seats",
+	}}}
+	return marshal(&rs)
+}
