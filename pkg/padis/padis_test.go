@@ -204,3 +204,203 @@ func TestTVLAcceptsTeletypeDateForm(t *testing.T) {
 		t.Errorf("wire date = %q", p.Segments[0].WireDate)
 	}
 }
+
+// The cases below check segment composition against the forms documented in
+// IATA's publicly published PNRGOV EDIFACT Implementation Guide. The data is
+// substituted -- what is being asserted is the shape, not the document.
+
+func applyTVL(t *testing.T, wire string) *pnr.PNR {
+	t.Helper()
+	in := "UNB+UNOA:3+BA:ZZ+1J:ZZ+260601:1200+1'UNH+1+PAORES:96:1:IA'" + wire + "UNT+3+1'UNZ+1+1'"
+	ic, err := edifact.Parse([]byte(in), edifact.ParseOptions{})
+	if err != nil {
+		t.Fatalf("Parse %q: %v", wire, err)
+	}
+	p := &pnr.PNR{}
+	Apply(p, ic.Messages[0], ApplyOptions{ReceivedAt: ref()})
+	return p
+}
+
+// Element 3 is a composite: marketing carrier, then operating carrier. Reading
+// only the first loses who actually holds the inventory, and interline
+// messages are addressed to the operating carrier.
+func TestTVLCarriesOperatingCarrier(t *testing.T) {
+	p := applyTVL(t, "TVL+010410:2235:020410:1200+ATL+LHR+DL:KL+10:K'")
+	if len(p.Segments) != 1 {
+		t.Fatalf("segments = %d, unparsed %+v", len(p.Segments), p.Unparsed)
+	}
+	s := p.Segments[0]
+	if s.Carrier != "DL" {
+		t.Errorf("marketing carrier = %q, want DL", s.Carrier)
+	}
+	if s.OperatingCarrier != "KL" {
+		t.Errorf("operating carrier = %q, want KL", s.OperatingCarrier)
+	}
+	if s.FlightNum != "10" || s.Class != "K" {
+		t.Errorf("flight/class = %q/%q", s.FlightNum, s.Class)
+	}
+	if s.DepartTime != "2235" || s.ArriveTime != "1200" {
+		t.Errorf("times = %q/%q", s.DepartTime, s.ArriveTime)
+	}
+	// DDMMYY: 010410 is 1 April 2010, not 4 January.
+	if s.Depart.Day() != 1 || s.Depart.Month() != time.April {
+		t.Errorf("departure = %s, want 1 April", s.Depart.Format("2006-01-02"))
+	}
+}
+
+func TestTVLWithoutOperatingCarrier(t *testing.T) {
+	p := applyTVL(t, "TVL+121210:0915::1230+LHR+JFK+DL+324:B'")
+	if len(p.Segments) != 1 {
+		t.Fatalf("segments = %d, unparsed %+v", len(p.Segments), p.Unparsed)
+	}
+	s := p.Segments[0]
+	if s.Carrier != "DL" || s.OperatingCarrier != "" {
+		t.Errorf("carriers = %q/%q", s.Carrier, s.OperatingCarrier)
+	}
+	// An absent arrival date is legal; the arrival time still applies.
+	if s.ArriveTime != "1230" {
+		t.Errorf("arrival time = %q, want 1230", s.ArriveTime)
+	}
+}
+
+// Date, board and off point are conditional for ARNK and OPEN. Requiring them
+// turned every surface gap into an unparsed fragment and broke the itinerary's
+// continuity.
+func TestTVLSurfaceGap(t *testing.T) {
+	p := applyTVL(t, "TVL+++++ARNK'")
+	if len(p.Unparsed) != 0 {
+		t.Errorf("ARNK must be understood, not retained as a fragment: %+v", p.Unparsed)
+	}
+	if len(p.Segments) != 1 {
+		t.Fatalf("segments = %d", len(p.Segments))
+	}
+	if p.Segments[0].Type != pnr.SegmentSurface {
+		t.Errorf("type = %q, want surface", p.Segments[0].Type)
+	}
+	if got := p.Segments[0].Describe(); got != "ARNK" {
+		t.Errorf("Describe = %q", got)
+	}
+}
+
+func TestTVLOpenDatedSegment(t *testing.T) {
+	p := applyTVL(t, "TVL++LHR+ORD++OPEN'")
+	if len(p.Unparsed) != 0 {
+		t.Errorf("OPEN must be understood: %+v", p.Unparsed)
+	}
+	if len(p.Segments) != 1 {
+		t.Fatalf("segments = %d", len(p.Segments))
+	}
+	s := p.Segments[0]
+	if s.Board != "LHR" || s.Off != "ORD" {
+		t.Errorf("points = %q-%q", s.Board, s.Off)
+	}
+	if !s.Depart.IsZero() {
+		t.Errorf("an open segment has no departure date, got %s", s.Depart)
+	}
+}
+
+func applyTIF(t *testing.T, wire string) *pnr.PNR {
+	t.Helper()
+	return applyTVL(t, wire)
+}
+
+// The second component is the traveller type, not a title. Reading it as a
+// title turned every adult into someone called "A".
+func TestTIFTravellerTypeIsNotATitle(t *testing.T) {
+	p := applyTIF(t, "TIF+JONES+JOHNMR:A'")
+	if len(p.Passengers) != 1 {
+		t.Fatalf("passengers = %d, unparsed %+v", len(p.Passengers), p.Unparsed)
+	}
+	x := p.Passengers[0]
+	if x.Surname != "JONES" || x.Given != "JOHN" || x.Title != "MR" {
+		t.Errorf("name split wrong: %+v", x)
+	}
+	if x.Type != pnr.PaxAdult {
+		t.Errorf("type = %q, want A", x.Type)
+	}
+	if x.Infant {
+		t.Error("an adult must not be flagged as an infant")
+	}
+}
+
+func TestTIFInfant(t *testing.T) {
+	p := applyTIF(t, "TIF+RUITER+MISTY:IN'")
+	if len(p.Passengers) != 1 {
+		t.Fatalf("passengers = %d", len(p.Passengers))
+	}
+	x := p.Passengers[0]
+	if x.Type != pnr.PaxInfant || !x.Infant {
+		t.Errorf("infant not recognised: %+v", x)
+	}
+	// MISTY must not lose a "MS" from the end of a name that is not a title.
+	if x.Given != "MISTY" {
+		t.Errorf("given = %q, want MISTY", x.Given)
+	}
+}
+
+func TestTIFTravellerReference(t *testing.T) {
+	p := applyTIF(t, "TIF+SMITHJR+JOHNMR:A:1'")
+	if len(p.Passengers) != 1 {
+		t.Fatalf("passengers = %d", len(p.Passengers))
+	}
+	if p.Passengers[0].Surname != "SMITHJR" || p.Passengers[0].Given != "JOHN" {
+		t.Errorf("%+v", p.Passengers[0])
+	}
+}
+
+func TestTIFGroup(t *testing.T) {
+	p := applyTIF(t, "TIF+SEETHE WORLD:G'")
+	if len(p.Passengers) != 1 {
+		t.Fatalf("passengers = %d", len(p.Passengers))
+	}
+	if p.Passengers[0].Type != pnr.PaxGroup {
+		t.Errorf("type = %q, want G; on a group the type sits on element 0", p.Passengers[0].Type)
+	}
+}
+
+// RCI repeats: each element is one party's locator.
+func TestRCIRepeatingLocators(t *testing.T) {
+	p := applyTVL(t, "RCI+SK:123EF+1G:345ABC+XX:7890:C'")
+	want := map[string]string{"SK": "123EF", "1G": "345ABC", "XX": "7890"}
+	for owner, loc := range want {
+		if got, ok := p.LocatorFor(owner); !ok || got != loc {
+			t.Errorf("locator %s = %q,%v; want %q", owner, got, ok, loc)
+		}
+	}
+}
+
+// What we build must decode back to what we meant, including the corrected
+// composites.
+func TestBuiltSegmentsRoundTripThroughTheCorrectedMapping(t *testing.T) {
+	rec := samplePNR()
+	rec.Segments[0].OperatingCarrier = "KL"
+	rec.Passengers[0].Type = pnr.PaxAdult
+	rec.Passengers[1].Type = pnr.PaxAdult
+	rec.Segments = append(rec.Segments, pnr.Segment{
+		Ref: 2, Type: pnr.SegmentSurface, Board: "JFK", Off: "BOS", Status: "HK",
+	})
+
+	ic, err := BuildPAOREQ(rec, "BA", buildOpts())
+	if err != nil {
+		t.Fatalf("BuildPAOREQ: %v", err)
+	}
+	out, _ := ic.Encode(edifact.EncodeOptions{})
+	back, err := edifact.Parse(out, edifact.ParseOptions{Strict: true})
+	if err != nil {
+		t.Fatalf("re-parse: %v\n%s", err, out)
+	}
+	got := &pnr.PNR{}
+	Apply(got, back.Messages[0], ApplyOptions{ReceivedAt: ref(), Party: "1A", Inbound: true})
+	for _, f := range got.Unparsed {
+		t.Errorf("unparsed fragment on our own message: %+v", f)
+	}
+	if len(got.Passengers) != 2 {
+		t.Fatalf("passengers = %d: %+v", len(got.Passengers), got.Passengers)
+	}
+	if got.Passengers[0].Given != "JOHN" || got.Passengers[0].Title != "MR" {
+		t.Errorf("name did not survive: %+v", got.Passengers[0])
+	}
+	if got.Segments[0].OperatingCarrier != "KL" {
+		t.Errorf("operating carrier did not survive: %+v", got.Segments[0])
+	}
+}

@@ -227,3 +227,48 @@ func mustAddr(t *testing.T, s string) Address {
 	}
 	return a
 }
+
+// IATA's Type B Messaging whitepaper gives the format limit as 60 lines of 63
+// characters. Truncating an over-long message would silently change what a
+// partner receives, so the encoder refuses instead.
+func TestEncodeEnforcesStandardLimits(t *testing.T) {
+	if DefaultLineLength != 63 {
+		t.Errorf("DefaultLineLength = %d, want 63", DefaultLineLength)
+	}
+	if DefaultMaxLines != 60 {
+		t.Errorf("DefaultMaxLines = %d, want 60", DefaultMaxLines)
+	}
+	base := &Message{
+		Priority: "QU", Destinations: []Address{mustAddr(t, "LHRRMBA")},
+		Origin: mustAddr(t, "LONXX1A"), OriginTime: OriginTime{12, 14, 30, true},
+	}
+
+	m := *base
+	m.Text = strings.Repeat("A", 64)
+	if _, err := m.Encode(EncodeOptions{}); err == nil {
+		t.Error("a 64-character line exceeds the 63-character limit and must be refused")
+	}
+	m.Text = strings.Repeat("A", 63)
+	if _, err := m.Encode(EncodeOptions{}); err != nil {
+		t.Errorf("a 63-character line is legal: %v", err)
+	}
+
+	lines := make([]string, 61)
+	for i := range lines {
+		lines[i] = "X"
+	}
+	m = *base
+	m.Text = strings.Join(lines, "\n")
+	if _, err := m.Encode(EncodeOptions{}); err == nil {
+		t.Error("61 lines exceeds the 60-line limit and must be refused")
+	}
+	m.Text = strings.Join(lines[:60], "\n")
+	if _, err := m.Encode(EncodeOptions{}); err != nil {
+		t.Errorf("60 lines is legal: %v", err)
+	}
+	// The limit is a default, not a hard rule: some links differ.
+	m.Text = strings.Join(lines, "\n")
+	if _, err := m.Encode(EncodeOptions{MaxLines: -1}); err != nil {
+		t.Errorf("MaxLines:-1 must disable the check: %v", err)
+	}
+}

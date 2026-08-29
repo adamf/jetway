@@ -11,6 +11,9 @@ type EncodeOptions struct {
 	// MaxLineLength wraps address lines and validates text lines. Zero uses
 	// DefaultLineLength. Set to -1 to disable wrapping entirely.
 	MaxLineLength int
+	// MaxLines bounds the number of text lines. Zero uses DefaultMaxLines; set
+	// to -1 to disable the check.
+	MaxLines int
 	// Frame wraps the output in ZCZC/NNNN network framing.
 	Frame bool
 	// Channel is emitted after ZCZC when Frame is set.
@@ -116,7 +119,19 @@ func (m *Message) Encode(opts EncodeOptions) ([]byte, error) {
 		}
 	}
 	if text != "" {
-		for _, tl := range strings.Split(text, "\n") {
+		textLines := strings.Split(text, "\n")
+		maxLines := opts.MaxLines
+		if maxLines == 0 {
+			maxLines = DefaultMaxLines
+		}
+		// Refuse rather than truncate. A message over the limit needs splitting
+		// across several Type B messages, which changes their meaning and is
+		// the sender's decision, not this encoder's.
+		if maxLines > 0 && len(textLines) > maxLines {
+			return nil, fmt.Errorf("typeb: encode: text has %d lines, the limit is %d; the message must be split",
+				len(textLines), maxLines)
+		}
+		for _, tl := range textLines {
 			if len(tl) > max {
 				return nil, fmt.Errorf("typeb: encode: text line exceeds %d characters: %q", max, tl)
 			}

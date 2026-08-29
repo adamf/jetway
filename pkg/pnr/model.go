@@ -37,15 +37,49 @@ const (
 	SegmentAux     SegmentType = "auxiliary"
 )
 
+// PassengerType is the PADIS traveller type code carried in TIF.
+type PassengerType string
+
+const (
+	PaxAdult  PassengerType = "A"
+	PaxChild  PassengerType = "C"
+	PaxInfant PassengerType = "IN"
+	PaxGroup  PassengerType = "G"
+)
+
 // Passenger is one traveller on the record.
 type Passenger struct {
 	Ref     int    `json:"ref"` // 1-based, stable for the life of the record
 	Surname string `json:"surname"`
 	Given   string `json:"given"`
 	Title   string `json:"title,omitempty"`
-	Infant  bool   `json:"infant,omitempty"`
+	// Type is the traveller type code. Infant is derived from it rather than
+	// being a separate assertion, so the two can never disagree.
+	Type   PassengerType `json:"type,omitempty"`
+	Infant bool          `json:"infant,omitempty"`
 	// FrequentFlyer holds carrier-qualified loyalty numbers, e.g. "BA:12345678".
 	FrequentFlyer []string `json:"frequent_flyer,omitempty"`
+}
+
+// titles are the honorifics that arrive suffixed to a given name on both wire
+// formats. Longest first, so MSTR is not truncated to MS.
+var titles = []string{"MSTR", "MISS", "MRS", "DR", "MR", "MS"}
+
+// SplitTitle separates a trailing honorific from a concatenated given name,
+// turning "JOHNMR" into "JOHN" and "MR".
+//
+// Both AIRIMP and PADIS carry the name this way, which is why this lives with
+// the canonical model rather than in either codec: two copies of this list
+// would drift, and a name that splits differently on the two paths produces a
+// record that disagrees with itself.
+func SplitTitle(given string) (name, title string) {
+	g := strings.TrimSpace(given)
+	for _, t := range titles {
+		if len(g) > len(t) && strings.HasSuffix(g, t) {
+			return g[:len(g)-len(t)], t
+		}
+	}
+	return g, ""
 }
 
 // Display renders the passenger in the conventional SURNAME/GIVEN TITLE form.
@@ -62,9 +96,14 @@ type Segment struct {
 	Ref  int         `json:"ref"` // 1-based position in the itinerary
 	Type SegmentType `json:"type"`
 
-	Carrier   string `json:"carrier,omitempty"`
-	FlightNum string `json:"flight_num,omitempty"`
-	Class     string `json:"class,omitempty"`
+	// Carrier is the marketing carrier: whose code the passenger booked under.
+	Carrier string `json:"carrier,omitempty"`
+	// OperatingCarrier is who actually flies it, when it differs. Interline
+	// messages address the operating carrier, so losing this means sending a
+	// request to a carrier that does not hold the inventory.
+	OperatingCarrier string `json:"operating_carrier,omitempty"`
+	FlightNum        string `json:"flight_num,omitempty"`
+	Class            string `json:"class,omitempty"`
 
 	// Depart is the absolute departure date, resolved from the two-character
 	// day and three-letter month that the wire carries. See ResolveDate for why

@@ -247,13 +247,20 @@ two are configuration. See [docs/adding-a-carrier.md](docs/adding-a-carrier.md).
 
 ## Provenance, and what this is not
 
-AIRIMP and the PADIS message directories are IATA publications, sold by IATA,
-and they are the normative source for message composition. This project
-implements the wire syntaxes, which are stable and independently documented,
-and ships a **community profile** for the message grammars above them: the
-elements and segments a reservation gateway must act on, in the composition most
-widely used. It is not a substitute for a carrier's implementation guide, and
-the code is organised on the assumption that you will adjust it per link.
+The two sides differ, and it matters:
+
+- **EDIFACT is largely open.** UN/EDIFACT syntax (ISO 9735) is free from UNECE,
+  and IATA publishes the [PNRGOV EDIFACT Implementation
+  Guide](https://www.iata.org/contentassets/18a5fdb2dc144d619a8c10dc1472ae80/pnrgov20edifact20implementation20guide2015_1.pdf)
+  openly, documenting the PADIS segment composition. `pkg/edifact` and
+  `pkg/padis` are checked against those.
+- **AIRIMP is not.** It is a paid IATA publication (product IATA9098, 50th
+  edition) sold on quote, and it is the normative source for teletype message
+  composition. `pkg/airimp` implements the elements that are stable and widely
+  documented, and treats everything else as opaque.
+
+Either way the code is organised on the assumption that you will adjust it per
+link, because carrier dialects diverge from both.
 
 Jetway is a messaging gateway and a record store. It is deliberately **not**:
 

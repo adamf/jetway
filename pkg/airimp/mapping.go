@@ -54,7 +54,7 @@ func Apply(p *pnr.PNR, m *Message, opts ApplyOptions) []Change {
 
 		case *Name:
 			for _, g := range el.Givens {
-				given, title := splitTitle(g)
+				given, title := pnr.SplitTitle(g)
 				if findPassenger(p, el.Surname, given) != nil {
 					continue
 				}
@@ -295,20 +295,6 @@ func groupPassengers(p *pnr.PNR) []Element {
 		out = append(out, &Name{Count: len(byName[sn]), Surname: sn, Givens: byName[sn]})
 	}
 	return out
-}
-
-// titles are the honorifics that appear suffixed to a given name on the wire,
-// longest first so that MSTR is not truncated to MS.
-var titles = []string{"MSTR", "MISS", "MRS", "DR", "MR", "MS"}
-
-func splitTitle(given string) (name, title string) {
-	g := strings.TrimSpace(given)
-	for _, t := range titles {
-		if len(g) > len(t) && strings.HasSuffix(g, t) {
-			return g[:len(g)-len(t)], t
-		}
-	}
-	return g, ""
 }
 
 func findPassenger(p *pnr.PNR, surname, given string) *pnr.Passenger {

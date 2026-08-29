@@ -136,11 +136,17 @@ func BuildPAORES(req edifact.Message, p *pnr.PNR, outcomes map[string]string, lo
 
 func tvlSegment(s pnr.Segment) edifact.Segment {
 	dep := FormatTVLDate(s.Depart)
+	if s.Type == pnr.SegmentSurface {
+		// Date, board and off point are conditional for a surface gap.
+		return edifact.Seg("TVL",
+			edifact.Simple(""), edifact.Simple(s.Board), edifact.Simple(s.Off),
+			edifact.Simple(""), edifact.Simple("ARNK"))
+	}
 	return edifact.Seg("TVL",
 		edifact.Comp(dep, s.DepartTime, dep, s.ArriveTime),
 		edifact.Simple(s.Board),
 		edifact.Simple(s.Off),
-		edifact.Simple(s.Carrier),
+		edifact.Comp(s.Carrier, s.OperatingCarrier),
 		edifact.Comp(s.FlightNum, s.Class),
 	)
 }
@@ -160,11 +166,16 @@ func tifSegments(p *pnr.PNR) []edifact.Segment {
 	for _, sn := range order {
 		els := []edifact.Element{edifact.Simple(sn)}
 		for _, pax := range byName[sn] {
-			inf := ""
-			if pax.Infant {
-				inf = "INF"
+			// The given name and title travel concatenated, and the second
+			// component is the traveller type, not the title.
+			t := pax.Type
+			if t == "" {
+				t = pnr.PaxAdult
+				if pax.Infant {
+					t = pnr.PaxInfant
+				}
 			}
-			els = append(els, edifact.Comp(pax.Given, pax.Title, strconv.Itoa(pax.Ref), inf))
+			els = append(els, edifact.Comp(pax.Given+pax.Title, string(t), strconv.Itoa(pax.Ref)))
 		}
 		out = append(out, edifact.Segment{Tag: "TIF", Elements: els})
 	}

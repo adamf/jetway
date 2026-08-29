@@ -139,9 +139,16 @@ layer and route, but do not yet map onto a record.
 whose composition differs; segments no handler claims become unparsed fragments
 on the record rather than errors.
 
-**This is a community profile.** The PADIS directories and implementation guides
-are IATA publications and are the normative source. Validate against your
-carrier's guide.
+**Verified against the published guide, not guessed.** IATA publishes the
+PNRGOV EDIFACT Implementation Guide openly, and it documents the same PADIS
+segment composition these messages use. The segment shapes above were checked
+against it, which corrected four things: the traveller type in `TIF` was being
+read as a title, `TVL` element 3 is a marketing/operating carrier pair rather
+than one code, and `ARNK` and `OPEN` segments -- where date and city pair are
+conditional -- were being discarded as unparsed fragments.
+
+Carrier-specific deviations still exist, and a partner's own implementation
+guide remains authoritative for their link.
 
 ## Status codes (`pkg/rescode`)
 

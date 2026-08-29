@@ -155,7 +155,19 @@ func handleORG(p *pnr.PNR, seg edifact.Segment, _ *State, opts ApplyOptions) ([]
 
 // handleTIF reads traveller names.
 //
-// Profile: TIF+<surname>+<given>:<title>:<ref>+<given>:<title>:<ref>...
+// Wire form, per the PADIS reservations segment definitions:
+//
+//	TIF+<surname>+<given name and title>:<traveller type>:<reference>
+//	TIF+JONES+JOHNMR:A          one adult
+//	TIF+RUITER+MISTY:IN         an infant
+//	TIF+SMITHJR+JOHNMR:A:1      with a traveller reference
+//	TIF+SEETHE WORLD:G          a group; the type sits on element 0
+//
+// Two details are easy to get wrong and were wrong here. The second component
+// is the traveller *type*, not a title -- reading it as a title turns every
+// adult into someone called "A". And the given name and title arrive
+// concatenated in one component, so the title has to be split off rather than
+// read from its own field.
 func handleTIF(p *pnr.PNR, seg edifact.Segment, _ *State, _ ApplyOptions) ([]Change, bool) {
 	surname := strings.TrimSpace(seg.Value(0))
 	if surname == "" {
@@ -163,38 +175,75 @@ func handleTIF(p *pnr.PNR, seg edifact.Segment, _ *State, _ ApplyOptions) ([]Cha
 	}
 	var changes []Change
 	if len(seg.Elements) == 1 {
-		p.Passengers = append(p.Passengers, pnr.Passenger{Surname: surname})
+		// A group booking carries its type alongside the name.
+		pt := pnr.PassengerType(strings.ToUpper(seg.Elem(0).Get(1)))
+		p.Passengers = append(p.Passengers, pnr.Passenger{Surname: surname, Type: pt})
 		return []Change{{Op: "add_passenger", Detail: surname}}, true
 	}
 	for i := 1; i < len(seg.Elements); i++ {
-		c := seg.Elem(i).First()
-		given := strings.TrimSpace(c.Get(0))
-		if given == "" {
-			continue
+		for _, c := range seg.Elem(i) {
+			raw := strings.TrimSpace(c.Get(0))
+			if raw == "" {
+				continue
+			}
+			given, title := pnr.SplitTitle(raw)
+			if hasPassenger(p, surname, given) {
+				continue
+			}
+			pt := pnr.PassengerType(strings.ToUpper(strings.TrimSpace(c.Get(1))))
+			p.Passengers = append(p.Passengers, pnr.Passenger{
+				Surname: surname, Given: given, Title: title,
+				Type: pt, Infant: pt == pnr.PaxInfant,
+			})
+			changes = append(changes, Change{Op: "add_passenger", Detail: surname + "/" + raw})
 		}
-		title := strings.TrimSpace(c.Get(1))
-		if hasPassenger(p, surname, given) {
-			continue
-		}
-		p.Passengers = append(p.Passengers, pnr.Passenger{
-			Surname: surname, Given: given, Title: title,
-			Infant: strings.EqualFold(c.Get(3), "INF"),
-		})
-		changes = append(changes, Change{Op: "add_passenger", Detail: surname + "/" + given})
 	}
 	return changes, true
 }
 
 // handleTVL reads a flight segment.
 //
-// Profile: TVL+<depDate>:<depTime>:<arrDate>:<arrTime>+<board>+<off>+<carrier>+<flight>:<class>
-// Dates are DDMMYY on the wire in this profile; DDMMM is also accepted because
-// some carriers send the AIRIMP form inside EDIFACT.
+// Wire form:
+//
+//	TVL+<depDate>:<depTime>:<arrDate>:<arrTime>+<board>+<off>+<marketing>:<operating>+<flight>:<class>
+//	TVL+300310:1700:310310:0500+ATL+LHR+DL+10          simple
+//	TVL+010410:2235:020410:1200+ATL+LHR+DL:KL+10:K     operated by KL
+//	TVL+++++ARNK                                       surface gap
+//	TVL++LHR+ORD++OPEN                                 open-dated
+//
+// Dates are DDMMYY in local time. DDMMM is also accepted, because some carriers
+// carry the teletype form inside EDIFACT.
+//
+// The last two forms matter: the standard makes date, board and off point
+// conditional for ARNK and OPEN, so requiring them turns every surface gap into
+// an unparsed fragment and breaks the itinerary's continuity.
 func handleTVL(p *pnr.PNR, seg edifact.Segment, st *State, opts ApplyOptions) ([]Change, bool) {
 	board, off := seg.Value(1), seg.Value(2)
-	carrier := seg.Value(3)
+	marketing := seg.Get(3, 0)
+	operating := seg.Get(3, 1)
 	flight := seg.Get(4, 0)
 	class := seg.Get(4, 1)
+
+	// Element 4 carries the flight number, or the literal ARNK or OPEN.
+	switch strings.ToUpper(strings.TrimSpace(flight)) {
+	case "ARNK":
+		p.Segments = append(p.Segments, pnr.Segment{
+			Type: pnr.SegmentSurface, Board: board, Off: off, Status: "HK",
+		})
+		p.Recompute()
+		st.LastSegment = &p.Segments[len(p.Segments)-1]
+		return []Change{{Op: "add_segment", Detail: "ARNK surface gap"}}, true
+	case "OPEN":
+		p.Segments = append(p.Segments, pnr.Segment{
+			Type: pnr.SegmentAir, Carrier: marketing, OperatingCarrier: operating,
+			Class: class, Board: board, Off: off, Status: "HN", Seats: 1,
+		})
+		p.Recompute()
+		st.LastSegment = &p.Segments[len(p.Segments)-1]
+		return []Change{{Op: "add_segment", Detail: "OPEN " + marketing + " " + board + "-" + off}}, true
+	}
+
+	carrier := marketing
 	if board == "" || off == "" || carrier == "" {
 		return nil, false
 	}
@@ -205,7 +254,8 @@ func handleTVL(p *pnr.PNR, seg edifact.Segment, st *State, opts ApplyOptions) ([
 		})
 	}
 	s := pnr.Segment{
-		Type: pnr.SegmentAir, Carrier: carrier, FlightNum: flight, Class: class,
+		Type: pnr.SegmentAir, Carrier: carrier, OperatingCarrier: operating,
+		FlightNum: flight, Class: class,
 		Depart: depart, WireDate: wire, DepartTime: seg.Get(0, 1), ArriveTime: seg.Get(0, 3),
 		Board: board, Off: off, Status: "HN", Seats: 1,
 	}

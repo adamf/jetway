@@ -46,10 +46,17 @@ const (
 	EndOfMessage   = "NNNN"
 )
 
-// DefaultLineLength is the conventional maximum characters per line for Type B
-// text. SITA historically enforced 64; 69 is also widely used. Configurable
-// because carriers disagree.
-const DefaultLineLength = 64
+// DefaultLineLength is the maximum characters per line for Type B text.
+//
+// IATA's Type B Messaging whitepaper (v2.1, June 2024) states the format limit
+// as 60 lines of 63 characters. Configurable because individual links differ,
+// but 63 is the number the standard gives.
+const DefaultLineLength = 63
+
+// DefaultMaxLines is the maximum number of text lines in a Type B message,
+// from the same source. Exceeding it means the message must be split, which is
+// the sender's decision and not something this package does silently.
+const DefaultMaxLines = 60
 
 // Severity classifies a parse Diagnostic.
 type Severity int
