@@ -22,6 +22,8 @@ import (
 	"github.com/adamf/jetway/internal/store"
 	"github.com/adamf/jetway/internal/ulid"
 	"github.com/adamf/jetway/pkg/airimp"
+	"github.com/adamf/jetway/pkg/avail"
+	"github.com/adamf/jetway/pkg/avs"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
@@ -54,6 +56,17 @@ type Peer struct {
 	AirimpProfile *airimp.Profile
 	// PadisProfile overrides the PADIS segment handlers for this link.
 	PadisProfile *padis.Profile
+	// AvsProfile overrides the availability grammar and status-code meanings
+	// for this link. The standard makes numeric availability bilateral, so a
+	// per-link map is the normal case rather than an escape hatch.
+	AvsProfile *avs.Profile
+}
+
+func (p *Peer) avs() *avs.Profile {
+	if p.AvsProfile != nil {
+		return p.AvsProfile
+	}
+	return avs.Default
 }
 
 func (p *Peer) airimp() *airimp.Profile {
@@ -95,6 +108,10 @@ type Gateway struct {
 	// does not answer requests, which is the right behaviour for a distribution
 	// system that only originates them.
 	Responder Responder
+
+	// Avail is what this node believes is sellable. Nil disables free sale,
+	// and every segment is then requested -- correct, just slower.
+	Avail *avail.Cache
 
 	locators *pnr.LocatorAllocator
 
@@ -296,7 +313,40 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 		return nil
 	}
 
+	if dec.AVS != nil {
+		return g.applyAvailability(ctx, msg, dec, res)
+	}
 	return g.apply(ctx, peer, msg, dec, res, opts)
+}
+
+// applyAvailability folds an availability message into the cache.
+//
+// Availability messages touch no booking, so they never reach the record path.
+// Treating them as a PNR update would create a record per broadcast.
+func (g *Gateway) applyAvailability(ctx context.Context, msg *store.Message, dec *decoded, res *Result) error {
+	if g.Avail == nil {
+		msg.Status = store.StatusRejected
+		msg.Error = "this node holds no availability cache"
+		res.Status = store.StatusRejected
+		return nil
+	}
+	applied, superseded := 0, 0
+	for _, e := range dec.AVS.Entries {
+		if g.Avail.Put(e) {
+			applied++
+			res.Changes = append(res.Changes, "availability: "+e.String())
+		} else {
+			superseded++
+		}
+	}
+	msg.Status = store.StatusApplied
+	res.Status = store.StatusApplied
+	g.trace(msg.ID, "availability", fmt.Sprintf("%d applied, %d superseded", applied, superseded))
+	g.Bus.Publish(EvAvail, map[string]any{
+		"node": g.Identity.Designator, "applied": applied, "superseded": superseded,
+		"held": g.Avail.Len(),
+	})
+	return nil
 }
 
 // apply folds a decoded message into a record, retrying on a version conflict.

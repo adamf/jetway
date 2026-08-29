@@ -6,6 +6,9 @@ import (
 	"strings"
 	"sync"
 
+	"time"
+
+	"github.com/adamf/jetway/pkg/avail"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/rescode"
 )
@@ -131,6 +134,61 @@ func (inv *Inventory) commit(key, status string, seats int) {
 	case "US", "UU", "TL":
 		inv.waitlisted[key] += seats
 	}
+}
+
+// Availability reports what this inventory would grant for each key, as the
+// beliefs a carrier would broadcast.
+//
+// This is the carrier's side of free sale: it is publishing what it is willing
+// to have sold without being asked, which is a commitment, not a description.
+func (inv *Inventory) Availability(keys []avail.Key, asOf time.Time) []avail.Entry {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+
+	out := make([]avail.Entry, 0, len(keys))
+	for _, k := range keys {
+		if inv.Carrier != "" && k.Carrier != inv.Carrier {
+			continue
+		}
+		e := avail.Entry{Key: k, Source: avail.SourceAVS, AsOf: asOf}
+		if inv.ClosedClasses[k.Class] {
+			e.Status = avail.Closed
+			out = append(out, e)
+			continue
+		}
+		date, err := time.Parse("2006-01-02", k.Date)
+		if err != nil {
+			continue
+		}
+		fk := strings.Join([]string{k.Carrier, k.FlightNum, pnr.FormatDate(date), k.Class}, "/")
+		if forced, ok := inv.overrides[fk]; ok {
+			switch forced {
+			case "UC", "UN":
+				e.Status = avail.Closed
+			case "US", "UU":
+				e.Status = avail.Waitlist
+			default:
+				e.Status = avail.Open
+			}
+			out = append(out, e)
+			continue
+		}
+		capacity := inv.capacityFor(pnr.Segment{
+			Carrier: k.Carrier, FlightNum: k.FlightNum, Class: k.Class, WireDate: pnr.FormatDate(date),
+		})
+		left := capacity - inv.sold[fk]
+		e.Seats, e.SeatsKnown = max(left, 0), true
+		switch {
+		case left > 0:
+			e.Status = avail.Open
+		case inv.waitlisted[fk] < inv.WaitlistCapacity:
+			e.Status = avail.Waitlist
+		default:
+			e.Status = avail.Closed
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // Snapshot returns the current inventory state, for the console.

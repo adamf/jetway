@@ -4,6 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
+
+	"github.com/adamf/jetway/pkg/avail"
+	"github.com/adamf/jetway/pkg/avs"
+	"github.com/adamf/jetway/pkg/typeb"
 
 	"github.com/adamf/jetway/internal/gateway"
 	"github.com/adamf/jetway/internal/store"
@@ -73,7 +78,91 @@ func StartCarrier(ctx context.Context, c Carrier, addr string, bus *gateway.Bus,
 			log.Error("carrier link ended", "carrier", c.Designator, "err", err)
 		}
 	}()
+	go n.broadcastAvailability(ctx, log)
 	return n, nil
+}
+
+// AVSInterval is how often a simulated carrier rebroadcasts availability.
+//
+// Short, because a demonstration should show the cache filling. A real carrier
+// broadcasts on change rather than on a timer; the periodic form here also
+// exercises the cache's rule that an older assertion never moves state
+// backwards.
+const AVSInterval = 20 * time.Second
+
+// The window of departure dates a simulated carrier publishes around the
+// default booking date.
+const (
+	AVSDaysBack    = 2
+	AVSDaysForward = 2
+)
+
+// broadcastAvailability publishes what this carrier will sell without being
+// asked. That is what free sale is: permission granted in advance.
+func (n *Node) broadcastAvailability(ctx context.Context, log *slog.Logger) {
+	send := func() {
+		// Broadcast a window of dates, not just one. A carrier publishes
+		// availability for the days it is selling, and covering a single date
+		// makes every booking on any other day fall back to asking -- correct,
+		// but it hides the feature and hides its bugs.
+		var keys []avail.Key
+		base := DefaultDate()
+		for d := -AVSDaysBack; d <= AVSDaysForward; d++ {
+			keys = append(keys, ScheduleKeys(n.Carrier.Designator, base.AddDate(0, 0, d))...)
+		}
+		entries := n.Inventory.Availability(keys, time.Now().UTC())
+		if len(entries) == 0 {
+			return
+		}
+		text := avs.Build(entries)
+		out := &typeb.Message{
+			Priority:     "QU",
+			Destinations: []typeb.Address{mustAddr("LONRM1J")},
+			Origin:       mustAddr(n.Carrier.TTYAddress),
+			OriginTime:   nowOriginTime(),
+			Text:         text,
+		}
+		raw, err := out.Encode(typeb.EncodeOptions{Charset: typeb.CharsetITA2, CRLF: true})
+		if err != nil {
+			log.Error("could not encode availability broadcast", "carrier", n.Carrier.Designator, "err", err)
+			return
+		}
+		peer := n.Gateway.Peer("gds")
+		if peer == nil {
+			return
+		}
+		if _, err := n.Gateway.Send(ctx, peer, raw, "AVS", "", ""); err != nil {
+			log.Debug("availability broadcast not delivered", "carrier", n.Carrier.Designator, "err", err)
+		}
+	}
+
+	// A first broadcast shortly after the link comes up, then on a timer.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(2 * time.Second):
+		send()
+	}
+	t := time.NewTicker(AVSInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			send()
+		}
+	}
+}
+
+func mustAddr(s string) typeb.Address {
+	a, _ := typeb.ParseAddress(s)
+	return a
+}
+
+func nowOriginTime() typeb.OriginTime {
+	n := time.Now().UTC()
+	return typeb.OriginTime{Day: n.Day(), Hour: n.Hour(), Minute: n.Minute(), Present: true}
 }
 
 // Fleet holds the running simulated carriers.

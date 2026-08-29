@@ -25,6 +25,7 @@ import (
 	"github.com/adamf/jetway/internal/metrics"
 	"github.com/adamf/jetway/internal/spool"
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/pkg/avail"
 )
 
 // drainTimeout bounds how long shutdown waits for in-flight work. Long enough
@@ -113,6 +114,9 @@ func run() error {
 		Name:       cfg.Identity.Name,
 	}, st, bus, log, secret)
 
+	gw.Avail = avail.NewCache()
+	gw.Log.Info("availability cache ready", "trust_window", gw.Avail.StaleAfter)
+
 	router := egress.NewRouter(st, log)
 	gw.Sender = router
 
@@ -164,6 +168,11 @@ func run() error {
 		LinkPeers: func() []string { return livePeers(tcpIngress, router) },
 	}
 	registerRuntimeMetrics(sp, router)
+	metrics.Default.OnCollect(func() {
+		metrics.Gauge("jetway_availability_entries", "availability beliefs currently held",
+			nil, float64(gw.Avail.Len()))
+	})
+	go purgeAvailability(ctx, gw, log)
 
 	hs := &http.Server{
 		Addr: cfg.HTTP.Addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second,
@@ -488,6 +497,23 @@ func registerRuntimeMetrics(sp *spool.Spool, router *egress.Router) {
 				nil, age.Seconds())
 		}
 	})
+}
+
+// purgeAvailability drops beliefs that have gone stale or whose flight has
+// departed, so the cache does not grow without bound.
+func purgeAvailability(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
+	t := time.NewTicker(10 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if n := gw.Avail.Purge(); n > 0 {
+				log.Debug("purged stale availability", "entries", n)
+			}
+		}
+	}
 }
 
 func locatorSecret(configured string, log *slog.Logger) ([]byte, error) {

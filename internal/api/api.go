@@ -77,6 +77,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/message/{id}/replay", s.replay)
 	mux.HandleFunc("GET /api/carrier/{designator}/pnrs", s.carrierPNRs)
 	mux.HandleFunc("GET /api/carrier/{designator}/inventory", s.carrierInventory)
+	mux.HandleFunc("GET /api/availability", s.availability)
 	mux.HandleFunc("GET /api/stream", s.stream)
 
 	return logRequests(s.Log, mux)
@@ -201,6 +202,46 @@ func (s *Server) book(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// availability reports what the gateway believes is sellable, with the age of
+// each belief. Age is shown because an operator cannot judge availability
+// without it: the same status means different things fresh and stale.
+func (s *Server) availability(w http.ResponseWriter, r *http.Request) {
+	if s.Gateway.Avail == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"entries": []any{}, "held": 0})
+		return
+	}
+	now := time.Now().UTC()
+	type row struct {
+		Carrier    string  `json:"carrier"`
+		FlightNum  string  `json:"flight_num"`
+		Date       string  `json:"date"`
+		Board      string  `json:"board"`
+		Off        string  `json:"off"`
+		Class      string  `json:"class"`
+		Status     string  `json:"status"`
+		Seats      int     `json:"seats"`
+		SeatsKnown bool    `json:"seats_known"`
+		Source     string  `json:"source"`
+		AgeSeconds float64 `json:"age_seconds"`
+		Fresh      bool    `json:"fresh"`
+	}
+	entries := s.Gateway.Avail.Snapshot()
+	rows := make([]row, 0, len(entries))
+	for _, e := range entries {
+		_, _, fresh := s.Gateway.Avail.Lookup(e.Key)
+		rows = append(rows, row{
+			Carrier: e.Key.Carrier, FlightNum: e.Key.FlightNum, Date: e.Key.Date,
+			Board: e.Key.Board, Off: e.Key.Off, Class: e.Key.Class,
+			Status: string(e.Status), Seats: e.Seats, SeatsKnown: e.SeatsKnown,
+			Source: string(e.Source), AgeSeconds: e.Age(now).Seconds(), Fresh: fresh,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entries": rows, "held": len(rows),
+		"trust_window_seconds": s.Gateway.Avail.StaleAfter.Seconds(),
+	})
 }
 
 func (s *Server) listPNRs(w http.ResponseWriter, r *http.Request) {

@@ -177,6 +177,15 @@ pre.raw{margin:0;padding:12px;background:var(--panel-2);border:1px solid var(--l
 .warnbox{border:1px solid var(--warn);border-radius:8px;padding:9px 11px;font-size:11px;
   background:color-mix(in srgb,var(--warn) 8%,transparent);margin-bottom:10px}
 .warnbox b{display:block;margin-bottom:3px;color:var(--warn)}
+.av{display:grid;grid-template-columns:1fr auto auto;gap:7px;align-items:center;
+  padding:4px 0;font:11px/1.4 var(--mono);border-bottom:1px solid var(--line-2)}
+.av:last-child{border-bottom:none}
+.av .cls{color:var(--ink-3)}
+.av .st{font-weight:700;text-align:right}
+.st-open{color:var(--ok)} .st-closed{color:var(--err)}
+.st-waitlist{color:var(--wait)} .st-request{color:var(--ink-3)}
+.av .age{color:var(--ink-3);font-size:10px;text-align:right;min-width:34px}
+.av.stale{opacity:.45}
 </style>
 </head>
 <body>
@@ -220,6 +229,16 @@ pre.raw{margin:0;padding:12px;background:var(--panel-2);border:1px solid var(--l
           <button class="primary" id="go">Book &amp; send to carrier</button>
           <div class="err" id="bookerr"></div>
           <div class="hint" id="bookhint" style="margin-top:8px"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Availability <span class="count" id="availcount">0</span></h2>
+        <div class="body">
+          <div class="hint" id="availhint" style="margin:0 0 8px">
+            What carriers have said may be sold without asking.
+          </div>
+          <div id="availlist" style="max-height:190px;overflow-y:auto"></div>
         </div>
       </div>
 
@@ -342,8 +361,19 @@ function updateHint(){
   const peer = state.peers.find(p => p.carrier === f.c);
   const cls = $("#cl").value;
   let h = peer ? `${f.c} speaks ${peer.format === "edifact" ? "PADIS EDIFACT" : "Type B / AIRIMP"}.` : "";
-  if (cls === "Z") h += " Class Z is never available — this will come back UC (unable).";
   $("#bookhint").textContent = h;
+  // Say what availability implies before the button is pressed.
+  fetch("/api/availability").then(r => r.json()).then(d => {
+    const e = (d.entries||[]).find(x => x.carrier===f.c && x.flight_num===f.n &&
+      x.board===f.b && x.off===f.o && x.class===cls && x.fresh);
+    if (!e){ $("#bookhint").textContent = h + " No availability held — this will be requested."; return; }
+    if (e.status === "open")
+      $("#bookhint").textContent = h + ` Broadcast open${e.seats_known?" ("+e.seats+" seats)":""} — free sale.`;
+    else if (e.status === "closed")
+      $("#bookhint").textContent = h + " Broadcast closed — the booking will be refused before anything is sent.";
+    else
+      $("#bookhint").textContent = h + ` Broadcast ${e.status} — this will be requested.`;
+  }).catch(()=>{});
 }
 
 /* ---------------- booking ---------------- */
@@ -375,6 +405,7 @@ function connect(){
   src.addEventListener("message", e => onMessage(JSON.parse(e.data).Data ?? JSON.parse(e.data).data));
   src.addEventListener("pnr", e => { const d = payload(e); onPnr(d); });
   src.addEventListener("link", () => loadStatus());
+  src.addEventListener("avail", () => refreshAvail());
   src.addEventListener("trace", () => {});
   src.onerror = () => {};
 }
@@ -546,6 +577,49 @@ function fieldList(fields){
 }
 
 /* ---------------- records ---------------- */
+async function refreshAvail(){
+  let d;
+  try { d = await (await fetch("/api/availability")).json(); } catch(e){ return; }
+  const list = $("#availlist"); list.innerHTML = "";
+  $("#availcount").textContent = d.held || 0;
+  const rows = (d.entries || []);
+  if (!rows.length){
+    list.appendChild(el("div","empty","Nothing broadcast yet"));
+    return;
+  }
+  // Group by segment so a flight reads as one line of classes, which is how a
+  // carrier publishes it and how an agent reads it.
+  const byFlight = new Map();
+  for (const e of rows){
+    const k = `${e.carrier}${e.flight_num} ${e.board}-${e.off} ${e.date.slice(5)}`;
+    if (!byFlight.has(k)) byFlight.set(k, []);
+    byFlight.get(k).push(e);
+  }
+  for (const [flight, es] of [...byFlight].slice(0, 40)){
+    const row = el("div","av" + (es.every(x => !x.fresh) ? " stale" : ""));
+    row.appendChild(el("span",null,flight));
+    const cls = el("span","cls");
+    cls.textContent = es.sort((a,b)=>a.class.localeCompare(b.class))
+      .map(e => e.class + (e.seats_known ? e.seats : "")).join(" ");
+    row.appendChild(cls);
+    const st = el("span","st");
+    // Show the segment's best status: what an agent could actually sell.
+    const rank = {open:3, waitlist:2, request:1, closed:0};
+    const best = es.reduce((a,b) => (rank[b.status]||0) > (rank[a.status]||0) ? b : a);
+    st.textContent = best.status;
+    st.className = "st st-" + best.status;
+    st.title = es.map(e => `${e.class}: ${e.status}` +
+      (e.seats_known ? ` (${e.seats} seats)` : "") +
+      `  ${Math.round(e.age_seconds)}s old via ${e.source}`).join("\n");
+    row.appendChild(st);
+    list.appendChild(row);
+  }
+  const oldest = Math.max(...rows.map(e => e.age_seconds));
+  $("#availhint").textContent =
+    `What carriers said may be sold without asking. Oldest belief ${Math.round(oldest)}s; ` +
+    `trusted for ${Math.round((d.trust_window_seconds||0)/3600)}h.`;
+}
+
 async function refreshPnrs(){
   try{
     const r = await fetch("/api/pnrs?limit=40"); const d = await r.json();
@@ -697,9 +771,10 @@ function about(){
   // Render the empty state first so the pane is never blank while loading, and
   // never clobber a selection the user made before boot finished.
   blank("Select a message from the tape.");
-  await loadStatus(); await loadFlights(); await refreshPnrs();
+  await loadStatus(); await loadFlights(); await refreshPnrs(); await refreshAvail();
   connect();
   setInterval(loadStatus, 5000);
+  setInterval(refreshAvail, 15000);
 })();
 </script>
 </body>

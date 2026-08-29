@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/pkg/avail"
 )
 
 // Carrier describes a simulated airline reservation system.
@@ -99,6 +100,21 @@ func TimesFor(carrier, number, board, off string) (dep, arr string, ok bool) {
 // window under any interpretation and avoids demonstrations that break when run
 // near a year boundary.
 func DefaultDate() time.Time { return time.Now().UTC().AddDate(0, 0, 30) }
+
+// ScheduleKeys enumerates every sellable unit a carrier offers on a date: one
+// key per segment per booking class.
+func ScheduleKeys(carrier string, depart time.Time) []avail.Key {
+	var out []avail.Key
+	for _, r := range Schedule {
+		if r.Carrier != carrier {
+			continue
+		}
+		for _, c := range BookingClasses {
+			out = append(out, avail.NewKey(r.Carrier, r.Number, depart, r.Board, r.Off, c))
+		}
+	}
+	return out
+}
 
 // CarrierByDesignator looks up a carrier in the fleet.
 func CarrierByDesignator(d string) (Carrier, bool) {

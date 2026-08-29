@@ -7,6 +7,7 @@ import (
 
 	"github.com/adamf/jetway/internal/store"
 	"github.com/adamf/jetway/pkg/airimp"
+	"github.com/adamf/jetway/pkg/avail"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
@@ -119,7 +120,9 @@ func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, e
 			Title: upper(p.Title), Infant: p.Infant,
 		})
 	}
-	for _, s := range req.Segments {
+	var freeSold []pnr.Segment
+	var sellReason []string
+	for i, s := range req.Segments {
 		depart, err := pnr.ResolveDate(s.Date, now)
 		if err != nil {
 			return nil, err
@@ -128,15 +131,33 @@ func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, e
 		if seats <= 0 {
 			seats = len(req.Passengers)
 		}
-		rec.Segments = append(rec.Segments, pnr.Segment{
+		seg := pnr.Segment{
 			Type: pnr.SegmentAir, Carrier: upper(s.Carrier), FlightNum: s.FlightNum,
 			Class: upper(s.Class), Depart: depart, WireDate: pnr.FormatDate(depart),
 			Board: upper(s.Board), Off: upper(s.Off),
 			DepartTime: s.DepartTime, ArriveTime: s.ArriveTime,
-			// HN: we have asked and not yet heard back. Every segment starts
-			// here, and the reply is what moves it on.
+			// HN: we have asked and not yet heard back. A segment starts here
+			// unless the carrier has already granted free sale for it.
 			Status: "HN", Seats: seats,
-		})
+		}
+		decision, why := g.decide(seg)
+		switch decision {
+		case avail.Refuse:
+			// The carrier has said this class is closed. Sending a request we
+			// know will be refused wastes a round trip and, on a busy link,
+			// somebody else's.
+			return nil, fmt.Errorf("segment %d: %s%s %s %s-%s is not available: %s",
+				i+1, seg.Carrier, seg.FlightNum, seg.Class, seg.Board, seg.Off, why)
+		case avail.FreeSale:
+			// Free sale is the point of availability: the carrier granted
+			// permission in advance, so the seat is held now and the carrier is
+			// told afterwards.
+			seg.Status = "HK"
+			freeSold = append(freeSold, seg)
+		}
+		sellReason = append(sellReason, fmt.Sprintf("%s%s %s: %s (%s)",
+			seg.Carrier, seg.FlightNum, seg.Class, decision, why))
+		rec.Segments = append(rec.Segments, seg)
 	}
 	for _, s := range req.SSRs {
 		rec.SSRs = append(rec.SSRs, pnr.SSR{
@@ -155,6 +176,17 @@ func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, e
 		return nil, err
 	}
 	rec.RecordLocator = loc
+
+	for _, r := range sellReason {
+		g.Log.Debug("availability decision", "locator", loc, "detail", r)
+	}
+	// Commit the seats we free-sold, so two bookings a moment apart cannot both
+	// sell the last seat on the strength of one broadcast.
+	for _, seg := range freeSold {
+		if g.Avail != nil {
+			g.Avail.Sold(availKey(seg), seg.Seats)
+		}
+	}
 
 	events := []store.Event{{Type: "created", Detail: "booking created via API", Actor: req.Agent, At: now}}
 	for _, s := range rec.Segments {
@@ -183,6 +215,18 @@ func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, e
 	return res, nil
 }
 
+// decide asks the availability cache what to do about a segment.
+func (g *Gateway) decide(s pnr.Segment) (avail.Decision, string) {
+	if g.Avail == nil {
+		return avail.Ask, "no availability cache"
+	}
+	return g.Avail.Decide(availKey(s), s.Seats)
+}
+
+func availKey(s pnr.Segment) avail.Key {
+	return avail.NewKey(s.Carrier, s.FlightNum, s.Depart, s.Board, s.Off, s.Class)
+}
+
 // RequestFromCarrier sends a sell request for the record's segments operated by
 // carrier, in whatever format that carrier's link speaks.
 func (g *Gateway) RequestFromCarrier(ctx context.Context, rec *pnr.PNR, carrier string) (string, error) {
@@ -207,7 +251,13 @@ func (g *Gateway) RequestFromCarrier(ctx context.Context, rec *pnr.PNR, carrier 
 		return g.Send(ctx, peer, raw, padis.MsgPAOREQ, rec.ID, "")
 
 	default:
-		text := airimp.BuildSell(rec, carrier, "NN")
+		// SS reports a sale made from availability; NN asks for one. Sending NN
+		// for a seat already held would ask the carrier to sell it twice.
+		action := airimp.ActionCode("NN")
+		if g.allFreeSold(rec, carrier) {
+			action = "SS"
+		}
+		text := airimp.BuildSell(rec, carrier, action)
 		if text == "" {
 			return "", fmt.Errorf("gateway: record has no %s segments to request", carrier)
 		}
@@ -226,6 +276,22 @@ func (g *Gateway) RequestFromCarrier(ctx context.Context, rec *pnr.PNR, carrier 
 		}
 		return g.Send(ctx, peer, raw, "AIRIMP/sell", rec.ID, "")
 	}
+}
+
+// allFreeSold reports whether every segment for a carrier was taken on free
+// sale, in which case the message reports rather than requests.
+func (g *Gateway) allFreeSold(rec *pnr.PNR, carrier string) bool {
+	n := 0
+	for _, s := range rec.Segments {
+		if s.Carrier != carrier || s.Type != pnr.SegmentAir {
+			continue
+		}
+		if s.Status != "HK" {
+			return false
+		}
+		n++
+	}
+	return n > 0
 }
 
 func upper(s string) string {

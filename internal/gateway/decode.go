@@ -10,6 +10,7 @@ import (
 
 	"github.com/adamf/jetway/internal/store"
 	"github.com/adamf/jetway/pkg/airimp"
+	"github.com/adamf/jetway/pkg/avs"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
@@ -39,8 +40,10 @@ type decoded struct {
 	// Test reports that the sender marked this as test traffic.
 	Test bool
 
-	TypeB   *typeb.Message
-	Airimp  *airimp.Message
+	TypeB  *typeb.Message
+	Airimp *airimp.Message
+	// AVS is set when the message carries availability rather than a booking.
+	AVS     *avs.Message
 	ReplyTo typeb.Address
 
 	Edifact       edifact.Message
@@ -186,6 +189,22 @@ func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 		return nil, fmt.Errorf("gateway: type b message has no text")
 	}
 
+	// Availability messages are Type B but say nothing about any booking, so
+	// they branch before the reservation grammar rather than being fed to it
+	// and producing a message full of unrecognised elements.
+	if isAVS(tb.Text) {
+		am := peer.avs().Parse(tb.Text, msgTime(peer))
+		d.AVS = am
+		d.Kind = "AVS"
+		for _, x := range am.Diagnostics {
+			d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+				Layer: "avs", Severity: x.Severity.String(), Code: x.Code,
+				Detail: x.Detail, Line: x.Line,
+			})
+		}
+		return d, nil
+	}
+
 	am := peer.airimp().Parse(tb.Text)
 	d.Airimp = am
 	for _, x := range am.Diagnostics {
@@ -241,3 +260,16 @@ func typeBDedupKey(tb *typeb.Message) string {
 	sum := sha256.Sum256([]byte(tb.Text))
 	return "tty:" + tb.Origin.String() + ":" + tb.OriginTime.String() + ":" + hex.EncodeToString(sum[:8])
 }
+
+// isAVS reports whether Type B text carries availability rather than a booking.
+func isAVS(text string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		if l := strings.TrimSpace(line); l != "" {
+			return strings.HasPrefix(l, avs.MessageIdentifier)
+		}
+	}
+	return false
+}
+
+// msgTime anchors date resolution. Kept as a hook so replay can pin it.
+func msgTime(*Peer) time.Time { return time.Now().UTC() }

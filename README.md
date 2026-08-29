@@ -53,6 +53,9 @@ Things worth trying in the console:
 | --- | --- |
 | Book class **Z** | The carrier refuses: `UC`, and the record goes to cancelled |
 | Book the same flight until seats run out | `KK` → `US` (waitlisted) → `UC` |
+| Watch the availability panel fill | Carriers broadcast AVS; open classes become free sale |
+| Book a class shown **open** | Held immediately at `HK`, reported with `SS` — no round trip |
+| Book class **Z** | Broadcast closed, so it is refused before any message is sent |
 | Open a received message and press **Replay** | Recognised as a retransmission and refused, not booked twice |
 | Compare a Type B message with an EDIFACT one | The same booking on two very different wires |
 
@@ -145,6 +148,12 @@ it. A gateway and a carrier can be modifying one record at the same instant, so
 writes carry the version they read and a stale write is refused rather than
 allowed to overwrite what it never saw.
 
+**Availability is a claim about a moment, not a fact.** Every belief carries its
+age and where it came from, and a lookup returns both. A status older than the
+trust window stops being evidence and the booking falls back to asking. Code
+that cannot tell a fresh claim from a day-old one sells seats that went hours
+ago.
+
 **Acknowledging a partner does not depend on the database.** Ingest fsyncs the
 raw bytes to a local spool and acknowledges; a drainer moves them into the store
 afterwards and retries for as long as it takes. Without that, a Postgres
@@ -170,6 +179,8 @@ See [Provenance](#provenance-and-what-this-is-not).
 | `pkg/airimp` | AIRIMP message grammar over Type B text, as an extensible recognizer profile |
 | `pkg/padis` | IATA PADIS message mapping over EDIFACT, as an extensible segment-handler profile |
 | `pkg/rescode` | The reservation action and status vocabulary both wire formats share |
+| `pkg/avail` | What is sellable: statuses, seat counts, provenance and age |
+| `pkg/avs` | Availability Status messages, as a per-link profile |
 | `pkg/pnr` | The canonical passenger name record, date resolution and record locator allocation |
 | `internal/store` | Append-only message log and event-sourced PNR store; in-memory and Postgres |
 | `internal/gateway` | The pipeline, routing, response generation and seat inventory |

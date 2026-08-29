@@ -150,6 +150,47 @@ conditional -- were being discarded as unparsed fragments.
 Carrier-specific deviations still exist, and a partner's own implementation
 guide remains authoritative for their link.
 
+## Availability (`pkg/avail`, `pkg/avs`)
+
+`pkg/avail` is the store and knows no message format. AVS pushes status over
+teletype, NDC returns it inside an offer, direct access answers per shop; all
+three land in the same cache, and what consumes availability does not care
+which.
+
+Two fields are load-bearing. **Age**, because a status is a claim about a
+moment and a stale claim is not evidence — past the trust window a lookup
+reports Unknown and booking asks the carrier instead. **Source**, because a
+broadcast, a direct answer and an operator override are not equally
+authoritative, and a weaker source must not overwrite a fresher stronger one.
+
+The decision this drives:
+
+| Belief | Action | Wire |
+| --- | --- | --- |
+| Open | sell now, tell the carrier after | `SS` |
+| Open, fewer seats than wanted | ask | `NN` |
+| Closed | refuse before sending anything | — |
+| Waitlist | ask for the waitlist | `LL` |
+| Unknown or stale | ask | `NN` |
+
+Unknown is deliberately not Closed. One is the carrier's answer, the other is
+our ignorance; conflating them either blocks sellable inventory or sells
+inventory nobody offered.
+
+`pkg/avs` decodes the messages. The normative source is AIRIMP Chapter 4, which
+is paid — but its published contents page names the shape: status code families
+C, AS, L and LA, then numeric availability as Options 1, 2 and 3, **each marked
+bilateral**. Three numbered options that are explicitly bilateral is the
+standard saying the numeric form is agreed per partner. So the grammar is a
+profile and the code meanings are configuration, which is what the standard
+describes rather than a way around the paywall.
+
+The default status map holds only `O`, `C`, `L` and `R` — codes whose meaning
+is not in doubt. `AS`, `LA` and the numeric families are deliberately absent: an
+unmapped code produces an error diagnostic naming it, where a guess would
+quietly grant free sale on a class the carrier may have closed. Configure them
+per link from the partner's agreement.
+
 ## Status codes (`pkg/rescode`)
 
 The vocabulary both formats share.

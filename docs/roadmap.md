@@ -2,7 +2,8 @@
 
 An honest list. Things in the first two sections block a production deployment.
 
-Recently closed: MATIP (RFC 2351) with the Type B session handshake;
+Recently closed: AVS ingestion with an availability cache and free sale;
+MATIP (RFC 2351) with the Type B session handshake;
 partner-facing ingress over HTTPS, TCP and file drop; peer identity from
 mutual TLS; outbound retry with restart recovery; a durable
 inbound spool; health, readiness and metrics endpoints; graceful drain;
