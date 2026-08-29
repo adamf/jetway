@@ -1,0 +1,22 @@
+# The build context was 44MB, nearly all of it compiled binaries that the image
+# rebuilds anyway. Docker does not read .gitignore, so this has to say it again.
+bin/
+dist/
+jetwayd
+jetwayctl
+carriersim
+
+.git/
+.github/
+docs/
+*.md
+!deploy/*.md
+
+# Test corpora and fuzz artefacts are not part of the image.
+**/testdata/
+coverage.out
+
+.DS_Store
+*.log
+.env
+.env.local

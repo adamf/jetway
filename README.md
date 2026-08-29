@@ -35,12 +35,19 @@ they present or the circuit they arrive on, never from a name they assert.
      fsync before ack           retry with backoff on the way out
 ```
 
+**[Try the live demo →](https://jetway-demo.fly.dev)** — a real gateway with three
+simulated carriers, two wire formats and a seat inventory, running as you read
+this. Make a booking and watch it cross the links.
+
 ![A booking crossing the links and becoming a record](docs/images/booking-flow.gif)
 
 *One booking: the sell goes out, the carrier answers, the record appears — then
 the same record seen from the GDS side.*
 
 ## Try it
+
+The [hosted demo](https://jetway-demo.fly.dev) needs nothing installed. To run
+it yourself:
 
 ```sh
 go run ./cmd/jetwayd          # console on http://127.0.0.1:8080
@@ -248,6 +255,19 @@ the 32⁶ code space: a bijection, so distinct counter values always produce
 distinct locators with no lookup and no retry, while the output order reveals
 nothing about the input order. The alphabet omits `I`, `O`, `0` and `1`,
 because locators get read aloud.
+
+## The hosted demo
+
+[jetway-demo.fly.dev](https://jetway-demo.fly.dev) runs the same binary this
+repository builds, from the same Dockerfile — the carrier links are real TCP
+sessions, bound to loopback inside the container because the carriers live in
+the same process. Nothing is mocked.
+
+It is a demo, so: storage is in memory and bounded, everything is forgotten on
+restart, the console is unauthenticated and anyone can make a booking, and the
+machine suspends when nobody is looking at it — so the first request after a
+quiet spell takes a moment. Deployment config is in
+[fly.toml](fly.toml) and [deploy/jetway.demo.yaml](deploy/jetway.demo.yaml).
 
 ## Running it for real
 
