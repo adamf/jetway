@@ -656,3 +656,48 @@ func TestQueueDistinguishesSegments(t *testing.T) {
 		}
 	})
 }
+
+// The two directions are separate namespaces. An acknowledgement we sent and a
+// request a partner sent can carry the same reference, and confusing them would
+// let a message we originated suppress one that arrived.
+func TestDedupLookupIsScopedByDirection(t *testing.T) {
+	eachBackend(t, func(t *testing.T, s Store) {
+		ctx := context.Background()
+
+		in := newMsg("BA", []byte("inbound"))
+		in.DedupKey = "unb:REF1"
+		if err := s.AppendMessage(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+		out := newMsg("BA", []byte("outbound"))
+		out.Direction = Outbound
+		out.Status = StatusSent
+		out.DedupKey = "unb:REF1"
+		if err := s.AppendMessage(ctx, out); err != nil {
+			t.Fatal(err)
+		}
+
+		gotIn, ok, err := s.FindByDedupKey(ctx, "BA", "unb:REF1")
+		if err != nil || !ok {
+			t.Fatalf("FindByDedupKey = %q, %v, %v", gotIn, ok, err)
+		}
+		if gotIn != in.ID {
+			t.Errorf("inbound lookup returned %s, want the inbound message", gotIn)
+		}
+
+		gotOut, ok, err := s.FindOutboundByKey(ctx, "BA", "unb:REF1")
+		if err != nil || !ok {
+			t.Fatalf("FindOutboundByKey = %q, %v, %v", gotOut, ok, err)
+		}
+		if gotOut != out.ID {
+			t.Errorf("outbound lookup returned %s, want the outbound message", gotOut)
+		}
+
+		if _, ok, _ := s.FindOutboundByKey(ctx, "BA", "unb:NOSUCH"); ok {
+			t.Error("an unknown key must not match")
+		}
+		if _, ok, _ := s.FindOutboundByKey(ctx, "LH", "unb:REF1"); ok {
+			t.Error("keys must not cross peers")
+		}
+	})
+}

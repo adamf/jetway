@@ -50,6 +50,12 @@ type Peer struct {
 	Carrier string
 	// Format is the wire encoding this peer speaks.
 	Format store.Format
+	// CONTRL is when to send a syntax and service report for an EDITFACT
+	// interchange this peer sends: "requested" (the default) honours the
+	// acknowledgement request in UNB 0031, "always", "errors" reports only
+	// rejections, and "never" sends none.
+	CONTRL string
+
 	// TTYAddress is the peer's Type B address, used when Format is typeb.
 	TTYAddress string
 	// Addresses are further Type B addresses this link serves, beyond
@@ -423,6 +429,15 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 		}
 	}
 
+	// A partner telling us what they made of something we sent.
+	if dec.CONTRL != nil {
+		return g.applyCONTRL(ctx, peer, msg, dec, res)
+	}
+
+	// Report on the syntax before acting on the content: the two are separate
+	// answers, and a partner is owed the first even when the second fails.
+	g.sendCONTRL(ctx, peer, msg, dec)
+
 	if dec.AVS != nil {
 		return g.applyAvailability(ctx, msg, dec, res)
 	}
@@ -652,7 +667,7 @@ func (g *Gateway) respond(ctx context.Context, peer *Peer, msg *store.Message, d
 	}
 	g.Bus.Publish(EvPNR, g.pnrView(rec))
 
-	raw, kind, err := g.buildReply(peer, dec, rec, outcomes)
+	raw, kind, key, err := g.buildReply(peer, dec, rec, outcomes)
 	if err != nil {
 		return err
 	}
@@ -671,7 +686,7 @@ func (g *Gateway) respond(ctx context.Context, peer *Peer, msg *store.Message, d
 		g.trace(msg.ID, "replied inline", kind)
 		return nil
 	}
-	outID, err := g.Send(ctx, peer, raw, kind, rec.ID, msg.ID)
+	outID, err := g.SendKeyed(ctx, peer, raw, kind, rec.ID, msg.ID, key)
 	if err != nil {
 		return err
 	}
@@ -680,7 +695,7 @@ func (g *Gateway) respond(ctx context.Context, peer *Peer, msg *store.Message, d
 	return nil
 }
 
-func (g *Gateway) buildReply(peer *Peer, dec *decoded, rec *pnr.PNR, outcomes map[string]string) ([]byte, string, error) {
+func (g *Gateway) buildReply(peer *Peer, dec *decoded, rec *pnr.PNR, outcomes map[string]string) ([]byte, string, string, error) {
 	switch dec.Format {
 	case store.FormatTypeB:
 		codes := map[string]airimp.ActionCode{}
@@ -689,7 +704,7 @@ func (g *Gateway) buildReply(peer *Peer, dec *decoded, rec *pnr.PNR, outcomes ma
 		}
 		text := airimp.BuildReply(dec.Airimp, codes, rec, g.Identity.Designator)
 		if text == "" {
-			return nil, "", nil
+			return nil, "", "", nil
 		}
 		out := &typeb.Message{
 			Priority:     "QU",
@@ -699,23 +714,24 @@ func (g *Gateway) buildReply(peer *Peer, dec *decoded, rec *pnr.PNR, outcomes ma
 			Text:         text,
 		}
 		raw, err := out.Encode(typeb.EncodeOptions{Charset: typeb.CharsetITA2, CRLF: true})
-		return raw, "AIRIMP/reply", err
+		return raw, "AIRIMP/reply", "", err
 
 	case store.FormatEDIFACT:
+		ref := nextControlRef()
 		ic, err := padis.BuildPAORES(dec.Edifact, rec, outcomes, rec.RecordLocator,
 			g.Identity.Designator, padis.BuildOptions{
 				Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
 				Recipient:  edifact.Party{ID: dec.EdifactSender, Qualifier: "ZZ"},
-				ControlRef: nextControlRef(),
+				ControlRef: ref,
 				MessageRef: "1",
 			})
 		if err != nil {
-			return nil, "", err
+			return nil, "", "", err
 		}
 		raw, err := ic.Encode(edifact.EncodeOptions{SegmentPerLine: true})
-		return raw, padis.MsgPAORES, err
+		return raw, padis.MsgPAORES, "unb:" + ref, err
 	}
-	return nil, "", nil
+	return nil, "", "", nil
 }
 
 // record writes an outbound message to the log without transmitting it.
@@ -740,6 +756,15 @@ func (g *Gateway) record(ctx context.Context, peer *Peer, raw []byte, kind, pnrI
 // Capture precedes transmission for the same reason it does inbound: a message
 // that went out must be in the log even if recording what happened to it fails.
 func (g *Gateway) Send(ctx context.Context, peer *Peer, raw []byte, kind, pnrID, correlationID string) (string, error) {
+	return g.SendKeyed(ctx, peer, raw, kind, pnrID, correlationID, "")
+}
+
+// SendKeyed is Send with an application-level key recorded against the message.
+//
+// For EDIFACT the key is the interchange control reference, which is what a
+// partner's CONTRL quotes back. Without it an acknowledgement has nothing to
+// match against and can only be filed as a divergence.
+func (g *Gateway) SendKeyed(ctx context.Context, peer *Peer, raw []byte, kind, pnrID, correlationID, key string) (string, error) {
 	now := time.Now().UTC()
 	sum := sha256.Sum256(raw)
 	out := &store.Message{
@@ -747,6 +772,7 @@ func (g *Gateway) Send(ctx context.Context, peer *Peer, raw []byte, kind, pnrID,
 		Transport: "link", Peer: peer.Name, Format: peer.Format, Kind: kind,
 		Raw: raw, SHA256: hex.EncodeToString(sum[:]), Size: len(raw),
 		Status: store.StatusSent, PNRID: pnrID, CorrelationID: correlationID,
+		DedupKey: key,
 	}
 	if err := g.Store.AppendMessage(ctx, out); err != nil {
 		return "", fmt.Errorf("gateway: capture outbound: %w", err)
@@ -888,4 +914,120 @@ func (g *Gateway) enqueueStatusChanges(ctx context.Context, rec *pnr.PNR, before
 		}
 		g.trace(msg.ID, "queued", queueName+": "+code)
 	}
+}
+
+// wantsCONTRL decides whether this peer should get a syntax and service report
+// for an interchange they sent.
+//
+// The default honours the sender's own request in UNB 0031, which is what the
+// field is for. Sending one unasked is not wrong, but it is traffic a partner
+// did not ask to pay for, so it takes saying so.
+func (p *Peer) wantsCONTRL(ic *edifact.Interchange, rejected bool) bool {
+	switch p.CONTRL {
+	case "never":
+		return false
+	case "always":
+		return true
+	case "errors":
+		return rejected
+	case "", "requested":
+		return ic != nil && ic.AckRequested()
+	}
+	return false
+}
+
+// sendCONTRL answers an EDIFACT interchange with a syntax and service report.
+//
+// Failures here are logged, not propagated. The interchange has already been
+// captured and is about to be applied; refusing the whole message because an
+// acknowledgement could not be built would turn a reporting problem into a
+// lost booking.
+func (g *Gateway) sendCONTRL(ctx context.Context, peer *Peer, msg *store.Message, dec *decoded) {
+	if dec.Format != store.FormatEDIFACT || dec.Interchange == nil {
+		return
+	}
+	report := edifact.Check(dec.Interchange)
+	if !peer.wantsCONTRL(dec.Interchange, report.Rejected()) {
+		return
+	}
+	// A CONTRL travels back the way the interchange came, so the parties swap.
+	ic, err := report.Build(edifact.CONTRLOptions{
+		Sender:        edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
+		Recipient:     edifact.Party{ID: dec.EdifactSender, Qualifier: "ZZ"},
+		ControlRef:    nextControlRef(),
+		SyntaxVersion: dec.Interchange.Syntax.Version,
+		Date:          msg.At.Format("060102"),
+		Time:          msg.At.Format("1504"),
+	})
+	if err != nil {
+		g.Log.Error("could not build a syntax and service report", "peer", peer.Name, "err", err)
+		return
+	}
+	raw, err := ic.Encode(edifact.EncodeOptions{})
+	if err != nil {
+		g.Log.Error("could not encode a syntax and service report", "peer", peer.Name, "err", err)
+		return
+	}
+	if _, err := g.Send(ctx, peer, raw, edifact.MsgCONTRL, "", msg.ID); err != nil {
+		g.Log.Error("could not send a syntax and service report", "peer", peer.Name, "err", err)
+		return
+	}
+	g.trace(msg.ID, "contrl", report.Describe())
+}
+
+// applyCONTRL records what a partner said about an interchange we sent.
+//
+// Delivery and acknowledgement are different facts. A transport that accepted
+// the bytes proves nothing about whether the partner could read them, and this
+// is the only place that difference becomes visible.
+func (g *Gateway) applyCONTRL(ctx context.Context, peer *Peer, msg *store.Message, dec *decoded, res *Result) error {
+	rep := dec.CONTRL
+	msg.Kind = edifact.MsgCONTRL
+	msg.Status = store.StatusApplied
+	res.Status = store.StatusApplied
+	g.trace(msg.ID, "contrl", rep.Describe())
+
+	subject, found, err := g.Store.FindOutboundByKey(ctx, peer.Name, "unb:"+rep.ControlRef)
+	if err != nil {
+		return fmt.Errorf("gateway: locate the acknowledged interchange: %w", err)
+	}
+	if !found {
+		// A report about something we have no record of sending is a real
+		// divergence, not noise: it means our view of the link and theirs
+		// disagree about what crossed it.
+		msg.Error = "reports on interchange " + rep.ControlRef + ", which this node has no record of sending"
+		g.trace(msg.ID, "contrl", msg.Error)
+		return nil
+	}
+	msg.CorrelationID = subject
+
+	out, err := g.Store.GetMessage(ctx, subject)
+	if err != nil {
+		return fmt.Errorf("gateway: read the acknowledged message: %w", err)
+	}
+	if rep.Rejected() {
+		out.Status = store.StatusRefused
+		out.Error = rep.Describe()
+	} else {
+		out.Status = store.StatusAcknowledged
+	}
+	if err := g.Store.UpdateMessage(ctx, out); err != nil {
+		return fmt.Errorf("gateway: record the acknowledgement: %w", err)
+	}
+	g.Bus.Publish(EvMessage, g.msgView(out))
+
+	// A refusal is somebody's problem, and nothing else will surface it: the
+	// booking looks sent and the partner is not acting on it.
+	if rep.Rejected() && g.Queues != nil && out.PNRID != "" {
+		if rec, err := g.Store.GetPNRByID(ctx, out.PNRID); err == nil {
+			if _, err := g.Queues.Place(ctx, &store.QueueItem{
+				Queue: store.QueueDivergence, PNRID: rec.ID, Locator: rec.RecordLocator,
+				Code: "contrl_rejected", MessageID: msg.ID,
+				Reason: peer.Name + " refused interchange " + rep.ControlRef + ": " + rep.Describe(),
+			}); err != nil {
+				g.Log.Error("could not queue a refused interchange", "peer", peer.Name, "err", err)
+			}
+		}
+	}
+	return nil
 }

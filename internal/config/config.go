@@ -213,6 +213,10 @@ type Peer struct {
 	// Addresses are further Type B addresses this link serves, beyond
 	// TTYAddress, used when routing on the address line.
 	Addresses []string `yaml:"addresses"`
+	// CONTRL is when to send a syntax and service report for an interchange
+	// this peer sends: "requested" (the default) honours the acknowledgement
+	// request in UNB 0031, "always", "errors" for rejections only, or "never".
+	CONTRL string `yaml:"contrl"`
 	// EDIFACTID is the UNB sender identification to address this peer with.
 	// Defaults to Carrier.
 	EDIFACTID string `yaml:"edifact_id"`

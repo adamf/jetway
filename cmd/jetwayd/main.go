@@ -368,7 +368,7 @@ func registerPeers(cfg *config.Config, gw *gateway.Gateway, router *egress.Route
 		}
 		gw.AddPeer(&gateway.Peer{
 			Name: p.Name, Carrier: p.Carrier, Format: format,
-			TTYAddress: p.TTYAddress, Addresses: p.Addresses,
+			TTYAddress: p.TTYAddress, Addresses: p.Addresses, CONTRL: p.CONTRL,
 		})
 		s, err := egress.Build(p, sessions, log)
 		if err != nil {

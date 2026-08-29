@@ -236,10 +236,11 @@ func (g *Gateway) RequestFromCarrier(ctx context.Context, rec *pnr.PNR, carrier 
 	}
 	switch peer.Format {
 	case store.FormatEDIFACT:
+		ref := nextControlRef()
 		ic, err := padis.BuildPAOREQ(rec, carrier, padis.BuildOptions{
 			Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
 			Recipient:  edifact.Party{ID: carrier, Qualifier: "ZZ"},
-			ControlRef: nextControlRef(), MessageRef: "1",
+			ControlRef: ref, MessageRef: "1",
 		})
 		if err != nil {
 			return "", err
@@ -248,7 +249,7 @@ func (g *Gateway) RequestFromCarrier(ctx context.Context, rec *pnr.PNR, carrier 
 		if err != nil {
 			return "", err
 		}
-		return g.Send(ctx, peer, raw, padis.MsgPAOREQ, rec.ID, "")
+		return g.SendKeyed(ctx, peer, raw, padis.MsgPAOREQ, rec.ID, "", "unb:"+ref)
 
 	default:
 		// SS reports a sale made from availability; NN asks for one. Sending NN

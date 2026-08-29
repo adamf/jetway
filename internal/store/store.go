@@ -64,6 +64,13 @@ const (
 	StatusSent Status = "sent"
 	// StatusUndeliverable applies to outbound traffic no transport accepted.
 	StatusUndeliverable Status = "undeliverable"
+	// StatusAcknowledged means a partner confirmed receipt of outbound traffic,
+	// which on an EDIFACT link is a CONTRL saying so. Delivery and
+	// acknowledgement are different facts: a transport that took the bytes
+	// proves nothing about whether the partner could read them.
+	StatusAcknowledged Status = "acknowledged"
+	// StatusRefused means a partner received outbound traffic and rejected it.
+	StatusRefused Status = "refused"
 )
 
 // Format names the wire encoding.
@@ -170,10 +177,16 @@ type Store interface {
 	GetMessage(ctx context.Context, id string) (*Message, error)
 	ListMessages(ctx context.Context, f MessageFilter) ([]*Message, error)
 
-	// FindByDedupKey returns the id of an earlier message from the same peer
-	// with the same application-level key, which is how a retransmission is
-	// recognised without re-applying it.
+	// FindByDedupKey returns the id of an earlier inbound message from the same
+	// peer with the same application-level key, which is how a retransmission
+	// is recognised without re-applying it.
 	FindByDedupKey(ctx context.Context, peer, key string) (string, bool, error)
+
+	// FindOutboundByKey returns the id of a message sent to a peer carrying the
+	// given application-level key. It is the other direction of the same
+	// question, and is how an acknowledgement is matched to what it
+	// acknowledges.
+	FindOutboundByKey(ctx context.Context, peer, key string) (string, bool, error)
 
 	// CreatePNR stores a new record at version 1 along with the events that
 	// created it.

@@ -175,6 +175,10 @@ func (ic *Interchange) PreparedDate() (date, time string) {
 	return c.Get(0), c.Get(1)
 }
 
+// AckRequested reports whether UNB 0031 asks for an acknowledgement, which is
+// the sender requesting a CONTRL for this interchange.
+func (ic *Interchange) AckRequested() bool { return ic.Header.Value(8) == "1" }
+
 // TestIndicator reports whether UNB 0035 marks this as test traffic. A gateway
 // must never apply test interchanges to production state.
 func (ic *Interchange) TestIndicator() bool { return ic.Header.Value(10) == "1" }

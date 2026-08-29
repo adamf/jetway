@@ -143,14 +143,22 @@ func (s *Postgres) ListMessages(ctx context.Context, f MessageFilter) ([]*Messag
 }
 
 func (s *Postgres) FindByDedupKey(ctx context.Context, peer, key string) (string, bool, error) {
+	return s.findKey(ctx, Inbound, peer, key)
+}
+
+func (s *Postgres) FindOutboundByKey(ctx context.Context, peer, key string) (string, bool, error) {
+	return s.findKey(ctx, Outbound, peer, key)
+}
+
+func (s *Postgres) findKey(ctx context.Context, dir Direction, peer, key string) (string, bool, error) {
 	if key == "" {
 		return "", false, nil
 	}
 	var id string
 	err := s.pool.QueryRow(ctx, `
 		SELECT id FROM message
-		WHERE peer=$1 AND dedup_key=$2 AND direction='in'
-		ORDER BY id ASC LIMIT 1`, peer, key).Scan(&id)
+		WHERE peer=$1 AND dedup_key=$2 AND direction=$3
+		ORDER BY id ASC LIMIT 1`, peer, key, string(dir)).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}

@@ -33,7 +33,11 @@ type Mem struct {
 	byLocator map[string]string   // locator -> id
 	events    map[string][]Event
 
-	dedup   map[string]string // peer|key -> message id
+	// dedup is keyed by direction, peer and application key. Direction is part
+	// of the key because an acknowledgement we sent and a request a partner
+	// sent can legitimately carry the same reference, and because the Postgres
+	// backend has always scoped this lookup by direction.
+	dedup   map[string]string // direction|peer|key -> message id
 	counter uint64
 
 	queue        map[string]*QueueItem // by id
@@ -90,7 +94,7 @@ func (s *Mem) AppendMessage(ctx context.Context, m *Message) error {
 		sort.Strings(s.messageIDs)
 	}
 	if m.DedupKey != "" {
-		k := m.Peer + "|" + m.DedupKey
+		k := dedupKey(m.Direction, m.Peer, m.DedupKey)
 		if _, exists := s.dedup[k]; !exists {
 			s.dedup[k] = m.ID
 		}
@@ -109,7 +113,7 @@ func (s *Mem) trimMessagesLocked() {
 	for _, id := range drop {
 		if m, ok := s.messages[id]; ok {
 			if m.DedupKey != "" {
-				k := m.Peer + "|" + m.DedupKey
+				k := dedupKey(m.Direction, m.Peer, m.DedupKey)
 				if s.dedup[k] == id {
 					delete(s.dedup, k)
 				}
@@ -169,7 +173,7 @@ func (s *Mem) UpdateMessage(ctx context.Context, m *Message) error {
 	// is only known by the time of this update. Index it here or a
 	// retransmission will never be recognised.
 	if m.DedupKey != "" {
-		k := m.Peer + "|" + m.DedupKey
+		k := dedupKey(m.Direction, m.Peer, m.DedupKey)
 		if _, exists := s.dedup[k]; !exists {
 			s.dedup[k] = m.ID
 		}
@@ -220,13 +224,25 @@ func (s *Mem) ListMessages(ctx context.Context, f MessageFilter) ([]*Message, er
 	return out, nil
 }
 
+func dedupKey(dir Direction, peer, key string) string {
+	return string(dir) + "|" + peer + "|" + key
+}
+
 func (s *Mem) FindByDedupKey(ctx context.Context, peer, key string) (string, bool, error) {
+	return s.findKey(Inbound, peer, key)
+}
+
+func (s *Mem) FindOutboundByKey(ctx context.Context, peer, key string) (string, bool, error) {
+	return s.findKey(Outbound, peer, key)
+}
+
+func (s *Mem) findKey(dir Direction, peer, key string) (string, bool, error) {
 	if key == "" {
 		return "", false, nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	id, ok := s.dedup[peer+"|"+key]
+	id, ok := s.dedup[dedupKey(dir, peer, key)]
 	return id, ok, nil
 }
 

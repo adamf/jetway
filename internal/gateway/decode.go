@@ -52,6 +52,12 @@ type decoded struct {
 
 	Edifact       edifact.Message
 	EdifactSender string
+	// Interchange is the whole decoded envelope, kept because a CONTRL reports
+	// on the interchange rather than on the message inside it.
+	Interchange *edifact.Interchange
+	// CONTRL is set when the inbound message is itself a syntax and service
+	// report, in which case it says what a partner made of something we sent.
+	CONTRL *edifact.Report
 
 	peer *Peer
 	// self is the receiving node's designator.
@@ -156,6 +162,18 @@ func (g *Gateway) decodeEDIFACT(peer *Peer, raw []byte, opts IngestOptions) (*de
 	d.EdifactSender = ic.Sender().ID
 	d.Kind = d.Edifact.ID().Type
 	d.Test = ic.TestIndicator()
+	d.Interchange = ic
+
+	// A CONTRL is about an interchange we sent, so it touches no record and
+	// must not be run through the record grammar.
+	if edifact.IsCONTRL(d.Edifact) {
+		rep, err := edifact.ParseCONTRL(d.Edifact)
+		if err != nil {
+			return nil, fmt.Errorf("gateway: %w", err)
+		}
+		d.CONTRL = rep
+		return d, nil
+	}
 
 	// The interchange control reference is the sender's own idempotency key and
 	// is exactly what a retransmission repeats.
