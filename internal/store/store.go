@@ -115,6 +115,12 @@ type Message struct {
 	// message class carries none.
 	DedupKey string `json:"dedup_key,omitempty"`
 
+	// PossibleDuplicate records the Type B PDM indicator. Inbound it means the
+	// sender said this may be a retransmission; outbound it means we marked it
+	// as one on redelivery. A duplicate that arrives flagged is the protocol
+	// working; one that arrives unflagged is worth an operator's attention.
+	PossibleDuplicate bool `json:"possible_duplicate,omitempty"`
+
 	// PNRID links the message to the record it touched.
 	PNRID string `json:"pnr_id,omitempty"`
 	// CorrelationID ties a response back to the request that provoked it, and
@@ -183,6 +189,9 @@ type Store interface {
 	// NextLocatorCounter returns a value that has never been returned before.
 	// It is the uniqueness source behind record locator allocation.
 	NextLocatorCounter(ctx context.Context) (uint64, error)
+
+	// QueueStore holds the work queues records are placed on.
+	QueueStore
 
 	Close() error
 }

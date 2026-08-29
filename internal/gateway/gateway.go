@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/adamf/jetway/internal/queue"
 	"github.com/adamf/jetway/internal/store"
 	"github.com/adamf/jetway/internal/ulid"
 	"github.com/adamf/jetway/pkg/airimp"
@@ -51,6 +52,10 @@ type Peer struct {
 	Format store.Format
 	// TTYAddress is the peer's Type B address, used when Format is typeb.
 	TTYAddress string
+	// Addresses are further Type B addresses this link serves, beyond
+	// TTYAddress. A carrier commonly has one address per department and one
+	// circuit, so routing on the address needs the whole set.
+	Addresses []string
 	// AirimpProfile overrides the AIRIMP grammar for this link. Nil uses the
 	// default profile.
 	AirimpProfile *airimp.Profile
@@ -113,13 +118,27 @@ type Gateway struct {
 	// and every segment is then requested -- correct, just slower.
 	Avail *avail.Cache
 
+	// Queues turns partner answers into work. Nil means this node keeps no
+	// queues, which is right for a simulated carrier and wrong for a GDS.
+	Queues *queue.Manager
+
 	locators *pnr.LocatorAllocator
+
+	// Relay makes the gateway forward messages addressed to peers other than
+	// itself. It is off by default and should stay off unless the deployment is
+	// meant to be a switch: a node that relays on behalf of anyone who can
+	// reach it is an open relay, spending someone else's link budget under our
+	// own originator address.
+	Relay bool
 
 	mu    sync.RWMutex
 	peers map[string]*Peer
 	// byCarrier routes an outbound message for a carrier to the link that
 	// serves it.
 	byCarrier map[string]*Peer
+	// byAddress routes on the Type B address line, which is how a message with
+	// several addressees reaches all of them.
+	byAddress map[string]*Peer
 }
 
 // New builds a gateway.
@@ -132,6 +151,7 @@ func New(id Identity, st store.Store, bus *Bus, log *slog.Logger, locatorSecret 
 		locators:  pnr.NewLocatorAllocator(locatorSecret),
 		peers:     map[string]*Peer{},
 		byCarrier: map[string]*Peer{},
+		byAddress: map[string]*Peer{},
 	}
 }
 
@@ -143,6 +163,79 @@ func (g *Gateway) AddPeer(p *Peer) {
 	if p.Carrier != "" {
 		g.byCarrier[p.Carrier] = p
 	}
+	for _, a := range append([]string{p.TTYAddress}, p.Addresses...) {
+		if a = normaliseAddress(a); a != "" {
+			g.byAddress[a] = p
+		}
+	}
+}
+
+// normaliseAddress upper-cases and trims a TTY address for use as a map key.
+func normaliseAddress(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
+
+// PeerByAddress resolves a Type B address to the link that serves it.
+func (g *Gateway) PeerByAddress(addr string) *Peer {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.byAddress[normaliseAddress(addr)]
+}
+
+// IsSelf reports whether an address belongs to this node.
+func (g *Gateway) IsSelf(addr string) bool {
+	a := normaliseAddress(addr)
+	return a != "" && a == normaliseAddress(g.Identity.TTYAddress)
+}
+
+// Delivery is what happened to one addressee of a fanned-out message.
+type Delivery struct {
+	Address string `json:"address"`
+	// Peer is the link the address resolved to, empty when it did not resolve.
+	Peer string `json:"peer,omitempty"`
+	// MessageID is the outbound log entry, empty when nothing was sent.
+	MessageID string `json:"message_id,omitempty"`
+	// Self reports that the address is this node, so the message terminates
+	// here rather than being forwarded.
+	Self bool `json:"self,omitempty"`
+	// Err is why an addressee was not reached.
+	Err string `json:"error,omitempty"`
+}
+
+// Fanout delivers one message to every address on its priority line.
+//
+// A Type B message may carry several addressees and the network is expected to
+// deliver a copy to each. Routing on the configured peer name alone cannot do
+// that: it can only ever reach the one link a message was handed to.
+//
+// The bytes are sent unchanged. Rewriting the address line per recipient would
+// make each copy a different message from the one in the log, and the address
+// line is part of what a partner may check.
+func (g *Gateway) Fanout(ctx context.Context, tb *typeb.Message, raw []byte,
+	kind, pnrID, correlationID string) []Delivery {
+	out := make([]Delivery, 0, len(tb.Destinations))
+	for _, d := range tb.Destinations {
+		addr := d.String()
+		switch {
+		case g.IsSelf(addr):
+			out = append(out, Delivery{Address: addr, Self: true})
+			continue
+		default:
+		}
+		peer := g.PeerByAddress(addr)
+		if peer == nil {
+			// Not routable here. Recorded rather than dropped: on a real
+			// network this is the point where a message would go to the
+			// switch's undeliverable queue for an operator to look at.
+			out = append(out, Delivery{Address: addr, Err: "no link serves this address"})
+			continue
+		}
+		id, err := g.Send(ctx, peer, raw, kind, pnrID, correlationID)
+		del := Delivery{Address: addr, Peer: peer.Name, MessageID: id}
+		if err != nil {
+			del.Err = err.Error()
+		}
+		out = append(out, del)
+	}
+	return out
 }
 
 // Peer returns a configured peer by link name.
@@ -287,6 +380,7 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 	msg.Format = dec.Format
 	msg.Kind = dec.Kind
 	msg.DedupKey = dec.DedupKey
+	msg.PossibleDuplicate = dec.PossibleDuplicate
 	msg.Diagnostics = dec.Diagnostics
 	msg.Status = store.StatusDecoded
 	g.trace(msg.ID, "decoded", string(dec.Format)+" "+dec.Kind)
@@ -296,11 +390,20 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 	if dec.DedupKey != "" {
 		if prev, seen, err := g.Store.FindByDedupKey(ctx, peer.Name, dec.DedupKey); err == nil && seen && prev != msg.ID {
 			msg.Status = store.StatusRejected
-			msg.Error = "duplicate of " + prev
 			msg.CorrelationID = prev
 			res.Duplicate = true
 			res.Status = store.StatusRejected
-			g.trace(msg.ID, "duplicate", "already processed as "+prev)
+			// A repeat the sender flagged PDM is the store-and-forward network
+			// behaving as designed. An unflagged one means the sender believes
+			// this is a new instruction, so say so differently: the bytes are
+			// suppressed either way, but only one of them is a divergence.
+			if dec.PossibleDuplicate {
+				msg.Error = "retransmission of " + prev + ", marked PDM by the sender"
+				g.trace(msg.ID, "duplicate", "sender marked PDM; already processed as "+prev)
+			} else {
+				msg.Error = "duplicate of " + prev + ", not marked PDM"
+				g.trace(msg.ID, "duplicate", "already processed as "+prev+" and not marked PDM")
+			}
 			return nil
 		}
 	}
@@ -313,10 +416,74 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 		return nil
 	}
 
+	// Transit traffic: addresses on this message that belong to other links.
+	if g.Relay && dec.TypeB != nil && len(dec.TypeB.Destinations) > 0 {
+		if done := g.relay(ctx, peer, msg, dec, res); done {
+			return nil
+		}
+	}
+
 	if dec.AVS != nil {
 		return g.applyAvailability(ctx, msg, dec, res)
 	}
 	return g.apply(ctx, peer, msg, dec, res, opts)
+}
+
+// relay forwards a message to the addressees that are not this node, and
+// reports whether the message was pure transit and so needs no further
+// processing here.
+//
+// The address that matters most is the one we skip. Forwarding to the link the
+// message arrived on sends it straight back to its sender, and on a
+// store-and-forward network that is a loop that survives restarts.
+func (g *Gateway) relay(ctx context.Context, from *Peer, msg *store.Message, dec *decoded, res *Result) bool {
+	forUs := false
+	var onward []typeb.Address
+	for _, d := range dec.TypeB.Destinations {
+		addr := d.String()
+		if g.IsSelf(addr) {
+			forUs = true
+			continue
+		}
+		if p := g.PeerByAddress(addr); p != nil && p.Name == from.Name {
+			// Addressed to the sender's own link. Never send it back.
+			g.trace(msg.ID, "relay", "skipping "+addr+": it is the link this arrived on")
+			continue
+		}
+		onward = append(onward, d)
+	}
+	if len(onward) == 0 {
+		return false
+	}
+
+	fan := *dec.TypeB
+	fan.Destinations = onward
+	deliveries := g.Fanout(ctx, &fan, msg.Raw, "relay", "", msg.ID)
+	sent := 0
+	for _, d := range deliveries {
+		if d.Err == "" && d.MessageID != "" {
+			sent++
+			res.Replies = append(res.Replies, d.MessageID)
+			continue
+		}
+		g.trace(msg.ID, "relay", d.Address+": "+d.Err)
+	}
+	g.trace(msg.ID, "relay", fmt.Sprintf("forwarded to %d of %d addressees", sent, len(onward)))
+
+	if forUs {
+		// We are an addressee too, so the message is ours to apply as well.
+		return false
+	}
+	// Pure transit. Nothing here to apply, and inventing a record from a
+	// message addressed to somebody else would be worse than doing nothing.
+	msg.Status = store.StatusApplied
+	res.Status = store.StatusApplied
+	if sent == 0 {
+		msg.Status = store.StatusUndeliverable
+		msg.Error = "addressed elsewhere and no addressee could be routed"
+		res.Status = store.StatusUndeliverable
+	}
+	return true
 }
 
 // applyAvailability folds an availability message into the cache.
@@ -359,6 +526,10 @@ func (g *Gateway) apply(ctx context.Context, peer *Peer, msg *store.Message, dec
 			return err
 		}
 		expected := rec.Version
+		// Snapshot before applying: a placement is driven by what changed, not
+		// by what the record happens to say afterwards. Without this, any later
+		// message touching a confirmed record would re-raise the confirmation.
+		before := segmentStatuses(rec)
 		changes := dec.applyTo(rec, peer, msg.At)
 		rec.UpdatedAt = msg.At
 
@@ -392,6 +563,7 @@ func (g *Gateway) apply(ctx context.Context, peer *Peer, msg *store.Message, dec
 			g.Bus.Publish(EvPNR, g.pnrView(rec))
 			g.trace(msg.ID, "applied", fmt.Sprintf("%s v%d, %d change(s)",
 				rec.RecordLocator, rec.Version, len(changes)))
+			g.enqueueStatusChanges(ctx, rec, before, msg)
 			return g.respond(ctx, peer, msg, dec, rec, res, opts)
 
 		case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrDuplicate):
@@ -670,4 +842,50 @@ func TrimForLog(raw []byte, n int) string {
 		return s[:n] + "..."
 	}
 	return s
+}
+
+// segmentStatuses snapshots segment statuses by segment key.
+//
+// Keying on the segment rather than its position matters because applying a
+// message can add segments and renumber the rest.
+func segmentStatuses(p *pnr.PNR) map[string]string {
+	out := make(map[string]string, len(p.Segments))
+	for i := range p.Segments {
+		out[p.Segments[i].Key()] = p.Segments[i].Status
+	}
+	return out
+}
+
+// enqueueStatusChanges places the record on a queue for each segment whose
+// status a partner just changed into something a person has to act on.
+//
+// Failures are logged, never propagated: the message has already been applied
+// and acknowledged, and unwinding that because a queue write failed would trade
+// a missed task for a lost booking.
+func (g *Gateway) enqueueStatusChanges(ctx context.Context, rec *pnr.PNR, before map[string]string, msg *store.Message) {
+	if g.Queues == nil {
+		return
+	}
+	for i := range rec.Segments {
+		seg := &rec.Segments[i]
+		was := before[seg.Key()]
+		if seg.Status == was {
+			continue
+		}
+		queueName, code, reason, ok := queue.ForStatus(seg.Status)
+		if !ok {
+			continue
+		}
+		if was != "" {
+			reason = fmt.Sprintf("%s: %s was %s, now %s", seg.Describe(), reason, was, seg.Status)
+		} else {
+			reason = fmt.Sprintf("%s: %s", seg.Describe(), reason)
+		}
+		if _, err := g.Queues.PlaceForSegment(ctx, rec, seg, queueName, code, reason, msg.ID); err != nil {
+			g.Log.Error("could not queue a record for action",
+				"locator", rec.RecordLocator, "queue", queueName, "err", err)
+			continue
+		}
+		g.trace(msg.ID, "queued", queueName+": "+code)
+	}
 }

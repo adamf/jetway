@@ -49,11 +49,11 @@ func (s *Postgres) AppendMessage(ctx context.Context, m *Message) error {
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO message (id, direction, at, transport, peer, format, kind,
 		                     raw, sha256, size_bytes, status, error, dedup_key,
-		                     pnr_id, correlation_id, diagnostics)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		                     pnr_id, correlation_id, diagnostics, possible_duplicate)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
 		m.ID, m.Direction, m.At, m.Transport, m.Peer, m.Format, nullIfEmpty(m.Kind),
 		m.Raw, m.SHA256, m.Size, m.Status, nullIfEmpty(m.Error), nullIfEmpty(m.DedupKey),
-		nullIfEmpty(m.PNRID), nullIfEmpty(m.CorrelationID), diags)
+		nullIfEmpty(m.PNRID), nullIfEmpty(m.CorrelationID), diags, m.PossibleDuplicate)
 	if err != nil {
 		return fmt.Errorf("store: append message: %w", err)
 	}
@@ -67,10 +67,12 @@ func (s *Postgres) UpdateMessage(ctx context.Context, m *Message) error {
 	}
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE message SET status=$2, error=$3, kind=$4, format=$5,
-		                   pnr_id=$6, correlation_id=$7, dedup_key=$8, diagnostics=$9
+		                   pnr_id=$6, correlation_id=$7, dedup_key=$8, diagnostics=$9,
+		                   possible_duplicate=$10
 		WHERE id=$1`,
 		m.ID, m.Status, nullIfEmpty(m.Error), nullIfEmpty(m.Kind), m.Format,
-		nullIfEmpty(m.PNRID), nullIfEmpty(m.CorrelationID), nullIfEmpty(m.DedupKey), diags)
+		nullIfEmpty(m.PNRID), nullIfEmpty(m.CorrelationID), nullIfEmpty(m.DedupKey), diags,
+		m.PossibleDuplicate)
 	if err != nil {
 		return fmt.Errorf("store: update message: %w", err)
 	}
@@ -82,14 +84,15 @@ func (s *Postgres) UpdateMessage(ctx context.Context, m *Message) error {
 
 const messageColumns = `id, direction, at, transport, peer, format,
 	coalesce(kind,''), raw, sha256, size_bytes, status, coalesce(error,''),
-	coalesce(dedup_key,''), coalesce(pnr_id,''), coalesce(correlation_id,''), diagnostics`
+	coalesce(dedup_key,''), coalesce(pnr_id,''), coalesce(correlation_id,''), diagnostics,
+	possible_duplicate`
 
 func scanMessage(row pgx.Row) (*Message, error) {
 	var m Message
 	var diags []byte
 	err := row.Scan(&m.ID, &m.Direction, &m.At, &m.Transport, &m.Peer, &m.Format,
 		&m.Kind, &m.Raw, &m.SHA256, &m.Size, &m.Status, &m.Error,
-		&m.DedupKey, &m.PNRID, &m.CorrelationID, &diags)
+		&m.DedupKey, &m.PNRID, &m.CorrelationID, &diags, &m.PossibleDuplicate)
 	if err != nil {
 		return nil, err
 	}
@@ -359,4 +362,112 @@ func nonNilDiags(d []Diagnostic) []Diagnostic {
 		return []Diagnostic{}
 	}
 	return d
+}
+
+const queueColumns = `id, queue, pnr_id, coalesce(locator,''), code, reason,
+	coalesce(message_id,''), segment_ref, placed_at, placed_by,
+	worked_at, coalesce(worked_by,''), coalesce(note,'')`
+
+func scanQueueItem(row pgx.Row) (*QueueItem, error) {
+	var q QueueItem
+	if err := row.Scan(&q.ID, &q.Queue, &q.PNRID, &q.Locator, &q.Code, &q.Reason,
+		&q.MessageID, &q.SegmentRef, &q.PlacedAt, &q.PlacedBy,
+		&q.WorkedAt, &q.WorkedBy, &q.Note); err != nil {
+		return nil, err
+	}
+	return &q, nil
+}
+
+func (s *Postgres) Enqueue(ctx context.Context, item *QueueItem) error {
+	if item.ID == "" {
+		item.ID = ulid.New()
+	}
+	if item.PlacedAt.IsZero() {
+		item.PlacedAt = time.Now().UTC()
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO queue_item (id, queue, pnr_id, locator, code, reason,
+		                        message_id, segment_ref, placed_at, placed_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		item.ID, item.Queue, item.PNRID, nullIfEmpty(item.Locator), item.Code, item.Reason,
+		nullIfEmpty(item.MessageID), item.SegmentRef, item.PlacedAt, item.PlacedBy)
+	if err != nil {
+		// The partial unique index fires when this record is already pending on
+		// this queue for this reason, which is the sweeper running again rather
+		// than an error.
+		if isUniqueViolation(err) {
+			return ErrDuplicate
+		}
+		return fmt.Errorf("store: enqueue: %w", err)
+	}
+	return nil
+}
+
+func (s *Postgres) WorkQueueItem(ctx context.Context, id, by, note string) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE queue_item SET worked_at=now(), worked_by=$2, note=$3
+		WHERE id=$1 AND worked_at IS NULL`, id, by, nullIfEmpty(note))
+	if err != nil {
+		return fmt.Errorf("store: work queue item: %w", err)
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+	// Nothing updated: either the item does not exist or someone already
+	// worked it. Those are different answers to the caller.
+	var exists bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT true FROM queue_item WHERE id=$1`, id).Scan(&exists); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	return ErrConflict
+}
+
+func (s *Postgres) ListQueue(ctx context.Context, f QueueFilter) ([]*QueueItem, error) {
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+queueColumns+` FROM queue_item
+		WHERE ($1='' OR queue=$1)
+		  AND ($2='' OR pnr_id=$2)
+		  AND ($3 OR worked_at IS NULL)
+		ORDER BY id DESC LIMIT $4`,
+		f.Queue, f.PNRID, f.IncludeWorked, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*QueueItem
+	for rows.Next() {
+		q, err := scanQueueItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
+func (s *Postgres) QueueCounts(ctx context.Context) (map[string]int, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT queue, count(*) FROM queue_item WHERE worked_at IS NULL GROUP BY queue`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var name string
+		var n int
+		if err := rows.Scan(&name, &n); err != nil {
+			return nil, err
+		}
+		out[name] = n
+	}
+	return out, rows.Err()
 }

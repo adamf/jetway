@@ -156,6 +156,28 @@ button.ghost:hover{background:var(--panel-2);color:var(--ink)}
 .st.received,.st.decoded{color:var(--ink-3);background:var(--panel-2)}
 
 /* ---------- detail ---------- */
+.qbadge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:9px;
+  background:var(--accent);color:#fff;font:600 10px/1.5 var(--sans);vertical-align:middle}
+.qlist{display:flex;flex-direction:column;padding:6px 0}
+.qrow{display:flex;align-items:center;gap:10px;padding:9px 14px;cursor:pointer;
+  border-left:2px solid transparent;font:12px/1.3 var(--sans)}
+.qrow:hover{background:var(--panel-2)}
+.qrow.on{background:var(--accent-soft);border-left-color:var(--accent)}
+.qrow .n{margin-left:auto;font:600 11px/1 var(--mono);color:var(--ink-3)}
+.qrow.has .n{color:var(--accent)}
+.qitem{padding:11px 14px;border-bottom:1px solid var(--line-2)}
+.qitem .top{display:flex;align-items:baseline;gap:8px}
+.qitem .why{color:var(--ink-2);font:12px/1.5 var(--sans);margin-top:3px}
+.qitem .meta{color:var(--ink-3);font:10px/1.4 var(--mono);margin-top:4px;text-transform:uppercase;
+  letter-spacing:.04em}
+.qitem.done{opacity:.55}
+.qtoggle{display:inline-flex;align-items:center;gap:6px;margin:0 0 0 auto;width:auto;
+  color:var(--ink-3);font:11px/1 var(--sans);letter-spacing:0;text-transform:none}
+.qtoggle input{width:auto;margin:0}
+.qwork{margin-left:auto;width:auto;flex:none;font:600 10px/1 var(--sans);text-transform:uppercase;
+  letter-spacing:.06em;padding:5px 9px;border:1px solid var(--line);border-radius:4px;
+  background:var(--panel);color:var(--ink-2);cursor:pointer}
+.qwork:hover{border-color:var(--accent);color:var(--accent)}
 .tabs{display:flex;gap:2px;padding:8px 12px 0;border-bottom:1px solid var(--line);
   background:var(--panel);flex-shrink:0}
 .tab{font:600 11px/1 var(--sans);letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);
@@ -250,6 +272,7 @@ pre.raw{margin:0;padding:12px;background:var(--panel-2);border:1px solid var(--l
   <nav class="views" id="views">
     <button class="view on" data-view="flow">Message flow</button>
     <button class="view" data-view="records">Records</button>
+    <button class="view" data-view="queues">Queues <span class="qbadge" id="qtotal" hidden>0</span></button>
   </nav>
   <div class="links" id="links"></div>
   <a class="repo" href="https://github.com/adamf/jetway" target="_blank" rel="noopener noreferrer"
@@ -392,6 +415,28 @@ pre.raw{margin:0;padding:12px;background:var(--panel-2);border:1px solid var(--l
   </section>
 </main>
 
+<main id="view-queues" hidden>
+  <section class="col">
+    <div class="tabs"><span class="tab on" style="cursor:default">Work queues</span></div>
+    <div class="qlist" id="qlist"></div>
+    <div style="padding:12px 14px;border-top:1px solid var(--line);color:var(--ink-3);
+                font:11px/1.6 var(--sans)">
+      A queue is a record waiting for someone to act. Partner replies land here as they
+      arrive; the sweeper adds what only time reveals &mdash; a request nobody answered,
+      a ticketing limit that passed.
+    </div>
+  </section>
+  <section class="col" style="grid-column:2 / span 2">
+    <div class="recbar">
+      <strong id="qname" style="font:600 12px/1 var(--sans);text-transform:uppercase;
+              letter-spacing:.06em;color:var(--ink-2)">All queues</strong>
+      <label class="qtoggle"><input type="checkbox" id="qworked"> show worked</label>
+      <span class="badge" id="qcount">0</span>
+    </div>
+    <div class="scroll" id="qitems"><div class="empty">Nothing waiting.</div></div>
+  </section>
+</main>
+
 <script>
 "use strict";
 const $ = s => document.querySelector(s);
@@ -529,6 +574,7 @@ function connect(){
   src.addEventListener("pnr", e => { const d = payload(e); onPnr(d); });
   src.addEventListener("link", () => loadStatus());
   src.addEventListener("avail", () => schedule("avail", refreshAvail));
+  src.addEventListener("queue", () => schedule("queue", refreshQueues));
   src.addEventListener("trace", () => {});
   src.onerror = () => {};
 }
@@ -940,11 +986,97 @@ function renderRecordCards(box, d, p){
 document.querySelectorAll("#views .view").forEach(b => b.addEventListener("click", () => {
   document.querySelectorAll("#views .view").forEach(x => x.classList.remove("on"));
   b.classList.add("on");
-  const records = b.dataset.view === "records";
-  $("#view-flow").hidden = records;
-  $("#view-records").hidden = !records;
-  if (records){ refreshPnrs(); renderRecords(); }
+  const v = b.dataset.view;
+  $("#view-flow").hidden    = v !== "flow";
+  $("#view-records").hidden = v !== "records";
+  $("#view-queues").hidden  = v !== "queues";
+  if (v === "records"){ refreshPnrs(); renderRecords(); }
+  if (v === "queues") refreshQueues();
 }));
+
+/* ---------------- queues ---------------- */
+state.queue = null;        // selected queue name, null means all
+state.queueCounts = [];
+
+async function refreshQueues(){
+  try {
+    const qs = await fetch("/api/queues").then(r => r.json());
+    state.queueCounts = qs.queues || [];
+    const total = qs.pending || 0;
+    const badge = $("#qtotal");
+    badge.textContent = total; badge.hidden = total === 0;
+    renderQueueList();
+    await loadQueueItems();
+  } catch (e) { /* the stream will retry */ }
+}
+
+function renderQueueList(){
+  const list = $("#qlist"); list.innerHTML = "";
+  const all = el("div", "qrow" + (state.queue === null ? " on" : ""));
+  all.appendChild(el("span", null, "All queues"));
+  const t = state.queueCounts.reduce((a, q) => a + q.pending, 0);
+  all.appendChild(el("span", "n", String(t)));
+  all.addEventListener("click", () => { state.queue = null; renderQueueList(); loadQueueItems(); });
+  list.appendChild(all);
+
+  for (const q of state.queueCounts){
+    const row = el("div", "qrow" + (state.queue === q.name ? " on" : "") + (q.pending ? " has" : ""));
+    row.appendChild(el("span", null, q.name));
+    row.appendChild(el("span", "n", String(q.pending)));
+    row.addEventListener("click", () => { state.queue = q.name; renderQueueList(); loadQueueItems(); });
+    list.appendChild(row);
+  }
+}
+
+async function loadQueueItems(){
+  const name = state.queue || "all";
+  const worked = $("#qworked").checked ? "?worked=1" : "";
+  $("#qname").textContent = state.queue ? state.queue : "All queues";
+  let items = [];
+  try {
+    items = (await fetch(`/api/queue/${encodeURIComponent(name)}${worked}`).then(r => r.json())).items || [];
+  } catch (e) { return; }
+  const box = $("#qitems"); box.innerHTML = "";
+  $("#qcount").textContent = items.length;
+  if (!items.length){ box.appendChild(el("div", "empty", "Nothing waiting.")); return; }
+  for (const it of items) box.appendChild(queueItem(it));
+}
+
+const fmtTime = t => t ? new Date(t).toLocaleTimeString() : "";
+
+function queueItem(it){
+  const d = el("div", "qitem" + (it.worked_at ? " done" : ""));
+  const top = el("div", "top");
+  const loc = el("span", "loc", it.locator || "(no locator)");
+  loc.style.cssText = "font:600 12px/1 var(--mono);letter-spacing:.06em;cursor:pointer";
+  loc.addEventListener("click", () => {
+    if (!it.locator) return;
+    document.querySelector('#views .view[data-view="records"]').click();
+    selectPnr(it.locator);
+  });
+  top.appendChild(loc);
+  top.appendChild(el("span", "badge", it.queue));
+  if (!it.worked_at){
+    const b = el("button", "qwork", "Work");
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      const r = await fetch(`/api/queue/item/${encodeURIComponent(it.id)}/work?by=console`, {method:"POST"});
+      // A 409 means somebody else cleared it first; refreshing shows the truth
+      // either way, so both paths do the same thing.
+      if (!r.ok && r.status !== 409) b.disabled = false;
+      refreshQueues();
+    });
+    top.appendChild(b);
+  }
+  d.appendChild(top);
+  d.appendChild(el("div", "why", it.reason || it.code));
+  const bits = [it.code, "placed by " + (it.placed_by || "?"), fmtTime(it.placed_at)];
+  if (it.worked_at) bits.push("worked by " + (it.worked_by || "?") + " " + fmtTime(it.worked_at));
+  d.appendChild(el("div", "meta", bits.join("  \u00b7  ")));
+  return d;
+}
+
+$("#qworked").addEventListener("change", loadQueueItems);
 
 const interline = p => new Set((p.segments||[]).map(s => s.carrier).filter(Boolean)).size > 1;
 

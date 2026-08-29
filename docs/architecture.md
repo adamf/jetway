@@ -31,16 +31,22 @@ bytes from a partner
       ▼
 ┌─────────────┐  by the sender's own reference where one exists — an EDIFACT
 │ 4. dedupe   │  interchange control reference — and by originator, time group
-└─────────────┘  and digest for teletype, which carries no such field.
-      │
+└─────────────┘  and digest for teletype, which carries no such field. A Type B
+      │          sender that marks a resend PDM is recorded as a retransmission
+      │          rather than a divergence.
       ▼
 ┌─────────────┐  resolve the record by locator, fold the message into it, write
 │ 5. apply    │  the new state with the version it was read at. On conflict,
 └─────────────┘  re-read and reapply.
       │
       ▼
+┌─────────────┐  a segment status the partner just changed into something a
+│ 6. queue    │  person must act on becomes a queue item. Driven by the
+└─────────────┘  transition, not the resulting state, so a later message
+      │          touching a settled record does not re-raise it.
+      ▼
 ┌─────────────┐  only for message classes that expect an answer. The decision is
-│ 6. respond  │  recorded on our own record before the answer is sent, so our
+│ 7. respond  │  recorded on our own record before the answer is sent, so our
 └─────────────┘  state and our answer can never disagree.
 ```
 
@@ -154,3 +160,71 @@ produces bookings that quietly disagree with the partner holding the other copy.
 carrier's business and this project does not try to be an inventory system. The
 interface is one synchronous call — given a record, return a status code per
 segment — so putting a real inventory behind it changes nothing else.
+
+## Routing
+
+There are two ways a message finds a link, and they answer different questions.
+
+**By peer name** is how a reply goes back: the pipeline already knows which
+partner it is talking to. **By address** is how a message reaches everybody it
+was sent to. A Type B priority line may carry several addressees and the network
+is expected to deliver a copy to each; routing on peer name alone can only ever
+reach the one link a message was handed to. `Gateway.Fanout` resolves each
+address through a table built from every peer's `TTYAddress` and `Addresses`,
+sends the bytes unchanged, and reports per addressee — delivered, terminates
+here, or served by no link.
+
+The bytes go out unchanged deliberately. Rewriting the address line per
+recipient would make each copy a different message from the one in the log, and
+the address line is part of what a partner may check.
+
+Forwarding traffic addressed to *other* links — being a switch rather than an
+endpoint — is `routing.relay`, and it is off by default. A node that relays for
+anyone who can reach it is an open relay: a partner can spend another partner's
+link budget through us, under our originator address. When it is on, the
+addressee that matters most is the one skipped, because forwarding to the link a
+message arrived on returns it to its sender, and on a store-and-forward network
+that loop survives restarts.
+
+## Queues
+
+A record that needs human attention has to end up somewhere a human looks.
+`internal/queue` is that mechanism, and it has two producers with different
+characters.
+
+The **gateway** places on a queue when a partner's answer changes a segment into
+a state somebody must act on: a confirmation, a refusal, a waitlist, a status
+outside the interline vocabulary. The trigger is the *transition*, captured
+before the message is applied and compared after. Using the resulting state
+instead would re-raise a confirmation every time any later message touched a
+settled record.
+
+The **sweeper** places on a queue for things that happen because time passed.
+A partner who answers creates work by answering; a partner who never answers
+creates none, and neither does a ticketing deadline expiring, because neither
+is an event anybody sends. Only a periodic pass can see those.
+
+Placement is idempotent on `(queue, record, reason code, segment)`. The segment
+is part of that key because an interline record has one segment per carrier and
+each answers separately: two partners confirming one booking are two pieces of
+work. Record-level placements such as a ticketing limit use segment 0 and so
+still collapse to one. In Postgres this is a partial unique index over pending
+rows, not a lookup, because two sweepers racing must not both succeed.
+
+Working an item does not delete it. Who cleared it and when is the question
+asked after an interline dispute.
+
+### Why the state is not in a broker
+
+A reservations queue is a worklist, not a transport. It is listed, counted,
+filtered, re-read, and audited after the fact — database semantics, not message
+semantics. So the state lives in `store.QueueStore` next to the records it
+refers to.
+
+What an external queueing system is good at is the other half: telling a robot
+that work has arrived. `queue.Publisher` is that seam. A placement is stored
+first and published second, in the same order and for the same reason as
+capture-before-parse: a publish that failed leaves work that the next reader
+still finds, whereas a publish that succeeded before the write would announce
+work nobody can look up. An error from the publisher is logged, never
+propagated, because failing the placement would discard work already recorded.

@@ -7,6 +7,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -79,6 +80,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/carrier/{designator}/pnrs", s.carrierPNRs)
 	mux.HandleFunc("GET /api/carrier/{designator}/inventory", s.carrierInventory)
 	mux.HandleFunc("GET /api/availability", s.availability)
+	mux.HandleFunc("GET /api/queues", s.listQueues)
+	mux.HandleFunc("GET /api/queue/{name}", s.getQueue)
+	mux.HandleFunc("POST /api/queue/item/{id}/work", s.workQueueItem)
 	mux.HandleFunc("GET /api/stream", s.stream)
 
 	return logRequests(s.Log, mux)
@@ -465,4 +469,86 @@ func intParam(r *http.Request, name string, def int) int {
 		return def
 	}
 	return n
+}
+
+// listQueues returns the pending count for every queue, including the empty
+// ones. A console that only showed non-empty queues would make "nothing is
+// waiting" indistinguishable from "the queue does not exist".
+func (s *Server) listQueues(w http.ResponseWriter, r *http.Request) {
+	counts, err := s.Store.QueueCounts(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	type row struct {
+		Name    string `json:"name"`
+		Pending int    `json:"pending"`
+	}
+	out := make([]row, 0, len(store.Queues))
+	total := 0
+	for _, name := range store.Queues {
+		out = append(out, row{Name: name, Pending: counts[name]})
+		total += counts[name]
+	}
+	// A queue name we do not know about is still real work: show it rather
+	// than let a bilateral or future placement vanish from the console.
+	for name, n := range counts {
+		if !knownQueue(name) {
+			out = append(out, row{Name: name, Pending: n})
+			total += n
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"queues": out, "pending": total})
+}
+
+func knownQueue(name string) bool {
+	for _, q := range store.Queues {
+		if q == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) getQueue(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "all" {
+		name = ""
+	}
+	items, err := s.Store.ListQueue(r.Context(), store.QueueFilter{
+		Queue:         name,
+		PNRID:         r.URL.Query().Get("pnr"),
+		IncludeWorked: r.URL.Query().Get("worked") == "1",
+		Limit:         intParam(r, "limit", 100),
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"queue": name, "items": items})
+}
+
+func (s *Server) workQueueItem(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	by := r.URL.Query().Get("by")
+	if by == "" {
+		by = "console"
+	}
+	err := s.Store.WorkQueueItem(r.Context(), id, by, r.URL.Query().Get("note"))
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, err)
+		return
+	case errors.Is(err, store.ErrConflict):
+		// Someone else cleared it first. That is not a failure the operator
+		// needs to retry, but they should know their click did nothing.
+		writeErr(w, http.StatusConflict, err)
+		return
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	counts, _ := s.Store.QueueCounts(r.Context())
+	s.Bus.Publish(gateway.EvQueue, map[string]any{"worked": id, "by": by})
+	writeJSON(w, http.StatusOK, map[string]any{"worked": id, "counts": counts})
 }

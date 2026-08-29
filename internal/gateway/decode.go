@@ -27,6 +27,10 @@ type decoded struct {
 	DedupKey    string
 	Diagnostics []store.Diagnostic
 
+	// PossibleDuplicate carries the Type B PDM indicator through to the
+	// deduplication step, where it decides whether a repeat is expected.
+	PossibleDuplicate bool
+
 	// Locators are the record locators the message refers to, in the order to
 	// try them when finding the record it belongs to.
 	Locators []string
@@ -221,6 +225,7 @@ func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 		d.Locators = append(d.Locators, l.Value)
 	}
 	d.DedupKey = typeBDedupKey(tb)
+	d.PossibleDuplicate = tb.PossibleDuplicate
 
 	// A reply must go back to the originator. Fall back to the configured
 	// address so a message with a damaged origin line is still answerable.

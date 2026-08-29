@@ -23,6 +23,7 @@ import (
 	"github.com/adamf/jetway/internal/gateway"
 	"github.com/adamf/jetway/internal/ingress"
 	"github.com/adamf/jetway/internal/metrics"
+	"github.com/adamf/jetway/internal/queue"
 	"github.com/adamf/jetway/internal/spool"
 	"github.com/adamf/jetway/internal/store"
 	"github.com/adamf/jetway/pkg/avail"
@@ -117,6 +118,21 @@ func run() error {
 	gw.Avail = avail.NewCache()
 	gw.Log.Info("availability cache ready", "trust_window", gw.Avail.StaleAfter)
 
+	gw.Relay = cfg.Routing.Relay
+	if gw.Relay {
+		log.Warn("address relay enabled",
+			"consequence", "messages addressed to other links will be forwarded",
+			"check", "only do this for links you would answer for")
+	}
+
+	// Queue state lives in the store because a worklist has to be listed,
+	// counted and audited. Publish is the seam for an external broker that
+	// wants to be told rather than to poll; nothing is configured here yet.
+	gw.Queues = &queue.Manager{
+		Store: st, Log: log,
+		Notify: func(item *store.QueueItem) { bus.Publish(gateway.EvQueue, item) },
+	}
+
 	router := egress.NewRouter(st, log)
 	gw.Sender = router
 
@@ -173,6 +189,12 @@ func run() error {
 			nil, float64(gw.Avail.Len()))
 	})
 	go purgeAvailability(ctx, gw, log)
+
+	// The sweeper is what notices silence: a request nobody answered, a
+	// ticketing deadline that passed. Nothing else can, because neither is an
+	// event a partner sends.
+	sweeper := &queue.Sweeper{Records: st, Queues: gw.Queues, Log: log}
+	go sweeper.Run(ctx, time.Minute)
 
 	hs := &http.Server{
 		Addr: cfg.HTTP.Addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second,
@@ -345,13 +367,14 @@ func registerPeers(cfg *config.Config, gw *gateway.Gateway, router *egress.Route
 			format = store.FormatEDIFACT
 		}
 		gw.AddPeer(&gateway.Peer{
-			Name: p.Name, Carrier: p.Carrier, Format: format, TTYAddress: p.TTYAddress,
+			Name: p.Name, Carrier: p.Carrier, Format: format,
+			TTYAddress: p.TTYAddress, Addresses: p.Addresses,
 		})
 		s, err := egress.Build(p, sessions, log)
 		if err != nil {
 			return err
 		}
-		router.Register(p.Name, s, p.Egress.Retry)
+		router.Register(p.Name, s, p.Egress.Retry, format)
 		log.Info("peer configured", "name", p.Name, "carrier", p.Carrier,
 			"format", p.Format, "egress", s.Describe())
 	}

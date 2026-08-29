@@ -17,6 +17,8 @@ const (
 	EvLink EventType = "link"
 	// EvAvail reports that availability changed.
 	EvAvail EventType = "avail"
+	// EvQueue reports a record placed on a work queue.
+	EvQueue EventType = "queue"
 	// EvTrace narrates a pipeline step, which is what makes the console show
 	// the path a booking took rather than only its result.
 	EvTrace EventType = "trace"

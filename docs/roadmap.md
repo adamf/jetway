@@ -2,7 +2,10 @@
 
 An honest list. Things in the first two sections block a production deployment.
 
-Recently closed: AVS ingestion with an availability cache and free sale;
+Recently closed: address-based routing with multi-addressee fan-out and opt-in
+relay; work queues with a time-based sweeper and an external-publisher
+seam; the Type B 4 KB message limit and the PDM possible-duplicate indicator;
+AVS ingestion with an availability cache and free sale;
 MATIP (RFC 2351) with the Type B session handshake;
 partner-facing ingress over HTTPS, TCP and file drop; peer identity from
 mutual TLS; outbound retry with restart recovery; a durable
@@ -45,11 +48,45 @@ container images.
 - **`PNL`/`ADL`** passenger lists to departure control are not implemented.
 - **Split and divide.** `StatusSplit` exists in the model; the operation does
   not.
-- **Queues.** Real systems place records on office queues for action. There is
-  no queue.
-- **Timeout sweep.** Nothing notices a segment that has sat at `HN` for a day.
 - **NDC and ONE Order.** Out of scope today; the architecture does not preclude
   them.
+- **Ticketing.** No ticket numbers, coupon status, ET or EMD. `pnr.Ticketing`
+  holds a deadline the sweeper acts on and free text it does not interpret.
+
+## Switching
+
+Jetway now routes on the Type B address line as well as by peer name: a message
+with several addressees is delivered to each (`Gateway.Fanout`), and with
+`routing.relay` on it forwards traffic addressed to other links. What a real
+switch still does and this does not:
+
+- **Priority is cosmetic.** `QU`/`QD`/`QK` parse, display and re-encode, but
+  delivery is FIFO. A switch services urgent ahead of deferred.
+- **No channel sequence numbers.** The token after `ZCZC` is parsed and kept,
+  but nothing tracks per-link sequence, so a gap in a partner's numbering is
+  invisible and no retransmission can be requested.
+- **No multi-part split or reassembly.** 60 lines by 63 characters means a long
+  passenger list arrives as `PART1`, `PART2`. Encode refuses to build an
+  over-long message, which is right, but nothing splits one or joins them back.
+- **No undeliverable queue for transit.** An address nothing serves is recorded
+  on the message and logged; a switch parks it for an operator.
+- **BATAP** is still unimplemented, so relay has no responsibility transfer:
+  we forward and record, but there is no acknowledgement contract above MATIP.
+
+## Queues
+
+Queues exist (`internal/queue`, `store.QueueStore`) and the console shows them.
+What is missing:
+
+- **Queue numbering.** Names are Jetway's own vocabulary. A deployment that has
+  to match a house convention needs a name-to-number mapping at the edge.
+- **The sweeper scans.** `Sweeper.Sweep` lists records and filters in Go. That
+  is fine at demo volume and wrong at scale, where the due-date predicates want
+  to be an indexed query. `Limit` bounds the damage in the meantime.
+- **No queue-driven robots.** Placement notifies an optional `queue.Publisher`;
+  nothing ships that consumes one.
+- **Waitlist clearance and schedule change** are the two producers that would
+  make queues earn their keep, and neither exists yet.
 
 ## Engineering
 

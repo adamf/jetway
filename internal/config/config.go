@@ -23,10 +23,25 @@ type Config struct {
 	HTTP     HTTP      `yaml:"http"`
 	Ingress  []Ingress `yaml:"ingress"`
 	Peers    []Peer    `yaml:"peers"`
+	Routing  Routing   `yaml:"routing"`
 	Demo     Demo      `yaml:"demo"`
 	// LocatorSecret keys record locator allocation. Prefer the
 	// JETWAY_LOCATOR_SECRET environment variable to putting it in a file.
 	LocatorSecret string `yaml:"locator_secret"`
+}
+
+// Routing controls what the node does with messages addressed elsewhere.
+type Routing struct {
+	// Relay forwards a message to the addressees on its priority line that are
+	// served by other links -- what a Type B switch does, as opposed to an
+	// endpoint that only terminates.
+	//
+	// It defaults to off deliberately. A node that relays for anyone who can
+	// reach it is an open relay: a partner can spend another partner's link
+	// budget through us, under our originator address, and we carry the
+	// traffic and the blame. Turn it on when this deployment is meant to be a
+	// switch, and only for links you would answer for.
+	Relay bool `yaml:"relay"`
 }
 
 // Identity is how this node names itself to partners.
@@ -195,6 +210,9 @@ type Peer struct {
 	// Format is "typeb" or "edifact".
 	Format     string `yaml:"format"`
 	TTYAddress string `yaml:"tty_address"`
+	// Addresses are further Type B addresses this link serves, beyond
+	// TTYAddress, used when routing on the address line.
+	Addresses []string `yaml:"addresses"`
 	// EDIFACTID is the UNB sender identification to address this peer with.
 	// Defaults to Carrier.
 	EDIFACTID string `yaml:"edifact_id"`

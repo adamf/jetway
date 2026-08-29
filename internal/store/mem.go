@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"sort"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/adamf/jetway/internal/ulid"
 	"github.com/adamf/jetway/pkg/pnr"
@@ -33,6 +35,10 @@ type Mem struct {
 
 	dedup   map[string]string // peer|key -> message id
 	counter uint64
+
+	queue        map[string]*QueueItem // by id
+	queueIDs     []string              // ULIDs, kept sorted
+	queuePending map[string]string     // queue|pnr|code -> id, pending items only
 }
 
 // NewMem returns an empty in-memory store.
@@ -43,6 +49,9 @@ func NewMem() *Mem {
 		byLocator: map[string]string{},
 		events:    map[string][]Event{},
 		dedup:     map[string]string{},
+
+		queue:        map[string]*QueueItem{},
+		queuePending: map[string]string{},
 	}
 }
 
@@ -127,7 +136,26 @@ func (s *Mem) trimRecordsLocked() {
 		}
 		delete(s.pnrs, id)
 		delete(s.events, id)
+		s.dropQueueForRecordLocked(id)
 	}
+}
+
+// dropQueueForRecordLocked removes queue items belonging to a discarded record.
+// A queue item that outlives its record is a task nobody can action.
+func (s *Mem) dropQueueForRecordLocked(pnrID string) {
+	keep := s.queueIDs[:0]
+	for _, id := range s.queueIDs {
+		it := s.queue[id]
+		if it == nil || it.PNRID != pnrID {
+			keep = append(keep, id)
+			continue
+		}
+		if it.Pending() {
+			delete(s.queuePending, pendingKey(it.Queue, it.PNRID, it.Code, it.SegmentRef))
+		}
+		delete(s.queue, id)
+	}
+	s.queueIDs = append([]string(nil), keep...)
 }
 
 func (s *Mem) UpdateMessage(ctx context.Context, m *Message) error {
@@ -301,3 +329,95 @@ func (s *Mem) NextLocatorCounter(ctx context.Context) (uint64, error) {
 }
 
 func (s *Mem) Close() error { return nil }
+
+func pendingKey(queue, pnrID, code string, segRef int) string {
+	return queue + "|" + pnrID + "|" + code + "|" + strconv.Itoa(segRef)
+}
+
+func cloneQueueItem(q *QueueItem) *QueueItem {
+	c := *q
+	if q.WorkedAt != nil {
+		t := *q.WorkedAt
+		c.WorkedAt = &t
+	}
+	return &c
+}
+
+func (s *Mem) Enqueue(ctx context.Context, item *QueueItem) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if item.ID == "" {
+		item.ID = ulid.New()
+	}
+	if item.PlacedAt.IsZero() {
+		item.PlacedAt = time.Now().UTC()
+	}
+	k := pendingKey(item.Queue, item.PNRID, item.Code, item.SegmentRef)
+	if _, dup := s.queuePending[k]; dup {
+		return ErrDuplicate
+	}
+	s.queue[item.ID] = cloneQueueItem(item)
+	s.queueIDs = append(s.queueIDs, item.ID)
+	if n := len(s.queueIDs); n > 1 && s.queueIDs[n-1] < s.queueIDs[n-2] {
+		sort.Strings(s.queueIDs)
+	}
+	s.queuePending[k] = item.ID
+	return nil
+}
+
+func (s *Mem) WorkQueueItem(ctx context.Context, id, by, note string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	it, ok := s.queue[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if !it.Pending() {
+		return ErrConflict
+	}
+	now := time.Now().UTC()
+	it.WorkedAt = &now
+	it.WorkedBy = by
+	it.Note = note
+	delete(s.queuePending, pendingKey(it.Queue, it.PNRID, it.Code, it.SegmentRef))
+	return nil
+}
+
+func (s *Mem) ListQueue(ctx context.Context, f QueueFilter) ([]*QueueItem, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	out := make([]*QueueItem, 0, limit)
+	for i := len(s.queueIDs) - 1; i >= 0 && len(out) < limit; i-- {
+		it := s.queue[s.queueIDs[i]]
+		if it == nil {
+			continue
+		}
+		if f.Queue != "" && it.Queue != f.Queue {
+			continue
+		}
+		if f.PNRID != "" && it.PNRID != f.PNRID {
+			continue
+		}
+		if !f.IncludeWorked && !it.Pending() {
+			continue
+		}
+		out = append(out, cloneQueueItem(it))
+	}
+	return out, nil
+}
+
+func (s *Mem) QueueCounts(ctx context.Context) (map[string]int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]int{}
+	for _, it := range s.queue {
+		if it.Pending() {
+			out[it.Queue]++
+		}
+	}
+	return out, nil
+}

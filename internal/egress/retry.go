@@ -11,6 +11,7 @@ import (
 	"github.com/adamf/jetway/internal/config"
 	"github.com/adamf/jetway/internal/metrics"
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/pkg/typeb"
 )
 
 // Router picks the sender for a peer and retries what does not go through.
@@ -26,6 +27,7 @@ type Router struct {
 	mu      sync.RWMutex
 	senders map[string]Sender
 	policy  map[string]config.Retry
+	formats map[string]store.Format
 
 	// queue holds attempts waiting for their backoff to elapse.
 	qmu   sync.Mutex
@@ -36,6 +38,7 @@ type Router struct {
 type attempt struct {
 	messageID string
 	peer      string
+	format    store.Format
 	raw       []byte
 	tries     int
 	next      time.Time
@@ -47,16 +50,47 @@ func NewRouter(st store.Store, log *slog.Logger) *Router {
 		store: st, log: log,
 		senders: map[string]Sender{},
 		policy:  map[string]config.Retry{},
+		formats: map[string]store.Format{},
 		wake:    make(chan struct{}, 1),
 	}
 }
 
-// Register adds a peer's sender and retry policy.
-func (r *Router) Register(peer string, s Sender, policy config.Retry) {
+// Register adds a peer's sender, retry policy and wire format.
+//
+// The format is here because a redelivery has to be marked according to the
+// format's own duplicate convention, and only the format says which one
+// applies: Type B carries PDM in the envelope, while EDIFACT relies on the
+// interchange control reference the receiver already holds.
+func (r *Router) Register(peer string, s Sender, policy config.Retry, format store.Format) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.senders[peer] = s
 	r.policy[peer] = policy
+	r.formats[peer] = format
+}
+
+// format returns the registered wire format for a peer.
+func (r *Router) format(peer string) store.Format {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	f, ok := r.formats[peer]
+	if !ok {
+		return store.FormatUnknown
+	}
+	return f
+}
+
+// redeliveryBytes returns what should go on the wire for a retry.
+//
+// Every attempt after the first is a retransmission, and the receiver is
+// entitled to be told so rather than left to infer it from content. Marking is
+// a textual edit to the envelope; the captured bytes in the log are not
+// touched, so the audit trail still shows what was originally built.
+func redeliveryBytes(a *attempt) ([]byte, bool) {
+	if a.format != store.FormatTypeB {
+		return a.raw, false
+	}
+	return typeb.MarkPossibleDuplicate(a.raw)
 }
 
 // Sender returns the sender for a peer.
@@ -101,7 +135,7 @@ func (r *Router) SendMessage(ctx context.Context, messageID, peer string, raw []
 		return nil
 	}
 	r.enqueue(&attempt{
-		messageID: messageID, peer: peer, raw: raw, tries: 1,
+		messageID: messageID, peer: peer, format: r.format(peer), raw: raw, tries: 1,
 		next: time.Now().Add(r.backoff(peer, 1)),
 	})
 	return err
@@ -194,11 +228,13 @@ func (r *Router) drain(ctx context.Context) {
 			r.fail(ctx, a, ErrNoRoute)
 			continue
 		}
-		err := s.Send(ctx, a.raw)
+		raw, marked := redeliveryBytes(a)
+		err := s.Send(ctx, raw)
 		recordAttempt(a.peer, err)
 		if err == nil {
-			r.log.Info("redelivered", "peer", a.peer, "message", a.messageID, "attempt", a.tries+1)
-			r.mark(ctx, a.messageID, store.StatusSent, "")
+			r.log.Info("redelivered", "peer", a.peer, "message", a.messageID,
+				"attempt", a.tries+1, "marked_pdm", marked)
+			r.mark(ctx, a.messageID, store.StatusSent, "", marked)
 			continue
 		}
 		a.tries++
@@ -222,10 +258,10 @@ func (r *Router) fail(ctx context.Context, a *attempt, err error) {
 		"peer", a.peer, "message", a.messageID, "attempts", a.tries, "err", err)
 	metrics.Counter("jetway_egress_abandoned_total", "messages no longer being retried",
 		metrics.Labels{"peer": a.peer})
-	r.mark(ctx, a.messageID, store.StatusUndeliverable, err.Error())
+	r.mark(ctx, a.messageID, store.StatusUndeliverable, err.Error(), false)
 }
 
-func (r *Router) mark(ctx context.Context, messageID string, st store.Status, detail string) {
+func (r *Router) mark(ctx context.Context, messageID string, st store.Status, detail string, pdm bool) {
 	if messageID == "" || r.store == nil {
 		return
 	}
@@ -235,6 +271,9 @@ func (r *Router) mark(ctx context.Context, messageID string, st store.Status, de
 	}
 	m.Status = st
 	m.Error = detail
+	if pdm {
+		m.PossibleDuplicate = true
+	}
 	if err := r.store.UpdateMessage(ctx, m); err != nil {
 		r.log.Error("could not record delivery outcome", "message", messageID, "err", err)
 	}
@@ -264,7 +303,8 @@ func (r *Router) Recover(ctx context.Context) (int, error) {
 			continue
 		}
 		r.enqueue(&attempt{
-			messageID: m.ID, peer: m.Peer, raw: m.Raw, tries: 0, next: time.Now(),
+			messageID: m.ID, peer: m.Peer, format: m.Format, raw: m.Raw,
+			tries: 0, next: time.Now(),
 		})
 		n++
 	}

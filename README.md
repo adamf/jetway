@@ -212,6 +212,63 @@ anything. An unknown message type still decodes at the syntax layer, so it can
 be captured, routed and replayed even when nothing above knows what it means.
 See [Provenance](#provenance-and-what-this-is-not).
 
+## Architecture
+
+```mermaid
+flowchart LR
+  P["carrier reservation systems<br/>BA · AA · LH"]
+
+  subgraph J["jetwayd"]
+    direction TB
+    I["<b>ingress</b><br/>https + mTLS · TCP / MATIP · file drop<br/><i>identity from the cert or the circuit</i>"]
+    S["<b>write-ahead spool</b><br/><i>fsync before the partner is acked</i>"]
+    PIPE["<b>pipeline</b><br/>capture → classify → decode → dedupe → apply → respond"]
+    C["<b>codecs</b><br/>typeb · edifact <i>(exact syntax)</i><br/>airimp · padis <i>(per-link profiles)</i>"]
+    A["<b>availability</b><br/>AVS ingest, free sale"]
+    Q["<b>queues</b><br/>manager + sweeper"]
+    E["<b>egress router</b><br/>backoff retry · PDM on resend"]
+  end
+
+  DB[("<b>store</b><br/>message log (raw bytes)<br/>PNR + events<br/>queue items")]
+  UI["console / API"]
+  B["external broker<br/><i>optional</i>"]
+
+  P -->|inbound| I
+  I --> S
+  S --> PIPE
+  PIPE --- C
+  PIPE --- A
+  PIPE --> DB
+  PIPE -->|partner answered| Q
+  DB -->|deadlines, silence| Q
+  Q --> DB
+  Q -.->|notify| B
+  PIPE --> E
+  E -->|outbound| P
+  DB --> UI
+```
+
+Three things in that picture are load-bearing.
+
+**Capture precedes interpretation.** Raw bytes are durable before anything
+parses them, which is why a parser fix costs a reprocessing run rather than a
+lost booking, and why "what did we actually receive at 14:32" has an answer that
+does not depend on the parser deployed at the time.
+
+**Queue state is in the store, not in a broker.** A reservations queue is a
+worklist, not a transport: it has to be listed, counted, filtered, and re-read,
+and items survive being worked because *who cleared this, and when* is the
+question asked after an interline dispute. Those are database semantics. What an
+external queueing system is genuinely good at is the other half — telling a
+robot that work has arrived — and that is the dotted line: a placement is
+written first and published second, so a broker being down delays a
+notification instead of losing a task. `queue.Publisher` is the seam;
+`store.QueueStore` is the state.
+
+**The sweeper is not optional.** A partner who answers puts work on a queue by
+answering. A partner who never answers puts work on no queue at all, and neither
+does a ticketing deadline passing, because neither is an event anyone sends.
+
 ## Packages
 
 | Package | What it is |
@@ -226,6 +283,7 @@ See [Provenance](#provenance-and-what-this-is-not).
 | `pkg/pnr` | The canonical passenger name record, date resolution and record locator allocation |
 | `internal/store` | Append-only message log and event-sourced PNR store; in-memory and Postgres |
 | `internal/gateway` | The pipeline, routing, response generation and seat inventory |
+| `internal/queue` | Work queues: placement, the time-based sweeper, and the external-publisher seam |
 | `pkg/matip` | MATIP (RFC 2351): packet format and the Type B session handshake |
 | `internal/ingress` | MATIP, HTTPS, TCP and file-drop listeners, and peer identity |
 | `internal/egress` | Outbound delivery with backoff and restart recovery |

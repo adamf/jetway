@@ -37,7 +37,7 @@ func eachBackend(t *testing.T, fn func(t *testing.T, s Store)) {
 			t.Fatalf("migrate: %v", err)
 		}
 		// Each subtest gets a clean slate so ordering assertions hold.
-		if _, err := pg.pool.Exec(ctx, `TRUNCATE pnr_event, pnr, message`); err != nil {
+		if _, err := pg.pool.Exec(ctx, `TRUNCATE queue_item, pnr_event, pnr, message`); err != nil {
 			t.Fatalf("truncate: %v", err)
 		}
 		fn(t, pg)
@@ -483,4 +483,176 @@ func TestMemUnboundedByDefault(t *testing.T) {
 	if len(got) != 50 {
 		t.Errorf("retained = %d, want all 50", len(got))
 	}
+}
+
+func TestQueuePlacementAndWorking(t *testing.T) {
+	eachBackend(t, func(t *testing.T, s Store) {
+		ctx := context.Background()
+		p := samplePNR("QUE111")
+		if err := s.CreatePNR(ctx, p, nil); err != nil {
+			t.Fatal(err)
+		}
+
+		item := &QueueItem{
+			Queue: QueueTicketing, PNRID: p.ID, Locator: p.RecordLocator,
+			Code: "tktl_expired", Reason: "ticketing time limit passed",
+			PlacedBy: "sweeper", PlacedAt: time.Now().UTC(),
+		}
+		if err := s.Enqueue(ctx, item); err != nil {
+			t.Fatalf("Enqueue: %v", err)
+		}
+		if item.ID == "" {
+			t.Error("Enqueue must assign an id")
+		}
+
+		// A sweeper runs repeatedly; the second placement must be refused
+		// rather than stack up a second identical task.
+		again := &QueueItem{
+			Queue: QueueTicketing, PNRID: p.ID, Code: "tktl_expired",
+			Reason: "ticketing time limit passed", PlacedBy: "sweeper",
+		}
+		if err := s.Enqueue(ctx, again); !errors.Is(err, ErrDuplicate) {
+			t.Fatalf("second placement = %v, want ErrDuplicate", err)
+		}
+
+		// A different reason on the same queue is a different task.
+		other := &QueueItem{
+			Queue: QueueTicketing, PNRID: p.ID, Code: "tktl_near",
+			Reason: "ticketing time limit approaching", PlacedBy: "sweeper",
+		}
+		if err := s.Enqueue(ctx, other); err != nil {
+			t.Fatalf("distinct code must be allowed: %v", err)
+		}
+
+		counts, err := s.QueueCounts(ctx)
+		if err != nil {
+			t.Fatalf("QueueCounts: %v", err)
+		}
+		if counts[QueueTicketing] != 2 {
+			t.Errorf("pending on %s = %d, want 2", QueueTicketing, counts[QueueTicketing])
+		}
+
+		pending, err := s.ListQueue(ctx, QueueFilter{Queue: QueueTicketing})
+		if err != nil {
+			t.Fatalf("ListQueue: %v", err)
+		}
+		if len(pending) != 2 {
+			t.Fatalf("ListQueue returned %d items, want 2", len(pending))
+		}
+		for _, it := range pending {
+			if !it.Pending() {
+				t.Errorf("item %s is not pending", it.ID)
+			}
+		}
+
+		if err := s.WorkQueueItem(ctx, item.ID, "adam", "ticketed manually"); err != nil {
+			t.Fatalf("WorkQueueItem: %v", err)
+		}
+		// Working twice must not silently overwrite who cleared it.
+		if err := s.WorkQueueItem(ctx, item.ID, "someone", ""); !errors.Is(err, ErrConflict) {
+			t.Errorf("re-working = %v, want ErrConflict", err)
+		}
+		if err := s.WorkQueueItem(ctx, "nosuchid", "adam", ""); !errors.Is(err, ErrNotFound) {
+			t.Errorf("working a missing item = %v, want ErrNotFound", err)
+		}
+
+		counts, _ = s.QueueCounts(ctx)
+		if counts[QueueTicketing] != 1 {
+			t.Errorf("after working, pending = %d, want 1", counts[QueueTicketing])
+		}
+
+		// Worked items stay for the audit trail, but out of the working view.
+		all, err := s.ListQueue(ctx, QueueFilter{Queue: QueueTicketing, IncludeWorked: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(all) != 2 {
+			t.Fatalf("IncludeWorked returned %d, want 2", len(all))
+		}
+		var worked *QueueItem
+		for _, it := range all {
+			if it.ID == item.ID {
+				worked = it
+			}
+		}
+		if worked == nil {
+			t.Fatal("worked item disappeared from the audit view")
+		}
+		if worked.Pending() || worked.WorkedBy != "adam" || worked.Note != "ticketed manually" {
+			t.Errorf("working was not recorded: %+v", worked)
+		}
+
+		// Once worked, the same reason can recur: the situation can happen again.
+		if err := s.Enqueue(ctx, &QueueItem{
+			Queue: QueueTicketing, PNRID: p.ID, Code: "tktl_expired",
+			Reason: "again", PlacedBy: "sweeper",
+		}); err != nil {
+			t.Errorf("re-placing a worked reason must be allowed: %v", err)
+		}
+	})
+}
+
+func TestQueueFilterByRecord(t *testing.T) {
+	eachBackend(t, func(t *testing.T, s Store) {
+		ctx := context.Background()
+		a, b := samplePNR("QUE222"), samplePNR("QUE333")
+		for _, p := range []*pnr.PNR{a, b} {
+			if err := s.CreatePNR(ctx, p, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, p := range []*pnr.PNR{a, b} {
+			if err := s.Enqueue(ctx, &QueueItem{
+				Queue: QueueConfirmation, PNRID: p.ID, Code: "kk", Reason: "confirmed",
+				PlacedBy: "gateway",
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := s.ListQueue(ctx, QueueFilter{PNRID: a.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].PNRID != a.ID {
+			t.Errorf("filter by record returned %d items: %+v", len(got), got)
+		}
+	})
+}
+
+// An interline record has one segment per carrier, and each carrier answers
+// separately. Two partners confirming the same booking are two pieces of work;
+// collapsing them onto one queue item loses the second carrier's answer.
+func TestQueueDistinguishesSegments(t *testing.T) {
+	eachBackend(t, func(t *testing.T, s Store) {
+		ctx := context.Background()
+		p := samplePNR("SEG111")
+		if err := s.CreatePNR(ctx, p, nil); err != nil {
+			t.Fatal(err)
+		}
+		for _, ref := range []int{1, 2} {
+			err := s.Enqueue(ctx, &QueueItem{
+				Queue: QueueConfirmation, PNRID: p.ID, Locator: p.RecordLocator,
+				Code: "confirmed_HK", Reason: "partner confirmed",
+				SegmentRef: ref, PlacedBy: "gateway",
+			})
+			if err != nil {
+				t.Fatalf("segment %d: %v", ref, err)
+			}
+		}
+		items, err := s.ListQueue(ctx, QueueFilter{Queue: QueueConfirmation})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("got %d items, want one per segment", len(items))
+		}
+		// The same segment repeating is still a duplicate.
+		err = s.Enqueue(ctx, &QueueItem{
+			Queue: QueueConfirmation, PNRID: p.ID, Code: "confirmed_HK",
+			Reason: "again", SegmentRef: 1, PlacedBy: "gateway",
+		})
+		if !errors.Is(err, ErrDuplicate) {
+			t.Errorf("repeat for segment 1 = %v, want ErrDuplicate", err)
+		}
+	})
 }
