@@ -178,6 +178,12 @@ type Ticketing struct {
 	Deadline *time.Time `json:"deadline,omitempty"`
 }
 
+// Ticketed reports whether a ticketing arrangement carries a deadline that has
+// passed at the given time.
+func (t Ticketing) Expired(at time.Time) bool {
+	return t.Deadline != nil && at.After(*t.Deadline)
+}
+
 // Remark is free text carried on the record.
 type Remark struct {
 	Text string `json:"text"`
@@ -229,6 +235,9 @@ type PNR struct {
 	Ticketing  []Ticketing       `json:"ticketing,omitempty"`
 	Remarks    []Remark          `json:"remarks,omitempty"`
 	Locators   []ExternalLocator `json:"locators,omitempty"`
+	// Tickets are the documents issued against this record. A booking with no
+	// ticket is a booking that will be cancelled when its time limit passes.
+	Tickets []Ticket `json:"tickets,omitempty"`
 
 	ReceivedFrom string     `json:"received_from,omitempty"`
 	Origin       Origin     `json:"origin"`

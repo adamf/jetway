@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/adamf/jetway/internal/metrics"
 	"github.com/adamf/jetway/internal/queue"
 	"github.com/adamf/jetway/internal/store"
 	"github.com/adamf/jetway/internal/ulid"
@@ -51,6 +52,11 @@ type Peer struct {
 	Carrier string
 	// Format is the wire encoding this peer speaks.
 	Format store.Format
+	// SequenceWrap is the number this link's channel counter returns to after
+	// its highest value. Zero means unknown, and a rollover then reads as a
+	// large gap rather than being silently absorbed.
+	SequenceWrap int
+
 	// CONTRL is when to send a syntax and service report for an EDITFACT
 	// interchange this peer sends: "requested" (the default) honours the
 	// acknowledgement request in UNB 0031, "always", "errors" reports only
@@ -142,6 +148,13 @@ type Gateway struct {
 	// ScheduleScanLimit bounds the record scan a schedule message triggers.
 	// Zero uses defaultScheduleScanLimit.
 	ScheduleScanLimit int
+
+	// seq tracks the last channel sequence number seen per link, so a gap in a
+	// partner's numbering is visible. It is in memory on purpose: a restart
+	// loses the baseline, and inventing continuity across one would report a
+	// gap that is really just this process not having been running.
+	seqMu sync.Mutex
+	seq   map[string]int
 
 	locators *pnr.LocatorAllocator
 
@@ -402,6 +415,7 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 	msg.Kind = dec.Kind
 	msg.DedupKey = dec.DedupKey
 	msg.PossibleDuplicate = dec.PossibleDuplicate
+	g.checkSequence(peer, msg, dec)
 	msg.Diagnostics = dec.Diagnostics
 	msg.Status = store.StatusDecoded
 	g.trace(msg.ID, "decoded", string(dec.Format)+" "+dec.Kind)
@@ -1148,4 +1162,64 @@ func flightMatches(seg *pnr.Segment, flightKey string, sm *ssim.Message) bool {
 	// segment is included and the reason names the period. Saying "this may
 	// affect you" to a few extra records is the safe direction to be wrong in.
 	return true
+}
+
+// checkSequence follows a link's channel numbering and records what it says
+// about the messages before this one.
+//
+// This is the only thing that can notice a message that never arrived. Content
+// deduplication catches a message sent twice; nothing else catches one sent
+// once and lost, because there is no evidence of it anywhere in the pipeline.
+// The finding goes on the message as a diagnostic rather than raising an
+// error: the message in hand is fine, and it is the hole behind it that needs
+// somebody.
+func (g *Gateway) checkSequence(peer *Peer, msg *store.Message, dec *decoded) {
+	if dec.TypeB == nil || dec.TypeB.Channel == "" {
+		return
+	}
+	channel, seq, ok := typeb.ParseChannel(dec.TypeB.Channel)
+	if !ok {
+		return
+	}
+	key := peer.Name + "|" + channel
+
+	g.seqMu.Lock()
+	if g.seq == nil {
+		g.seq = map[string]int{}
+	}
+	last, seen := g.seq[key]
+	g.seq[key] = seq
+	g.seqMu.Unlock()
+
+	if !seen {
+		// First message on this channel since start: nothing to compare
+		// against, and claiming a gap here would be reporting our own restart.
+		return
+	}
+	gap, differs := typeb.CheckSequence(last, seq, peer.SequenceWrap)
+	if !differs {
+		return
+	}
+	switch {
+	case gap.Repeat:
+		msg.Diagnostics = append(msg.Diagnostics, store.Diagnostic{
+			Layer: "typeb", Severity: "warn", Code: "sequence_repeat",
+			Detail: fmt.Sprintf("channel %s went back to %d after %d; a retransmission or a sender that restarted its counter",
+				channel, seq, last),
+		})
+		metrics.Counter("jetway_sequence_repeat_total", "channel sequence numbers that went backwards",
+			metrics.Labels{"peer": peer.Name})
+	default:
+		msg.Diagnostics = append(msg.Diagnostics, store.Diagnostic{
+			Layer: "typeb", Severity: "error", Code: "sequence_gap",
+			Detail: fmt.Sprintf("channel %s jumped from %d to %d; %d message(s) never arrived",
+				channel, last, seq, gap.Missing),
+		})
+		metrics.Counter("jetway_sequence_gap_total", "messages missing from a link's channel numbering",
+			metrics.Labels{"peer": peer.Name})
+		g.Log.Error("a link's numbering skipped messages",
+			"peer", peer.Name, "channel", channel, "expected", gap.Expected,
+			"got", seq, "missing", gap.Missing)
+		g.trace(msg.ID, "sequence", fmt.Sprintf("%d message(s) missing on channel %s", gap.Missing, channel))
+	}
 }

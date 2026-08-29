@@ -959,6 +959,71 @@ async function selectPnr(loc, keepPane){
   renderRecordCards(box, d, p);
 }
 
+// renderTicketCard shows the documents issued against a record, and offers to
+// issue when there are none. A booking nobody ticketed is a booking that gets
+// cancelled when its time limit passes, so the state belongs where the record
+// is read, not on a separate screen.
+function renderTicketCard(box, p){
+  const tickets = p.tickets || [];
+  const live = (p.segments||[]).some(s => s.type === "air" && s.status !== "XX");
+  if (!tickets.length && !live) return;
+
+  const c = el("div","card");
+  const h = el("h2",null,"Tickets");
+  if (tickets.length) h.appendChild(el("span","count", String(tickets.length)));
+  c.appendChild(h);
+  const b = el("div","body");
+
+  for (const t of tickets){
+    const row = el("div","seg");
+    row.appendChild(el("span","loc", t.number.airline_code + "-" + t.number.serial));
+    const pax = (p.passengers||[]).find(x => x.ref === t.pax_ref);
+    row.appendChild(el("span","dim", pax ? pax.surname + "/" + pax.given : "pax " + t.pax_ref));
+    b.appendChild(row);
+    for (const cp of (t.coupons||[])){
+      const seg = (p.segments||[]).find(x => x.ref === cp.segment_ref);
+      const cr = el("div","seg");
+      cr.style.paddingLeft = "16px";
+      cr.appendChild(el("span","stat " + cp.status, cp.status));
+      cr.appendChild(el("span","dim",
+        "coupon " + cp.number + (seg ? " · " + seg.carrier + seg.flight_num + " " + seg.board + "–" + seg.off : "")));
+      b.appendChild(cr);
+    }
+    if ((t.conjunction||[]).length){
+      b.appendChild(el("div","dim",
+        "in conjunction with " + t.conjunction.map(n => n.airline_code + "-" + n.serial).join(", ")));
+    }
+  }
+
+  if (!tickets.length){
+    b.appendChild(el("div","dim",
+      "Not ticketed. A ticketing time limit that passes with no document is what cancels a booking."));
+    const wrap = el("div","row"); wrap.style.marginTop = "10px";
+    const code = el("input"); code.placeholder = "Stock code (e.g. 125)";
+    code.maxLength = 3; code.style.maxWidth = "180px";
+    const go = el("button","primary","Issue tickets"); go.style.width = "auto";
+    go.addEventListener("click", async () => {
+      if (!/^[0-9]{3}$/.test(code.value)){
+        // The three-digit stock code is a different namespace from the
+        // two-letter designator, and there is no mapping between them.
+        code.focus(); return;
+      }
+      go.disabled = true;
+      try {
+        const r = await fetch(`/api/pnr/${encodeURIComponent(p.record_locator)}/ticket?airline_code=${code.value}&by=console`,
+          {method:"POST"});
+        if (!r.ok){
+          const e = await r.json().catch(() => ({}));
+          b.appendChild(el("div","err", e.error || ("issue failed: " + r.status)));
+        }
+      } finally { go.disabled = false; selectPnr(p.record_locator, true); refreshQueues(); }
+    });
+    wrap.appendChild(code); wrap.appendChild(go);
+    b.appendChild(wrap);
+  }
+  c.appendChild(b); box.appendChild(c);
+}
+
 // renderRecordCards draws the record itself: who, where, what is held, what
 // changed it. Shared so the sidebar and the records view cannot drift.
 function renderRecordCards(box, d, p){
@@ -970,6 +1035,11 @@ function renderRecordCards(box, d, p){
   const kv = el("dl","kv");
   const put = (k,v) => { kv.appendChild(el("dt",null,k)); kv.appendChild(el("dd",null,v)); };
   put("Status", p.status);
+  const tkt = (p.tickets||[]);
+  put("Ticketed", tkt.length ? tkt.map(t => t.number.airline_code + "-" + t.number.serial).join(", ") : "no");
+  for (const t of (p.ticketing||[])){
+    if (t.deadline) put("Ticket by", new Date(t.deadline).toLocaleString());
+  }
   put("Passengers", (p.passengers||[]).map(x => x.surname + "/" + x.given +
       (x.title ? " " + x.title : "")).join(", ") || "—");
   put("Origin", (p.origin && p.origin.party || "—") + (p.origin && p.origin.agent ? " · " + p.origin.agent : ""));
@@ -990,6 +1060,8 @@ function renderRecordCards(box, d, p){
   }
   if (!(p.segments||[]).length) sb.appendChild(el("div","empty","No segments"));
   sc.appendChild(sb); box.appendChild(sc);
+
+  renderTicketCard(box, p);
 
   if ((p.ssrs||[]).length){
     const c = el("div","card"); c.appendChild(el("h2",null,"Special services"));

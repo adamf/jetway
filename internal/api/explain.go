@@ -66,7 +66,10 @@ func explainTypeB(raw []byte, e *Explained) *Explained {
 		dests = append(dests, d.String())
 	}
 	e.Envelope = []Field{
-		{Name: "Priority", Value: tb.Priority, Note: typeb.KnownPriorities[tb.Priority]},
+		{Name: "Priority", Value: tb.Priority,
+			// The band, not just the meaning: it is what decides the order a
+			// backlog goes out in when a link comes back.
+			Note: priorityNote(tb.Priority)},
 		{Name: "Destinations", Value: strings.Join(dests, " ")},
 		{Name: "Origin", Value: tb.Origin.String()},
 		{Name: "Origin time", Value: tb.OriginTime.String(), Note: "DDHHMM, UTC"},
@@ -279,4 +282,17 @@ func segmentNote(tag string) string {
 		return "interactive free text: contact details, remarks and other service information"
 	}
 	return ""
+}
+
+// priorityNote explains a priority code and the service band it falls in.
+func priorityNote(code string) string {
+	if code == "" {
+		return ""
+	}
+	meaning := typeb.KnownPriorities[code]
+	band := typeb.ClassOf(code).String()
+	if meaning == "" {
+		return "not in the known set; serviced as " + band
+	}
+	return meaning + "; serviced as " + band
 }

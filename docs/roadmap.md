@@ -2,7 +2,9 @@
 
 An honest list. Things in the first two sections block a production deployment.
 
-Recently closed: CONTRL, sent and consumed; SSM and ASM, with schedule changes
+Recently closed: ticketing -- document numbers, coupons, conjunction sets, and
+issuance that satisfies a ticketing time limit; priority-ordered redelivery and
+channel sequence gap detection; CONTRL, sent and consumed; SSM and ASM, with schedule changes
 matched against held records; NDC order messages over HTTP;
 address-based routing with multi-addressee fan-out and opt-in
 relay; work queues with a time-based sweeper and an external-publisher
@@ -60,8 +62,15 @@ container images.
 - **NDC cancellation** stops at our own record: the carriers are not told, so
   the request is refused rather than left diverging from what they hold.
 - **ONE Order.** Not started.
-- **Ticketing.** No ticket numbers, coupon status, ET or EMD. `pnr.Ticketing`
-  holds a deadline the sweeper acts on and free text it does not interpret.
+- **Ticketing is local only.** Documents are issued, numbered and couponed, and
+  issuance clears the time limit. What is missing is the wire: no TKCREQ or
+  TKCRES to a ticketing system, no interline e-ticket exchange, no EMD, and no
+  coupon status changes driven by a partner. Nothing tells anybody else that a
+  ticket exists.
+- **No auto-cancel on expiry.** The sweeper raises a passed time limit and
+  stops there. Cancelling locally while the carriers still hold the seats is
+  the same divergence the NDC cancel path refuses to create, so the
+  cancellation message has to come first.
 
 ## Switching
 
@@ -70,11 +79,14 @@ with several addressees is delivered to each (`Gateway.Fanout`), and with
 `routing.relay` on it forwards traffic addressed to other links. What a real
 switch still does and this does not:
 
-- **Priority is cosmetic.** `QU`/`QD`/`QK` parse, display and re-encode, but
-  delivery is FIFO. A switch services urgent ahead of deferred.
-- **No channel sequence numbers.** The token after `ZCZC` is parsed and kept,
-  but nothing tracks per-link sequence, so a gap in a partner's numbering is
-  invisible and no retransmission can be requested.
+- **Priority is banded, not ranked.** Redelivery now services urgent before
+  normal before deferred. The bands are deliberate: published material names
+  the codes but does not settle a total order, so `QX` against `QK` is not
+  claimed.
+- **Sequence gaps are detected, not recovered.** A hole in a link's numbering
+  is reported on the message and counted. Nothing requests a retransmission,
+  because that needs BATAP. The baseline is in memory, so a restart forgets
+  where a link had got to rather than inventing continuity across it.
 - **No multi-part split or reassembly.** 60 lines by 63 characters means a long
   passenger list arrives as `PART1`, `PART2`. Encode refuses to build an
   over-long message, which is right, but nothing splits one or joins them back.

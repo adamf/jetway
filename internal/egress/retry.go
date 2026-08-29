@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -39,9 +40,33 @@ type attempt struct {
 	messageID string
 	peer      string
 	format    store.Format
-	raw       []byte
-	tries     int
-	next      time.Time
+	// class is the service band from the Type B priority line. A link that has
+	// been down comes back with a backlog, and the order that backlog goes out
+	// in is the whole point of the priority code.
+	class PriorityClass
+	raw   []byte
+	tries int
+	next  time.Time
+}
+
+// PriorityClass is re-exported so callers need not import pkg/typeb to talk
+// about service bands.
+type PriorityClass = typeb.PriorityClass
+
+// Service bands, re-exported alongside the type.
+const (
+	PriorityUrgent   = typeb.PriorityUrgent
+	PriorityNormal   = typeb.PriorityNormal
+	PriorityDeferred = typeb.PriorityDeferred
+)
+
+// classOf reads the service band for an outbound message. Only Type B carries
+// a priority code; everything else is normal.
+func classOf(format store.Format, raw []byte) PriorityClass {
+	if format != store.FormatTypeB {
+		return typeb.PriorityNormal
+	}
+	return typeb.ClassOf(typeb.PriorityOf(raw))
 }
 
 // NewRouter builds an empty router.
@@ -134,8 +159,10 @@ func (r *Router) SendMessage(ctx context.Context, messageID, peer string, raw []
 	if err == nil {
 		return nil
 	}
+	format := r.format(peer)
 	r.enqueue(&attempt{
-		messageID: messageID, peer: peer, format: r.format(peer), raw: raw, tries: 1,
+		messageID: messageID, peer: peer, format: format,
+		class: classOf(format, raw), raw: raw, tries: 1,
 		next: time.Now().Add(r.backoff(peer, 1)),
 	})
 	return err
@@ -218,6 +245,10 @@ func (r *Router) drain(ctx context.Context) {
 	}
 	r.queue = keep
 	r.qmu.Unlock()
+
+	// Urgent before normal before deferred, and stable within a band so that
+	// messages a partner sent in order do not come back out of it.
+	sort.SliceStable(due, func(i, j int) bool { return due[i].class < due[j].class })
 
 	for _, a := range due {
 		if ctx.Err() != nil {
@@ -303,7 +334,8 @@ func (r *Router) Recover(ctx context.Context) (int, error) {
 			continue
 		}
 		r.enqueue(&attempt{
-			messageID: m.ID, peer: m.Peer, format: m.Format, raw: m.Raw,
+			messageID: m.ID, peer: m.Peer, format: m.Format,
+			class: classOf(m.Format, m.Raw), raw: m.Raw,
 			tries: 0, next: time.Now(),
 		})
 		n++

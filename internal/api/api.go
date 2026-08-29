@@ -77,6 +77,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/messages", s.listMessages)
 	mux.HandleFunc("GET /api/message/{id}", s.getMessage)
 	mux.HandleFunc("POST /api/message/{id}/replay", s.replay)
+	mux.HandleFunc("POST /api/pnr/{locator}/ticket", s.issueTickets)
 	mux.HandleFunc("GET /api/carrier/{designator}/pnrs", s.carrierPNRs)
 	mux.HandleFunc("GET /api/carrier/{designator}/inventory", s.carrierInventory)
 	mux.HandleFunc("GET /api/availability", s.availability)
@@ -554,4 +555,38 @@ func (s *Server) workQueueItem(w http.ResponseWriter, r *http.Request) {
 	counts, _ := s.Store.QueueCounts(r.Context())
 	s.Bus.Publish(gateway.EvQueue, map[string]any{"worked": id, "by": by})
 	writeJSON(w, http.StatusOK, map[string]any{"worked": id, "counts": counts})
+}
+
+// issueTickets issues documents against a record.
+//
+// The airline code is required and not derived: it is a three-digit numeric
+// stock code, the two-letter designator is a different namespace, and there is
+// no reliable mapping between them. Guessing one would put a booking on
+// somebody else's stock.
+func (s *Server) issueTickets(w http.ResponseWriter, r *http.Request) {
+	code := r.URL.Query().Get("airline_code")
+	if code == "" {
+		writeErr(w, http.StatusBadRequest,
+			errors.New("airline_code is required: the three-digit numeric stock code, not the two-letter designator"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	by := r.URL.Query().Get("by")
+	if by == "" {
+		by = "console"
+	}
+	rec, err := s.Gateway.IssueTickets(ctx, r.PathValue("locator"), gateway.IssueOptions{
+		AirlineCode: code, IssuedBy: by,
+	})
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, store.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		writeErr(w, status, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pnr": rec, "tickets": rec.Tickets})
 }

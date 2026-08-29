@@ -76,6 +76,7 @@ func clonePNR(p *pnr.PNR) *pnr.PNR {
 	c.Ticketing = append([]pnr.Ticketing(nil), p.Ticketing...)
 	c.Remarks = append([]pnr.Remark(nil), p.Remarks...)
 	c.Locators = append([]pnr.ExternalLocator(nil), p.Locators...)
+	c.Tickets = append([]pnr.Ticket(nil), p.Tickets...)
 	c.Unparsed = append([]pnr.Fragment(nil), p.Unparsed...)
 	return &c
 }

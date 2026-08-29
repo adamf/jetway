@@ -111,8 +111,11 @@ func (s *Sweeper) Sweep(ctx context.Context) (int, error) {
 func (s *Sweeper) sweepRecord(ctx context.Context, rec *pnr.PNR, now time.Time) (int, error) {
 	placed := 0
 
+	// A ticketed record owes nobody a ticketing deadline. Raising one anyway
+	// would put a record already dealt with in front of somebody every pass.
+	ticketed := rec.Ticketed()
 	for _, tk := range rec.Ticketing {
-		if tk.Deadline == nil {
+		if tk.Deadline == nil || ticketed {
 			continue
 		}
 		var code, reason string
