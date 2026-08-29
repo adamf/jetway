@@ -13,9 +13,14 @@ traffic actually uses:
 - **NDC** — IATA order messages over HTTP, mapped onto the same record store.
 
 Point a carrier's stream at it and it will capture, decode, apply and reply —
-and when it meets something it does not understand, it keeps that too. Records
-that need a human land on a work queue, and messages are routed on the address
-line, so one message reaches every addressee it names.
+and when it meets something it does not understand, it keeps that too.
+
+Beyond the messages it holds the record and does things to it: issues tickets
+and miscellaneous documents, exchanges coupon status with the carrier flying
+the passenger, cancels a booking and tells everyone holding it, divides one
+booking into two. Anything that needs a person lands on a work queue, and
+anything it could not tell a partner lands there too, named rather than
+swallowed.
 
 A partner reaches it over HTTPS with mutual TLS, over a framed TCP circuit, or
 by dropping files in a directory. Their identity comes from the certificate
@@ -78,6 +83,9 @@ Things worth trying in the console:
 | Compare a Type B message with an EDIFACT one | The same booking on two very different wires |
 | Book an **interline** journey from the Records tab | One record, two carriers, two dialects, two locators |
 | Open the **Queues** tab after any of the above | Each partner answer becomes a task, one per carrier |
+| **Issue tickets** on a record | Document numbers with a mod-7 check digit, a coupon per segment, and the operating carriers told |
+| **Cancel** a booking | `XX` goes to every carrier holding it; one that cannot be reached becomes a divergence |
+| **Split** a party | Seats divide with the passengers, and every per-passenger reference is remapped |
 
 ### Message flow
 
@@ -85,9 +93,10 @@ Things worth trying in the console:
 
 Every exchange appears twice, once from each side, so you can watch a message
 leave the gateway and arrive at the carrier. Selecting one shows the Type B
-envelope and the AIRIMP elements broken out — here the action code `SS` is
-explained as *sold, segment sold from availability*, meaning the carrier had
-already granted free sale and no request was needed.
+envelope and the AIRIMP elements broken out: the priority code with the band it
+is serviced in, and the action code `NN` explained as *need, sell and report* —
+the gateway asking, because this date is outside what the carrier has broadcast
+as free sale.
 
 ### Records
 
@@ -96,17 +105,25 @@ already granted free sale and no request was needed.
 The GDS side. A record is found by who is travelling, not by its locator, so
 the table leads with passengers and the itinerary. Interline records are
 marked, and **Their locators** shows the reference each carrier holds for the
-same booking — the thing that makes a later message match up.
+same booking — the thing that makes a later message match up. Status is what
+the carriers actually said: `HK` held, `HL` waitlisted, `UC` refused and the
+record cancelled behind it.
 
-### One record, two carriers
+### One record, two carriers, and what was issued against it
 
-![Record detail with itinerary, history and conversation](docs/images/record-detail.png)
+![Record detail showing tickets, an associated EMD and a split](docs/images/record-detail.png)
 
-`6U5JBB` is one passenger on two airlines: Lufthansa FRA–JFK and British
-Airways JFK–LHR. Lufthansa was asked over EDIFACT and British Airways over Type
-B; each answered separately and each returned its own locator. The history
-names the message behind every change, and the conversation below it links
-straight back to those messages.
+Two passengers on two airlines: American DFW–LHR and British Airways LHR–JFK,
+one asked over EDIFACT and one over Type B, each answering separately and each
+returning its own locator.
+
+Below the itinerary is everything issued against it. Two flight tickets, a
+coupon per segment. An **EMD-A** for excess baggage, stapled to a named flight
+coupon — when that coupon is flown, the value coupon is lifted with it. An
+**EMD-S** for a residual balance, attached to no flight at all. And **Split
+to**, because a third passenger was divided onto their own record: both halves
+stay live, both keep the same carrier locator, and the carriers still hold one
+record until they are advised.
 
 ### Queues
 
@@ -121,6 +138,12 @@ status it moved to.
 Two other things land here that nobody sends a message about: a request a
 partner never answered, and a ticketing time limit that passed. Only a periodic
 sweep can see those, which is why there is one.
+
+The **divergence** queue is where this node admits it and a partner disagree: a
+cancellation that could not be delivered, a ticket the operating carrier was
+never told about, a division the carriers still have not been advised of. None
+of those are errors the pipeline can retry away, and none of them should be
+silent.
 
 From the command line:
 
