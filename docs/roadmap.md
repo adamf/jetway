@@ -2,7 +2,9 @@
 
 An honest list. Things in the first two sections block a production deployment.
 
-Recently closed: address-based routing with multi-addressee fan-out and opt-in
+Recently closed: CONTRL, sent and consumed; SSM and ASM, with schedule changes
+matched against held records; NDC order messages over HTTP;
+address-based routing with multi-addressee fan-out and opt-in
 relay; work queues with a time-based sweeper and an external-publisher
 seam; the Type B 4 KB message limit and the PDM possible-duplicate indicator;
 AVS ingestion with an availability cache and free sale;
@@ -42,14 +44,22 @@ container images.
 
 - `PNRGOV`, `PAXLST`, `TKCREQ`/`TKCRES`, `DCQCKI`/`DCRCKI` decode at the syntax
   layer and route, but do not map onto a record.
-- **`CONTRL`** functional acknowledgements are neither sent nor consumed.
-- **Schedule messages** (`SSM`/`ASM`) and **availability** (`AVS`) are not
-  implemented.
+- **`AVS`**, `CONTRL`, `SSM` and `ASM` are implemented. What is not: a partner
+  cannot yet ask for a CONTRL on a *functional group*, since UCF is built but
+  no path produces one, and schedule messages update no schedule of our own --
+  they only raise work against records.
 - **`PNL`/`ADL`** passenger lists to departure control are not implemented.
 - **Split and divide.** `StatusSplit` exists in the model; the operation does
   not.
-- **NDC and ONE Order.** Out of scope today; the architecture does not preclude
-  them.
+- **NDC shopping.** Orders are implemented; AirShopping and OfferPrice are not
+  and will not be. An offer is a priced thing, pricing needs fares, and fares
+  are out of scope. An OrderCreateRQ naming only an offer this node never made
+  is refused saying exactly that.
+- **NDC 21.3.** The EDIST generation is implemented. The 21.3 generation
+  renamed the messages and restructured the payload; it is a different mapping.
+- **NDC cancellation** stops at our own record: the carriers are not told, so
+  the request is refused rather than left diverging from what they hold.
+- **ONE Order.** Not started.
 - **Ticketing.** No ticket numbers, coupon status, ET or EMD. `pnr.Ticketing`
   holds a deadline the sweeper acts on and free text it does not interpret.
 

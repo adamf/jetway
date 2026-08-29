@@ -83,6 +83,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/queues", s.listQueues)
 	mux.HandleFunc("GET /api/queue/{name}", s.getQueue)
 	mux.HandleFunc("POST /api/queue/item/{id}/work", s.workQueueItem)
+	// NDC lives outside /api because it is a partner-facing endpoint carrying a
+	// standard message, not part of this console's own interface.
+	mux.HandleFunc("POST /ndc", s.ndcOrder)
 	mux.HandleFunc("GET /api/stream", s.stream)
 
 	return logRequests(s.Log, mux)

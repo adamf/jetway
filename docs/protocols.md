@@ -65,6 +65,83 @@ of it, all the same shape — the decoder depending on its own output:
   on the other side of an encode. Parse now drops them, so the parsed form is
   the canonical one.
 
+## CONTRL (`pkg/edifact`)
+
+The UN/EDIFACT syntax and service report: the receipt a partner is owed for an
+interchange, and the only standard way to tell them their syntax was wrong.
+
+This is the one message here whose conformance can be checked. The UN publishes
+the UNSM definition, so the segment table (UCI, UCF, UCM, UCS, UCD), the action
+codes in data element 0083 and the whole syntax error list in 0085 are taken
+from it rather than inferred.
+
+Implemented:
+
+- `Check` turns the decoder's own diagnostics into a report. The mapping onto
+  0085 is deliberately partial: only faithful mappings are listed and anything
+  else becomes 18, *unspecified error*, which the standard provides for exactly
+  this. Claiming a code we cannot justify would be worse than admitting we do
+  not know which one applies.
+- `Receipt` for action 8, which says the interchange arrived and nothing about
+  its syntax.
+- Building and parsing at all five reporting levels, including the component
+  position in S011 -- the difference between "this element is wrong" and "the
+  second half of this composite is wrong".
+- Consuming a partner's CONTRL and matching it to what it acknowledges, which
+  is why outbound interchanges are indexed by their control reference.
+
+When to send one defaults to honouring UNB 0031, the sender's own
+acknowledgement request. Per-link policy overrides it: `always`, `errors`,
+`never`.
+
+## SSM and ASM (`pkg/ssim`)
+
+Schedule messages over Type B: the Standard Schedules Message for a repeating
+schedule, the Ad hoc Schedule Message for single flights.
+
+**A profile, not a specification.** SSM and ASM are defined in IATA's Standard
+Schedules Information Manual, which is paid and was not bought. What is public
+is the vocabulary and the shape: the action identifiers each message type uses,
+and the order of message identifier, time mode, action, flight, period and
+legs. The field layout within those lines is inferred, so this is an extensible
+recognizer set in the same sense as `pkg/airimp`, and unrecognised lines are
+kept verbatim.
+
+The two action sets differ and the difference is real -- `RIN` and `RRT` are ad
+hoc concepts, `SKD` and `REV` are period concepts. An action from the wrong set
+is flagged and still decoded.
+
+What the gateway does with one: match it against held records by flight *and*
+date, and raise a task per affected segment. A cancellation for one day that
+matched on the designator alone would sweep up everyone booked on that flight
+number all season.
+
+## NDC orders (`pkg/ndc`)
+
+The IATA New Distribution Capability order messages over HTTP: `OrderCreateRQ`,
+`OrderRetrieveRQ`, `OrderCancelRQ`, and the `OrderViewRS` that answers them.
+
+Orders, not shopping. An NDC order maps onto the record this gateway already
+keeps; an offer is a priced thing, pricing needs fares, and fares are out of
+scope. That boundary works because an `OrderCreateRQ` may carry its flights
+inline in `DetailedFlightItem` rather than only as a reference to an offer. One
+that names only an offer is refused saying so.
+
+The EDIST generation, namespace `http://www.iata.org/IATA/EDIST`, which is what
+the 17.2 and 18.1 schemas use and what most carrier endpoints still expose. The
+schemas are published, so unlike the teletype side this can be checked. SOAP
+envelopes are unwrapped; plain XML works too.
+
+Orders are turned into ordinary bookings and run through the same pipeline as
+everything else -- availability, free sale, carrier messaging, queues -- rather
+than down a parallel path that would need keeping in step.
+
+**Payment card details are refused at the door.** The gateway's first rule is
+that raw bytes are made durable before anything interprets them, and a primary
+account number must never be written to a message log with no encryption at
+rest. Both rules cannot hold, so a payload carrying a card number is rejected
+before capture with a `422`.
+
 ## AIRIMP (`pkg/airimp`)
 
 The reservation message grammar carried inside Type B text.

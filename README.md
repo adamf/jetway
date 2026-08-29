@@ -9,7 +9,8 @@ traffic actually uses:
 - **Type B / AIRIMP** — the teletype format carried by the SITA and ARINC
   store-and-forward networks.
 - **UN/EDIFACT / PADIS** — ISO 9735 interchanges carrying IATA messages such as
-  `PAOREQ` and `PAORES`.
+  `PAOREQ` and `PAORES`, with `CONTRL` sent and consumed.
+- **NDC** — IATA order messages over HTTP, mapped onto the same record store.
 
 Point a carrier's stream at it and it will capture, decode, apply and reply —
 and when it meets something it does not understand, it keeps that too. Records
@@ -304,6 +305,8 @@ does a ticketing deadline passing, because neither is an event anyone sends.
 | `internal/store` | Append-only message log and event-sourced PNR store; in-memory and Postgres |
 | `internal/gateway` | The pipeline, routing, response generation and seat inventory |
 | `internal/queue` | Work queues: placement, the time-based sweeper, and the external-publisher seam |
+| `pkg/ssim` | SSM and ASM schedule messages, as an extensible profile |
+| `pkg/ndc` | NDC order messages over HTTP: create, retrieve, cancel, and the order view |
 | `pkg/matip` | MATIP (RFC 2351): packet format and the Type B session handshake |
 | `internal/ingress` | MATIP, HTTPS, TCP and file-drop listeners, and peer identity |
 | `internal/egress` | Outbound delivery with backoff and restart recovery |
