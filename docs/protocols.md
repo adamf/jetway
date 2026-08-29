@@ -32,6 +32,17 @@ Implemented:
   validated on egress and available for sanitising relayed text.
 - Line-length limits on encode, wrapping address lines without ever splitting
   an address.
+- The size limits IATA's Type B whitepaper states: 60 lines of 63 characters
+  *and* under 4 KB for the whole message. The byte limit is not implied by the
+  line limits — a long message with a distribution list clears the line checks
+  and still exceeds 4096 bytes — so it is checked separately, against what
+  actually goes on the wire.
+- `PDM`, the possible-duplicate indicator, read from either the origin line or
+  a header line of its own and written to the origin line. The whitepaper
+  describes it as a message header indicator without stating its position,
+  so both readings are accepted. `MarkPossibleDuplicate` stamps it onto already
+  encoded bytes, which is how `internal/egress` marks a retransmission without
+  regenerating a message the partner has already been told about.
 
 Parsing is lenient by design. Diagnostics record every deviation; the only hard
 failure is input with no content at all.
@@ -39,6 +50,20 @@ failure is input with no content at all.
 **Encode is not the inverse of Parse.** Parse normalises whitespace, so
 round-tripping a non-conforming message produces a conforming one. Use
 `Message.Raw` for audit and replay, never a re-encode.
+
+What Encode does guarantee is that it never emits a frame that reads back as a
+different message, and `FuzzRoundTrip` holds it to that. Three defects came out
+of it, all the same shape — the decoder depending on its own output:
+
+- An address long enough to overflow a line on its own left the encoder writing
+  a blank line into the address block. A blank line ends the header, so the next
+  address and the origin line came back as message text.
+- Text whose last line was literally `NNNN` was swallowed as end-of-message
+  framing by the next reader. Unframed output now refuses it rather than losing
+  a line.
+- Trailing whitespace-only lines survived Parse but were stripped by the reader
+  on the other side of an encode. Parse now drops them, so the parsed form is
+  the canonical one.
 
 ## AIRIMP (`pkg/airimp`)
 

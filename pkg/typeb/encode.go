@@ -14,6 +14,9 @@ type EncodeOptions struct {
 	// MaxLines bounds the number of text lines. Zero uses DefaultMaxLines; set
 	// to -1 to disable the check.
 	MaxLines int
+	// MaxBytes bounds the whole encoded message, envelope included. Zero uses
+	// DefaultMaxBytes; set to -1 to disable the check.
+	MaxBytes int
 	// Frame wraps the output in ZCZC/NNNN network framing.
 	Frame bool
 	// Channel is emitted after ZCZC when Frame is set.
@@ -25,6 +28,17 @@ type EncodeOptions struct {
 	BlankLineAfterOrigin bool
 	// Charset validates the text. Nil skips validation.
 	Charset *Charset
+}
+
+func (o EncodeOptions) maxBytes() int {
+	switch {
+	case o.MaxBytes < 0:
+		return 1 << 30
+	case o.MaxBytes == 0:
+		return DefaultMaxBytes
+	default:
+		return o.MaxBytes
+	}
 }
 
 func (o EncodeOptions) maxLine() int {
@@ -74,7 +88,11 @@ func (m *Message) Encode(opts EncodeOptions) ([]byte, error) {
 	cur := prio
 	for _, d := range m.Destinations {
 		s := d.String()
-		if len(cur)+1+len(s) > max && cur != prio {
+		// cur != "" matters: an address that overflows on its own leaves cur
+		// empty, and flushing that would put a blank line in the address block.
+		// A blank line ends the header, so the next address would be read back
+		// as text and the origin line with it.
+		if len(cur)+1+len(s) > max && cur != prio && cur != "" {
 			lines = append(lines, cur)
 			cur = s
 			continue
@@ -99,6 +117,9 @@ func (m *Message) Encode(opts EncodeOptions) ([]byte, error) {
 	origin := "." + m.Origin.String()
 	if m.OriginTime.Present {
 		origin += " " + m.OriginTime.String()
+	}
+	if m.PossibleDuplicate {
+		origin += " " + PDMIndicator
 	}
 	for _, e := range m.OriginExtra {
 		origin += " " + e
@@ -131,6 +152,16 @@ func (m *Message) Encode(opts EncodeOptions) ([]byte, error) {
 			return nil, fmt.Errorf("typeb: encode: text has %d lines, the limit is %d; the message must be split",
 				len(textLines), maxLines)
 		}
+		// Type B reserves NNNN for end-of-message, so a text whose last line is
+		// NNNN cannot be represented unframed: the next reader would strip it
+		// as framing and the line would be gone. Framed output is safe, because
+		// the encoder appends its own terminator after it. Refuse rather than
+		// emit something that reads back as a different message.
+		if !opts.Frame && lastNonBlank(textLines) == EndOfMessage {
+			return nil, fmt.Errorf(
+				"typeb: encode: text ends with %s, which an unframed reader takes as end-of-message; frame the message or change the text",
+				EndOfMessage)
+		}
 		for _, tl := range textLines {
 			if len(tl) > max {
 				return nil, fmt.Errorf("typeb: encode: text line exceeds %d characters: %q", max, tl)
@@ -147,7 +178,25 @@ func (m *Message) Encode(opts EncodeOptions) ([]byte, error) {
 	if opts.CRLF {
 		sep = "\r\n"
 	}
-	return []byte(strings.Join(lines, sep) + sep), nil
+	out := []byte(strings.Join(lines, sep) + sep)
+	// The byte limit is not implied by the line limits; check it last, against
+	// what actually goes on the wire.
+	if mb := opts.maxBytes(); len(out) > mb {
+		return nil, fmt.Errorf("typeb: encode: message is %d bytes, the limit is %d; the message must be split",
+			len(out), mb)
+	}
+	return out, nil
+}
+
+// lastNonBlank returns the last line with content, trimmed, matching how Parse
+// looks for the end-of-message marker.
+func lastNonBlank(lines []string) string {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if t := strings.TrimSpace(lines[i]); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // Charset describes the characters a link will accept.

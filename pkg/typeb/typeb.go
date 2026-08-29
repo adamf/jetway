@@ -22,6 +22,7 @@
 package typeb
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"regexp"
@@ -57,6 +58,20 @@ const DefaultLineLength = 63
 // from the same source. Exceeding it means the message must be split, which is
 // the sender's decision and not something this package does silently.
 const DefaultMaxLines = 60
+
+// DefaultMaxBytes is the maximum size of a complete Type B message, envelope
+// included.
+//
+// The same whitepaper gives the limit as 60 lines of 63 characters "whilst
+// remaining below 4 kilo bytes of data". The line limits do not imply this one:
+// 60 full lines is already 3780 characters, and a priority line carrying
+// several addressees, an origin line and framing can push an otherwise
+// conforming message past 4096 bytes. A link that polices the byte limit will
+// truncate or reject such a message, so Encode refuses to build one.
+const DefaultMaxBytes = 4096
+
+// PDMIndicator marks a message as a possible duplicate.
+const PDMIndicator = "PDM"
 
 // Severity classifies a parse Diagnostic.
 type Severity int
@@ -193,6 +208,17 @@ type Message struct {
 	// such as relay signatures or carrier-specific sequence numbers.
 	OriginExtra []string
 
+	// PossibleDuplicate reports that the sender marked this message PDM. On a
+	// store-and-forward network a sender that did not see an acknowledgement
+	// retransmits, and flags the retransmission so the receiver can recognise a
+	// resend rather than act on it a second time.
+	//
+	// IATA's Type B whitepaper describes PDM as a message header indicator
+	// without stating its position. Parse therefore accepts it either as a
+	// token on the origin line or as a line of its own in the header, and
+	// Encode emits it on the origin line.
+	PossibleDuplicate bool
+
 	// SMI is the Standard Message Identifier line, when the message class uses
 	// one. Most AIRIMP traffic does not.
 	SMI string
@@ -248,6 +274,42 @@ func Normalise(b []byte) []byte {
 		}
 	}
 	return out
+}
+
+// MarkPossibleDuplicate sets the PDM indicator on an already-encoded message.
+//
+// A retransmission must carry PDM so the receiver can tell a resend from a
+// second instruction. The edit is textual and touches only the origin line:
+// the bytes being retransmitted are the bytes that were captured, and
+// regenerating them from a parse would change a message the peer has already
+// been told about.
+//
+// It reports false when there is no origin line to mark or when the message
+// already carries the indicator, in which case raw is returned unchanged.
+func MarkPossibleDuplicate(raw []byte) ([]byte, bool) {
+	lines := bytes.SplitAfter(raw, []byte("\n"))
+	for i, ln := range lines {
+		body := bytes.TrimRight(ln, "\r\n")
+		t := bytes.TrimSpace(body)
+		if !bytes.HasPrefix(t, []byte(".")) {
+			continue
+		}
+		for _, f := range bytes.Fields(t) {
+			if bytes.Equal(f, []byte(PDMIndicator)) {
+				return raw, false
+			}
+		}
+		marked := make([]byte, 0, len(ln)+4)
+		marked = append(marked, body...)
+		marked = append(marked, ' ')
+		marked = append(marked, PDMIndicator...)
+		marked = append(marked, ln[len(body):]...)
+		out := make([][]byte, len(lines))
+		copy(out, lines)
+		out[i] = marked
+		return bytes.Join(out, nil), true
+	}
+	return raw, false
 }
 
 var priorityRe = regexp.MustCompile(`^Q[A-Z]$`)
@@ -352,6 +414,10 @@ func Parse(raw []byte) (*Message, error) {
 		if t == "" {
 			continue
 		}
+		if t == PDMIndicator {
+			m.PossibleDuplicate = true
+			continue
+		}
 		if strings.HasPrefix(t, ".") {
 			m.parseOriginLine(t, lineOffset+j+1)
 			i = j + 1
@@ -369,7 +435,7 @@ func Parse(raw []byte) (*Message, error) {
 	for i < len(lines) && strings.TrimSpace(lines[i]) == "" {
 		i++
 	}
-	m.Text = strings.TrimRight(strings.Join(lines[i:], "\n"), "\n")
+	m.Text = trimTrailingBlankLines(lines[i:])
 
 	if m.Text == "" {
 		m.diag(Error, 0, "empty_text", "message has an envelope but no text")
@@ -378,6 +444,21 @@ func Parse(raw []byte) (*Message, error) {
 		m.diag(Error, 0, "no_destinations", "priority line carried no parseable addresses")
 	}
 	return m, nil
+}
+
+// trimTrailingBlankLines joins the text lines, dropping trailing lines that
+// hold nothing but whitespace.
+//
+// They carry no information, and keeping them would stop Parse being canonical:
+// the reader on the other side of an encode strips them as part of finding the
+// end-of-message marker, so a Text that kept them would not survive the trip.
+// Trailing spaces on a line that has content are left alone.
+func trimTrailingBlankLines(lines []string) string {
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	return strings.Join(lines[:end], "\n")
 }
 
 func allLookLikeAddresses(fields []string) bool {
@@ -419,6 +500,10 @@ func (m *Message) parseOriginLine(t string, line int) {
 		m.Origin = a
 	}
 	for _, f := range fields[1:] {
+		if f == PDMIndicator {
+			m.PossibleDuplicate = true
+			continue
+		}
 		if !m.OriginTime.Present {
 			if ot, ok := parseOriginTime(f); ok {
 				m.OriginTime = ot

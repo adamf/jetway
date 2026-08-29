@@ -1,6 +1,7 @@
 package typeb
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -271,4 +272,185 @@ func TestEncodeEnforcesStandardLimits(t *testing.T) {
 	if _, err := m.Encode(EncodeOptions{MaxLines: -1}); err != nil {
 		t.Errorf("MaxLines:-1 must disable the check: %v", err)
 	}
+}
+
+func TestEncodeEnforcesByteLimit(t *testing.T) {
+	if DefaultMaxBytes != 4096 {
+		t.Errorf("DefaultMaxBytes = %d, want 4096", DefaultMaxBytes)
+	}
+	// A message can satisfy both line limits and still exceed the byte limit:
+	// 60 lines of 63 characters is 3840 bytes before the envelope, and a
+	// distribution list adds address lines on top. This is the case the line
+	// checks alone would let through.
+	lines := make([]string, 60)
+	for i := range lines {
+		lines[i] = strings.Repeat("A", 63)
+	}
+	dests := make([]Address, 40)
+	for i := range dests {
+		dests[i] = mustAddr(t, "LHRRMBA")
+	}
+	m := &Message{
+		Priority: "QU", Destinations: dests,
+		Origin: mustAddr(t, "LONXX1A"), OriginTime: OriginTime{12, 14, 30, true},
+		Text: strings.Join(lines, "\n"),
+	}
+	if _, err := m.Encode(EncodeOptions{}); err == nil {
+		t.Error("a message over 4096 bytes must be refused even when every line conforms")
+	}
+	out, err := m.Encode(EncodeOptions{MaxBytes: -1})
+	if err != nil {
+		t.Fatalf("MaxBytes -1 must disable the check: %v", err)
+	}
+	if len(out) <= DefaultMaxBytes {
+		t.Fatalf("test fixture is only %d bytes; it must exceed the limit to be meaningful", len(out))
+	}
+
+	// One destination keeps the same text comfortably inside the limit.
+	m.Destinations = dests[:1]
+	if _, err := m.Encode(EncodeOptions{}); err != nil {
+		t.Errorf("60x63 with a single addressee is within 4096 bytes: %v", err)
+	}
+}
+
+func TestParsePDMOnOriginLine(t *testing.T) {
+	m, err := Parse([]byte("QU LHRRMBA\n.LONXX1A 121430 PDM\nHELLO\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !m.PossibleDuplicate {
+		t.Error("PDM on the origin line must set PossibleDuplicate")
+	}
+	if len(m.OriginExtra) != 0 {
+		t.Errorf("PDM must not also land in OriginExtra: %v", m.OriginExtra)
+	}
+	if !m.OriginTime.Present {
+		t.Error("PDM must not prevent the time group from parsing")
+	}
+	if m.Text != "HELLO" {
+		t.Errorf("Text = %q", m.Text)
+	}
+}
+
+func TestParsePDMOnOwnLine(t *testing.T) {
+	m, err := Parse([]byte("QU LHRRMBA\nPDM\n.LONXX1A 121430\nHELLO\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !m.PossibleDuplicate {
+		t.Error("a standalone PDM header line must set PossibleDuplicate")
+	}
+	if m.Text != "HELLO" {
+		t.Errorf("PDM must not leak into the text: Text = %q", m.Text)
+	}
+}
+
+func TestPDMSurvivesRoundTrip(t *testing.T) {
+	m := &Message{
+		Priority: "QU", Destinations: []Address{mustAddr(t, "LHRRMBA")},
+		Origin: mustAddr(t, "LONXX1A"), OriginTime: OriginTime{12, 14, 30, true},
+		OriginExtra: []string{"REL1"}, PossibleDuplicate: true, Text: "HELLO",
+	}
+	raw, err := m.Encode(EncodeOptions{})
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	back, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !back.PossibleDuplicate {
+		t.Error("PossibleDuplicate lost in round trip")
+	}
+	if len(back.OriginExtra) != 1 || back.OriginExtra[0] != "REL1" {
+		t.Errorf("OriginExtra = %v, want [REL1]", back.OriginExtra)
+	}
+	// Encoding the reparsed message must reproduce the same bytes, or the
+	// decoder depends on its own output.
+	again, err := back.Encode(EncodeOptions{})
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	if string(again) != string(raw) {
+		t.Errorf("not a fixed point:\n first: %q\nsecond: %q", raw, again)
+	}
+}
+
+func TestMarkPossibleDuplicate(t *testing.T) {
+	raw := []byte("QU LHRRMBA\r\n.LONXX1A 121430\r\nHELLO\r\n")
+	out, ok := MarkPossibleDuplicate(raw)
+	if !ok {
+		t.Fatal("MarkPossibleDuplicate reported no origin line to mark")
+	}
+	if !strings.Contains(string(out), ".LONXX1A 121430 PDM\r\n") {
+		t.Errorf("PDM not appended to the origin line: %q", out)
+	}
+	if !strings.HasSuffix(string(out), "HELLO\r\n") {
+		t.Errorf("line endings not preserved: %q", out)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("marked message must still parse: %v", err)
+	}
+	if !m.PossibleDuplicate {
+		t.Error("marked message did not parse as a possible duplicate")
+	}
+
+	// Marking twice must not stack indicators.
+	again, ok := MarkPossibleDuplicate(out)
+	if ok {
+		t.Error("marking an already-marked message must report false")
+	}
+	if string(again) != string(out) {
+		t.Error("an already-marked message must be returned unchanged")
+	}
+
+	// Nothing to mark.
+	if _, ok := MarkPossibleDuplicate([]byte("no envelope here\n")); ok {
+		t.Error("a message with no origin line cannot be marked")
+	}
+}
+
+// FuzzRoundTrip guards the property that bit the EDIFACT codec seven times: a
+// decoder must not depend on its own output. Encode is deliberately not the
+// inverse of Parse -- Parse is lenient and normalises -- but encoding must
+// reach a fixed point after one pass, and the encoder must never emit something
+// its own parser rejects or reads differently.
+func FuzzRoundTrip(f *testing.F) {
+	f.Add([]byte("QU LHRRMBA NYCRMAA\n.LONXX1A 121430\nSSR VGML BA HK1\n"))
+	f.Add([]byte("ZCZC ABC1234\nQU LHRRMBA\n.NYCRMAA 010000\nHELLO\nNNNN\n"))
+	f.Add([]byte("QU LHRRMBA\n.LONXX1A 121430 PDM\nHELLO\n"))
+	f.Add([]byte("QU LHRRMBA\nPDM\n.LONXX1A 121430\nHELLO\n"))
+	f.Add([]byte("QU LHRRMBA\n.LONXX1A 121430 PDM REL1\nHELLO\n"))
+	f.Add([]byte("QX AAABBCC DDDEEFF GGGHHII\n.LONXX1A 010101\nTEXT\n"))
+	f.Add([]byte(".LONXX1A\nNO PRIORITY LINE\n"))
+
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		m, err := Parse(raw)
+		if err != nil {
+			return
+		}
+		first, err := m.Encode(EncodeOptions{})
+		if err != nil {
+			// Refusing to encode is a legitimate outcome: no destinations, an
+			// over-long line, a message past the byte limit.
+			return
+		}
+		again, err := Parse(first)
+		if err != nil {
+			t.Fatalf("encoder produced output its own parser rejects: %q (%v)", first, err)
+		}
+		second, err := again.Encode(EncodeOptions{})
+		if err != nil {
+			t.Fatalf("re-encoding a message this encoder produced failed: %q (%v)", first, err)
+		}
+		if !bytes.Equal(first, second) {
+			t.Errorf("encoding is not a fixed point:\n first: %q\nsecond: %q\n  from: %q",
+				first, second, raw)
+		}
+		if again.PossibleDuplicate != m.PossibleDuplicate {
+			t.Errorf("PDM flag changed across a round trip: %v -> %v (%q)",
+				m.PossibleDuplicate, again.PossibleDuplicate, first)
+		}
+	})
 }
