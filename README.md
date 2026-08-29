@@ -290,6 +290,25 @@ notification instead of losing a task. `queue.Publisher` is the seam;
 answering. A partner who never answers puts work on no queue at all, and neither
 does a ticketing deadline passing, because neither is an event anyone sends.
 
+## The biggest gap is a document, not code
+
+Several message layers here are defined in paid IATA publications that were not
+bought. They are implemented as extensible profiles built from what is public
+and inferred from message shapes: they work, they are not conformant, and no
+amount of testing closes that difference, because the tests would be checking
+the same guess twice.
+
+The most expensive single absence is the **AIRIMP divide message**. A booking
+can be split correctly, and the carriers cannot be told, so both halves keep the
+same carrier locator and every division is recorded as a divergence. It is the
+last of the "we changed something and could not tell them" cases — building the
+cancellation message closed three blocked features at once, and this one is
+shaped identically.
+
+[docs/roadmap.md](docs/roadmap.md#blocked-on-documents-we-do-not-have) lists
+each document and exactly what it costs. If you have any of them and can say
+where this is wrong, that is the single most useful contribution available.
+
 ## Packages
 
 | Package | What it is |

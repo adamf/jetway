@@ -21,6 +21,12 @@ When you implement something in the inferred category, say so in the package
 doc, make it an extensible `Profile`, and keep unrecognised input verbatim.
 Never write a doc comment that implies conformance you cannot demonstrate.
 
+`docs/roadmap.md` has a section naming each paid document and what its absence
+costs. Add to it rather than scattering another caveat: the point of collecting
+them is that they are one procurement decision, not six unrelated apologies.
+The **AIRIMP divide message** is the most expensive single absence — it is why a
+split booking cannot be advised to its carriers.
+
 When public sources **disagree** about a rule — as they do for the ticket check
 digit — implement one, make it advisory rather than a gate, and document the
 disagreement. Rejecting valid input on an uncertain rule is worse than

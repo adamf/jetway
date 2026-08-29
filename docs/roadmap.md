@@ -23,6 +23,37 @@ mutual TLS; outbound retry with restart recovery; a durable
 inbound spool; health, readiness and metrics endpoints; graceful drain;
 container images.
 
+## Blocked on documents we do not have
+
+The largest single gap in this project is not code. Several message layers are
+defined in paid publications that were not bought, so they are implemented as
+extensible profiles built from what is public and inferred from message shapes.
+They work, and they are not conformant, and no amount of testing here can close
+that difference — the tests would only be checking the same guess twice.
+
+| Document | What it costs us |
+| --- | --- |
+| **A4A/IATA AIRIMP** | `pkg/airimp` is a profile, not conformant. **The divide message is missing entirely**, which is why a split booking cannot be advised to its carriers. Element layouts and the rules governing action-code usage are inferred. |
+| **IATA SSIM** | `pkg/ssim` knows the SSM and ASM action vocabulary, which is public, and infers the field layout within each line. |
+| **IATA PADIS message directories** | `pkg/padis` segment layouts are inferred: `PAOREQ`, `PAORES`, and the `TKT`/`CPN` segments of `TKCREQ`/`TKCRES`. The *code sets* are public and are used; the message structures are not. |
+| **The EMD System Update message** | Association and disassociation are recorded locally and the carrier advised over ticket control, because the guide names a distinct request without giving its EDIFACT form. |
+| **BATAP** | No acknowledgement contract above MATIP, so a relayed message has no responsibility transfer and a detected sequence gap cannot be turned into a retransmission request. |
+| **ATPCO Optional Services** | Reason-for-issuance sub-codes are carried as free text rather than validated. The seven top-level groups are public and are enforced. |
+
+Two things follow from this that are worth stating plainly.
+
+**The divide message is the most expensive single absence.** It is the last of
+the "we changed something and could not tell them" cases: cancellation was
+another, and building the cancel message closed three separate blocked features
+at once. A booking can be split correctly here and the carriers still hold one
+record covering both halves, which every division records as a divergence.
+
+**What is not affected.** ISO 9735, CONTRL, MATIP and the NDC schemas are all
+published, and those layers are checked rather than inferred. So is the coupon
+status vocabulary, via the free EMD guide — checking it against that source
+corrected three errors in a list that had been guessed. Where a free source
+exists, it is used, and it has found real bugs every time.
+
 ## Blocks handling real passenger data
 
 - **Field-level encryption at rest.** `DOCS`, `DOCA`, `DOCO` and `FOID` are
