@@ -56,7 +56,8 @@ passenger data in a deployment until they are addressed.**
 - Service characters from a `UNA` are validated as plausible, so a corrupted
   header fails cleanly rather than reinterpreting the interchange.
 - Interchanges marked as test are refused rather than applied.
-- The dependency tree is deliberately small: a Postgres driver and its
-  transitive dependencies, and nothing else. Everything above the store is
-  standard library. Carriers audit this.
+- The dependency tree is deliberately small: a Postgres driver, a YAML parser
+  for the configuration file, and their transitive dependencies. Nothing else
+  is linked -- the codecs, the pipeline, the transports and the metrics
+  endpoint are standard library only. Carriers audit this.
 - Decoders are fuzzed for round-trip stability in CI.
