@@ -33,7 +33,7 @@ that difference — the tests would only be checking the same guess twice.
 
 | Document | What it costs us |
 | --- | --- |
-| **A4A/IATA AIRIMP** | `pkg/airimp` is a profile, not conformant. **The divide message is missing entirely**, which is why a split booking cannot be advised to its carriers. Element layouts and the rules governing action-code usage are inferred. |
+| **A4A/IATA AIRIMP** | `pkg/airimp` is a profile, not conformant. **The divide message is missing entirely**, which is why a split booking cannot be advised to its carriers — see below for exactly what is and is not known about it. Element layouts and the rules governing action-code usage are inferred. |
 | **IATA SSIM** | `pkg/ssim` knows the SSM and ASM action vocabulary, which is public, and infers the field layout within each line. |
 | **IATA PADIS message directories** | `pkg/padis` segment layouts are inferred: `PAOREQ`, `PAORES`, and the `TKT`/`CPN` segments of `TKCREQ`/`TKCRES`. The *code sets* are public and are used; the message structures are not. |
 | **The EMD System Update message** | Association and disassociation are recorded locally and the carrier advised over ticket control, because the guide names a distinct request without giving its EDIFACT form. |
@@ -47,6 +47,23 @@ the "we changed something and could not tell them" cases: cancellation was
 another, and building the cancel message closed three separate blocked features
 at once. A booking can be split correctly here and the carriers still hold one
 record covering both halves, which every division records as a divergence.
+
+The free AIRIMP table of contents narrows it usefully. The message exists and
+is named — **§3.7.10, Divided PNR Message (DVD)** — and there is a procedure
+chapter for it at **§3.4, Dividing Party**, with worked examples at §3.4.6.
+What is behind the paywall is the DVD element layout and the exchange around
+it: what the message carries, and whether the partner returns a locator for the
+divided record.
+
+Two things follow. First, buying the manual would not close this completely:
+**§7.17 is titled "Divide Made by Member (Bilateral)"**, and §7.18 likewise, so
+part of divide handling is agreed per partner rather than being universal — 
+which is what `airimp.Profile` is for. Second, the EDIFACT half is **not
+blocked**. The free PNRGOV implementation guide documents how a split PNR is
+represented: `GR.8` carries the split record locators, `EQN` (§5.6) carries the
+number of passengers split from or to the record, and `RCI` carries the
+locators themselves. That is enough to build the PADIS side against a free
+source, leaving only the teletype side waiting on a purchase.
 
 **What is not affected.** ISO 9735, CONTRL, MATIP and the NDC schemas are all
 published, and those layers are checked rather than inferred. So is the coupon
