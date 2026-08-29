@@ -35,6 +35,11 @@ they present or the circuit they arrive on, never from a name they assert.
      fsync before ack           retry with backoff on the way out
 ```
 
+![A booking crossing the links and becoming a record](docs/images/booking-flow.gif)
+
+*One booking: the sell goes out, the carrier answers, the record appears — then
+the same record seen from the GDS side.*
+
 ## Try it
 
 ```sh
@@ -58,6 +63,36 @@ Things worth trying in the console:
 | Book class **Z** | Broadcast closed, so it is refused before any message is sent |
 | Open a received message and press **Replay** | Recognised as a retransmission and refused, not booked twice |
 | Compare a Type B message with an EDIFACT one | The same booking on two very different wires |
+| Book an **interline** journey from the Records tab | One record, two carriers, two dialects, two locators |
+
+### Message flow
+
+![Message flow with a decoded Type B message](docs/images/message-flow.png)
+
+Every exchange appears twice, once from each side, so you can watch a message
+leave the gateway and arrive at the carrier. Selecting one shows the Type B
+envelope and the AIRIMP elements broken out — here the action code `SS` is
+explained as *sold, segment sold from availability*, meaning the carrier had
+already granted free sale and no request was needed.
+
+### Records
+
+![The records view, showing interline bookings](docs/images/records.png)
+
+The GDS side. A record is found by who is travelling, not by its locator, so
+the table leads with passengers and the itinerary. Interline records are
+marked, and **Their locators** shows the reference each carrier holds for the
+same booking — the thing that makes a later message match up.
+
+### One record, two carriers
+
+![Record detail with itinerary, history and conversation](docs/images/record-detail.png)
+
+`6U5JBB` is one passenger on two airlines: Lufthansa FRA–JFK and British
+Airways JFK–LHR. Lufthansa was asked over EDIFACT and British Airways over Type
+B; each answered separately and each returned its own locator. The history
+names the message behind every change, and the conversation below it links
+straight back to those messages.
 
 From the command line:
 
