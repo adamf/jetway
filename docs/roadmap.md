@@ -2,8 +2,9 @@
 
 An honest list. Things in the first two sections block a production deployment.
 
-Recently closed: partner-facing ingress over HTTPS, TCP and file drop; peer
-identity from mutual TLS; outbound retry with restart recovery; a durable
+Recently closed: MATIP (RFC 2351) with the Type B session handshake;
+partner-facing ingress over HTTPS, TCP and file drop; peer identity from
+mutual TLS; outbound retry with restart recovery; a durable
 inbound spool; health, readiness and metrics endpoints; graceful drain;
 container images.
 
@@ -20,12 +21,15 @@ container images.
 
 ## Blocks a production link
 
-- **MATIP session layer.** Only the length framing is implemented, not RFC 2351
-  session control. Validate against the carrier's ICD before going live.
 - **IBM MQ transport.** Many carriers offer MQ rather than a socket. Ingress is
   an interface and MQ fits it; nobody has written it.
 - **SITA and ARINC network access.** Reaching a carrier over Type B needs a
-  commercial contract and an assigned address, not code.
+  commercial contract and an assigned address, not code. The protocol side is
+  done; the procurement side is not.
+- **MATIP Type A.** Only Type B is implemented. Type A carries interactive
+  terminal traffic on port 350 and shares the header format.
+- **BATAP.** MATIP names it as the messaging responsibility transfer protocol;
+  the acknowledgement semantics above MATIP are not implemented.
 - **Backpressure.** No admission control if a partner floods a link.
 - **Certificate rotation.** Server and client certificates are read once at
   start. Rolling one means a restart.

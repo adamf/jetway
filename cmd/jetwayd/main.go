@@ -253,6 +253,7 @@ func openStore(ctx context.Context, cfg *config.Config, log *slog.Logger) (store
 func buildIngress(cfg *config.Config, log *slog.Logger) ([]ingress.Ingress, map[string]*ingress.TCP, error) {
 	var out []ingress.Ingress
 	tcps := map[string]*ingress.TCP{}
+	matips := map[string]*ingress.MATIP{}
 	for _, ic := range cfg.Ingress {
 		switch ic.Type {
 		case "tcp":
@@ -265,6 +266,16 @@ func buildIngress(cfg *config.Config, log *slog.Logger) ([]ingress.Ingress, map[
 			}
 			tcps[ic.Name] = t
 			out = append(out, t)
+		case "matip":
+			mp, err := ingress.NewMATIP(ic, log)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := mp.Listen(); err != nil {
+				return nil, nil, err
+			}
+			matips[ic.Name] = mp
+			out = append(out, mp)
 		case "https":
 			h, err := ingress.NewHTTPS(ic, log)
 			if err != nil {
@@ -282,8 +293,16 @@ func buildIngress(cfg *config.Config, log *slog.Logger) ([]ingress.Ingress, map[
 			out = append(out, f)
 		}
 	}
+	// Replies on a MATIP session go back down that session, so those listeners
+	// join the same reply path as the plain TCP ones.
+	for name, mp := range matips {
+		matipSenders[name] = mp
+	}
 	return out, tcps, nil
 }
+
+// matipSenders lets registerPeers reach MATIP sessions for replies.
+var matipSenders = map[string]*ingress.MATIP{}
 
 // registerPeers wires each configured partner into routing and egress.
 func registerPeers(cfg *config.Config, gw *gateway.Gateway, router *egress.Router,
@@ -294,6 +313,11 @@ func registerPeers(cfg *config.Config, gw *gateway.Gateway, router *egress.Route
 	sessions := func(ctx context.Context, peer string, raw []byte) error {
 		for _, t := range tcps {
 			if err := t.Send(ctx, peer, raw); err == nil {
+				return nil
+			}
+		}
+		for _, m := range matipSenders {
+			if err := m.Send(ctx, peer, raw); err == nil {
 				return nil
 			}
 		}
@@ -429,13 +453,19 @@ func startDemo(ctx context.Context, cfg *config.Config, listeners []ingress.Ingr
 func livePeers(tcps map[string]*ingress.TCP, router *egress.Router) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, t := range tcps {
-		for _, p := range t.Peers() {
+	add := func(ps []string) {
+		for _, p := range ps {
 			if !seen[p] {
 				seen[p] = true
 				out = append(out, p)
 			}
 		}
+	}
+	for _, t := range tcps {
+		add(t.Peers())
+	}
+	for _, m := range matipSenders {
+		add(m.Peers())
 	}
 	return out
 }

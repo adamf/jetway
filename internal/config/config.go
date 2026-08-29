@@ -123,6 +123,7 @@ type Ingress struct {
 
 	Framing  Framing  `yaml:"framing"`
 	Identify Identify `yaml:"identify"`
+	MATIP    MATIP    `yaml:"matip"`
 
 	// Synchronous makes an https listener hold the request open and return any
 	// generated reply in the response body, rather than answering 202 and
@@ -137,6 +138,22 @@ type Ingress struct {
 	// StableFor is how long a file's size must stay unchanged before it is read,
 	// so a file still being uploaded is not processed half-written.
 	StableFor time.Duration `yaml:"stable_for"`
+}
+
+// MATIP configures a session under RFC 2351.
+type MATIP struct {
+	// Coding is the character coding both sides must agree on: ascii, ebcdic,
+	// ipars or baudot. Empty means ascii, which is what Type B over IP carries.
+	Coding string `yaml:"coding"`
+	// Protection identifies the messaging responsibility transfer protocol.
+	// 2 is BATAP; the standard assigns no other value.
+	Protection int `yaml:"protection"`
+	// SenderHLD and RecipientHLD are the host identifiers, when the link uses
+	// them. Both must be set together.
+	SenderHLD    int `yaml:"sender_hld"`
+	RecipientHLD int `yaml:"recipient_hld"`
+	// HandshakeTimeout bounds the session open exchange.
+	HandshakeTimeout time.Duration `yaml:"handshake_timeout"`
 }
 
 // Egress is how replies and requests reach a peer.
@@ -386,6 +403,21 @@ func (in *Ingress) validate() error {
 		return err
 	}
 	switch in.Type {
+	case "matip":
+		if !in.Identify.Resolvable() {
+			return fmt.Errorf("config: ingress %q has no way to identify a peer; "+
+				"a MATIP session open declares traffic characteristics, not identity", in.Name)
+		}
+		if len(in.Identify.ByCertCN) > 0 && !in.TLS.Mutual() {
+			return fmt.Errorf("config: ingress %q identifies peers by certificate but has no "+
+				"tls.client_ca, so no certificate is required", in.Name)
+		}
+		switch in.MATIP.Coding {
+		case "", "ascii", "ebcdic", "ipars", "baudot":
+		default:
+			return fmt.Errorf("config: ingress %q: matip.coding must be ascii, ebcdic, ipars or baudot, got %q",
+				in.Name, in.MATIP.Coding)
+		}
 	case "tcp", "https":
 		if in.Addr == "" {
 			return fmt.Errorf("config: ingress %q needs an addr", in.Name)
@@ -406,9 +438,9 @@ func (in *Ingress) validate() error {
 			return fmt.Errorf("config: ingress %q needs identify.peer; a file carries no identity", in.Name)
 		}
 	default:
-		return fmt.Errorf("config: ingress %q: type must be tcp, https or filedrop, got %q", in.Name, in.Type)
+		return fmt.Errorf("config: ingress %q: type must be matip, tcp, https or filedrop, got %q", in.Name, in.Type)
 	}
-	if in.Type != "filedrop" {
+	if in.Type != "filedrop" && in.Type != "matip" {
 		if err := in.Framing.validate("ingress " + in.Name); err != nil {
 			return err
 		}

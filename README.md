@@ -173,7 +173,8 @@ See [Provenance](#provenance-and-what-this-is-not).
 | `pkg/pnr` | The canonical passenger name record, date resolution and record locator allocation |
 | `internal/store` | Append-only message log and event-sourced PNR store; in-memory and Postgres |
 | `internal/gateway` | The pipeline, routing, response generation and seat inventory |
-| `internal/ingress` | HTTPS, TCP and file-drop listeners, and peer identity |
+| `pkg/matip` | MATIP (RFC 2351): packet format and the Type B session handshake |
+| `internal/ingress` | MATIP, HTTPS, TCP and file-drop listeners, and peer identity |
 | `internal/egress` | Outbound delivery with backoff and restart recovery |
 | `internal/spool` | Durable write-ahead buffer for inbound messages |
 | `internal/config` | Deployment configuration |
@@ -245,6 +246,14 @@ identified, a peer entry saying how to reach them, and — when their dialect
 differs from the shipped profile — a recognizer or segment handler. The first
 two are configuration. See [docs/adding-a-carrier.md](docs/adding-a-carrier.md).
 
+## Independence
+
+Jetway is an independent implementation. It is **not affiliated with, authorised
+by, or endorsed by IATA, A4A, SITA or ARINC**, and no part of any IATA
+publication is reproduced here. Message formats are implemented as functional
+protocols; where a specification is the normative source, the code cites the
+section rather than quoting it.
+
 ## Provenance, and what this is not
 
 The two sides differ, and it matters:
@@ -270,11 +279,11 @@ Jetway is a messaging gateway and a record store. It is deliberately **not**:
 - a departure control system;
 - an NDC or ONE Order implementation, though nothing here precludes one.
 
-The MATIP framing profile in `internal/transport` is a length-prefix starting
-point, not a conformant RFC 2351 implementation: it does not implement the
-session layer, and several carriers run non-conforming variants. Validate it
-against the carrier's interface control document before putting a link into
-production.
+MATIP is implemented from RFC 2351 itself, which is an open IETF document, so
+`pkg/matip` follows the standard rather than approximating it: the four-byte
+header, the session open, open confirm and session close handshake, and Type B
+data packets. Carriers do run non-conforming variants, so still check the
+partner's interface control document before a link goes live.
 
 ## Security and personal data
 

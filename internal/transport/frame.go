@@ -137,15 +137,16 @@ func DefaultFramer() Framer {
 	return LengthPrefix{HeaderBytes: 4, Label: "jetway/4B-be"}
 }
 
-// MATIPProfile returns the length framing used by MATIP-style links.
+// MATIPProfile is retained only to point at the real implementation.
 //
-// RFC 2351 defines a session layer above this framing that this profile does
-// not implement. Treat it as a starting point to validate against the carrier's
-// interface control document, not as a conformant MATIP implementation: several
-// carriers run non-conforming variants and the header layout must be confirmed
-// per link.
+// It previously guessed at MATIP framing as a two-byte inclusive length. That
+// was wrong: RFC 2351 defines a four-byte header carrying a version, a control
+// flag, a seven-bit command and the length, plus a session handshake. See
+// pkg/matip, which implements the standard rather than approximating it.
+//
+// Deprecated: use pkg/matip.
 func MATIPProfile() Framer {
-	return LengthPrefix{HeaderBytes: 2, Inclusive: true, Label: "matip-like/2B-be-inclusive"}
+	return LengthPrefix{HeaderBytes: 2, Inclusive: true, Label: "deprecated/see-pkg-matip"}
 }
 
 // Sentinel frames messages by a terminating byte sequence, which is how Type B

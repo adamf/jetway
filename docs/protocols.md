@@ -173,7 +173,29 @@ the count includes the header are configuration, not code. `Sentinel` frames on
 a terminating byte sequence, which is how Type B arrives on links that carry the
 classic end-of-message.
 
-`MATIPProfile()` is a starting point for MATIP-style links. It implements the
-length framing only, not the RFC 2351 session layer, and several carriers run
-non-conforming variants. Confirm the header layout against the carrier's
-interface control document before going live.
+## MATIP (`pkg/matip`)
+
+RFC 2351, implemented from the RFC rather than guessed at. It is an open IETF
+document, so this layer can be exact.
+
+The header is four bytes: five zero bits, a three-bit version that must be 001,
+a control flag, a seven-bit command, and a sixteen-bit length **covering the
+whole packet including the header**. That last detail bounds a Type B message
+carried in one packet to 65,531 bytes.
+
+Type B uses three control commands -- session open, open confirm, session close
+-- and a data packet whose payload is the Type B message. The handshake settles
+character coding, the responsibility-transfer protocol, and optionally the host
+identifiers; either side may initiate, and a collision is broken in favour of
+the higher IP address.
+
+Implemented: the full Type B packet and session layer, on IANA port 351.
+Not implemented: Type A (interactive terminal traffic, port 350), and BATAP
+acknowledgement semantics above MATIP.
+
+One inconsistency is worth knowing about. The RFC places the host identifiers
+at "bytes 9,10 and 11,12", which cannot be reconciled with the 10-byte packet
+length it states two paragraphs earlier. The bit diagram and the stated lengths
+agree with each other, so this implementation follows those and puts the
+identifiers at offsets 6..9. Confirm against a partner's interface control
+document.
