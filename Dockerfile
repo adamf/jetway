@@ -17,6 +17,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/jetwayd   /usr/local/bin/jetwayd
 COPY --from=build /out/jetwayctl /usr/local/bin/jetwayctl
 COPY --from=build /out/carriersim /usr/local/bin/carriersim
+COPY deploy/jetway.demo.yaml /etc/jetway/jetway.yaml
 
 # The spool must outlive the container. Mount a volume here in any deployment
 # that enables it, or a restart discards messages that were acknowledged to a

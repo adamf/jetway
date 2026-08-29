@@ -13,9 +13,15 @@ import (
 //
 // It exists so the gateway runs with no external dependency -- for the demo,
 // for tests, and for a carrier evaluating the message flow before provisioning
-// a database. It is not a production backend: nothing survives a restart, and
-// memory grows with traffic.
+// a database. It is not a production backend: nothing survives a restart.
 type Mem struct {
+	// MaxMessages and MaxRecords bound what is retained, oldest discarded
+	// first. Zero means unbounded, which is right for a test and wrong for
+	// anything reachable from the internet: without a bound, a public demo is
+	// a memory leak with a submit button.
+	MaxMessages int
+	MaxRecords  int
+
 	mu sync.RWMutex
 
 	messages   map[string]*Message
@@ -80,7 +86,48 @@ func (s *Mem) AppendMessage(ctx context.Context, m *Message) error {
 			s.dedup[k] = m.ID
 		}
 	}
+	s.trimMessagesLocked()
 	return nil
+}
+
+// trimMessagesLocked discards the oldest messages once the bound is exceeded.
+func (s *Mem) trimMessagesLocked() {
+	if s.MaxMessages <= 0 || len(s.messageIDs) <= s.MaxMessages {
+		return
+	}
+	drop := s.messageIDs[:len(s.messageIDs)-s.MaxMessages]
+	s.messageIDs = append([]string(nil), s.messageIDs[len(drop):]...)
+	for _, id := range drop {
+		if m, ok := s.messages[id]; ok {
+			if m.DedupKey != "" {
+				k := m.Peer + "|" + m.DedupKey
+				if s.dedup[k] == id {
+					delete(s.dedup, k)
+				}
+			}
+			delete(s.messages, id)
+		}
+	}
+}
+
+// trimRecordsLocked discards the oldest records once the bound is exceeded.
+// Ids are time-ordered, so the oldest sort first.
+func (s *Mem) trimRecordsLocked() {
+	if s.MaxRecords <= 0 || len(s.pnrs) <= s.MaxRecords {
+		return
+	}
+	ids := make([]string, 0, len(s.pnrs))
+	for id := range s.pnrs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids[:len(ids)-s.MaxRecords] {
+		if p := s.pnrs[id]; p != nil {
+			delete(s.byLocator, p.RecordLocator)
+		}
+		delete(s.pnrs, id)
+		delete(s.events, id)
+	}
 }
 
 func (s *Mem) UpdateMessage(ctx context.Context, m *Message) error {
@@ -168,6 +215,7 @@ func (s *Mem) CreatePNR(ctx context.Context, p *pnr.PNR, events []Event) error {
 	s.pnrs[p.ID] = clonePNR(p)
 	s.byLocator[p.RecordLocator] = p.ID
 	s.appendEventsLocked(p.ID, events)
+	s.trimRecordsLocked()
 	return nil
 }
 

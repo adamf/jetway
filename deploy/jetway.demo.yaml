@@ -1,0 +1,50 @@
+# Configuration for the public demo.
+#
+# In-memory storage on purpose: a demo that anyone can post to should forget
+# everything when it restarts, and nothing here is worth persisting. A real
+# deployment uses Postgres and the spool -- see jetway.example.yaml.
+
+identity:
+  designator: 1J
+  tty_address: LONRM1J
+  name: jetway
+
+store:
+  backend: mem
+  # Bounded, because anyone can reach the console and make a booking. Without a
+  # cap this is a memory leak with a submit button.
+  max_messages: 4000
+  max_records: 400
+
+http:
+  addr: 0.0.0.0:8080
+  console: true
+  metrics: true
+
+# One listener per simulated carrier. These bind loopback only: the carriers
+# run in this process and dial them, and nothing outside the container can
+# reach them.
+ingress:
+  - name: link-ba
+    type: tcp
+    addr: 127.0.0.1:9101
+    framing: {kind: length_prefix, header_bytes: 4}
+    identify: {peer: BA}
+  - name: link-aa
+    type: tcp
+    addr: 127.0.0.1:9102
+    framing: {kind: length_prefix, header_bytes: 4}
+    identify: {peer: AA}
+  - name: link-lh
+    type: tcp
+    addr: 127.0.0.1:9103
+    framing: {kind: length_prefix, header_bytes: 4}
+    identify: {peer: LH}
+
+peers:
+  - {name: BA, carrier: BA, format: typeb,   tty_address: LHRRMBA, egress: {type: tcp_accept}}
+  - {name: AA, carrier: AA, format: edifact, tty_address: DFWRMAA, egress: {type: tcp_accept}}
+  - {name: LH, carrier: LH, format: typeb,   tty_address: FRARMLH, egress: {type: tcp_accept}}
+
+demo:
+  carriers: true

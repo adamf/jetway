@@ -1,0 +1,41 @@
+# Fly.io deployment for the public demo.
+#
+# The simulated carriers dial loopback inside this container, so only the
+# console needs to be reachable. No TCP service is published: a partner link on
+# a real deployment would be, but a demo has no external partners.
+
+app = "jetway-demo"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  JETWAY_CONFIG = "/etc/jetway/jetway.yaml"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  # Zero when idle. A demo nobody is looking at should not burn a machine, and
+  # suspend resumes fast enough that the first visitor barely notices.
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 60
+    hard_limit = 120
+
+  # The console holds an event-stream connection open, so a liveness check that
+  # follows it would never return. /healthz is the one that answers immediately.
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

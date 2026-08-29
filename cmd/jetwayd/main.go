@@ -239,8 +239,14 @@ func addrOrDir(in config.Ingress) string {
 func openStore(ctx context.Context, cfg *config.Config, log *slog.Logger) (store.Store, error) {
 	switch cfg.Store.Backend {
 	case "mem":
-		log.Warn("using the in-memory store; nothing survives a restart")
-		return store.NewMem(), nil
+		m := store.NewMem()
+		m.MaxMessages, m.MaxRecords = cfg.Store.MaxMessages, cfg.Store.MaxRecords
+		if m.MaxMessages == 0 && m.MaxRecords == 0 {
+			log.Warn("using the in-memory store unbounded; nothing survives a restart and memory grows with traffic")
+		} else {
+			log.Info("using the in-memory store", "max_messages", m.MaxMessages, "max_records", m.MaxRecords)
+		}
+		return m, nil
 	case "postgres":
 		pg, err := store.OpenPostgres(ctx, cfg.Store.DSN)
 		if err != nil {

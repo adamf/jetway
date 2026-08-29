@@ -43,6 +43,10 @@ type Store struct {
 	DSN     string `yaml:"dsn"`
 	// Migrate applies pending schema changes on start.
 	Migrate bool `yaml:"migrate"`
+	// MaxMessages and MaxRecords bound the in-memory backend. Zero is
+	// unbounded; set them on anything reachable from the internet.
+	MaxMessages int `yaml:"max_messages"`
+	MaxRecords  int `yaml:"max_records"`
 }
 
 // Spool configures the durable inbound buffer.

@@ -412,3 +412,75 @@ func idsOf(ms []*Message) []string {
 	}
 	return out
 }
+
+// An unbounded in-memory store behind a public console is a memory leak with a
+// submit button. The bound discards the oldest and keeps everything else usable.
+func TestMemBoundsRetention(t *testing.T) {
+	ctx := context.Background()
+	s := NewMem()
+	s.MaxMessages, s.MaxRecords = 5, 3
+
+	var ids []string
+	for i := 0; i < 12; i++ {
+		m := newMsg("BA", []byte(fmt.Sprintf("m%02d", i)))
+		m.DedupKey = fmt.Sprintf("key-%02d", i)
+		if err := s.AppendMessage(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, m.ID)
+	}
+	got, err := s.ListMessages(ctx, MessageFilter{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("messages retained = %d, want 5", len(got))
+	}
+	// The newest survive and the oldest are gone.
+	if got[len(got)-1].ID != ids[11] {
+		t.Errorf("newest message was discarded")
+	}
+	if _, err := s.GetMessage(ctx, ids[0]); !errors.Is(err, ErrNotFound) {
+		t.Errorf("oldest message should have been discarded, got %v", err)
+	}
+	// A discarded message must not leave its dedup key behind, or a later
+	// retransmission is refused against a message that no longer exists.
+	if id, found, _ := s.FindByDedupKey(ctx, "BA", "key-00"); found {
+		t.Errorf("dedup key for a discarded message still resolves to %s", id)
+	}
+	if _, found, _ := s.FindByDedupKey(ctx, "BA", "key-11"); !found {
+		t.Error("the newest message's dedup key should still resolve")
+	}
+
+	for i := 0; i < 7; i++ {
+		p := samplePNR(fmt.Sprintf("REC%03d", i))
+		if err := s.CreatePNR(ctx, p, []Event{{Type: "created", At: time.Now().UTC()}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recs, _ := s.ListPNRs(ctx, 100)
+	if len(recs) != 3 {
+		t.Fatalf("records retained = %d, want 3", len(recs))
+	}
+	if _, err := s.GetPNR(ctx, "REC000"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("oldest record should have been discarded, got %v", err)
+	}
+	if _, err := s.GetPNR(ctx, "REC006"); err != nil {
+		t.Errorf("newest record should survive: %v", err)
+	}
+}
+
+// Zero means unbounded, which is what every other test relies on.
+func TestMemUnboundedByDefault(t *testing.T) {
+	ctx := context.Background()
+	s := NewMem()
+	for i := 0; i < 50; i++ {
+		if err := s.AppendMessage(ctx, newMsg("BA", []byte("x"))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := s.ListMessages(ctx, MessageFilter{Limit: 1000})
+	if len(got) != 50 {
+		t.Errorf("retained = %d, want all 50", len(got))
+	}
+}
