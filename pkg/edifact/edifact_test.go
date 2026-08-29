@@ -526,3 +526,72 @@ func TestExplicitUNAIsPreserved(t *testing.T) {
 		t.Errorf("a UNA-less interchange changed:\n got %q\nwant %q", out2, plain)
 	}
 }
+
+// Files from ERP and transmission systems often wrap the interchange in a
+// vendor header block, so the UNA is not at offset zero. Found by running this
+// decoder over the pydifact project's public test corpus, where such a file
+// previously decoded as junk segments followed by a UNA that looked misplaced.
+func TestPreambleBeforeInterchange(t *testing.T) {
+	preamble := "DOC+01=/spool/out/batch+02=9215001+03=04/07/2026'HDR+BATCH:117'"
+	body := "UNA:+,? 'UNB+UNOA:3+SENDER+RECIPIENT+260601:1200+42'" +
+		"UNH+1+PAORES:96:1:IA'MSG+:22'UNT+3+1'UNZ+1+42'"
+
+	// Off by default: relayed traffic must decode to a fixed point.
+	plain, err := Parse([]byte(preamble+body), ParseOptions{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if hasCode(plain, "preamble_before_interchange") {
+		t.Error("the preamble must not be skipped unless asked for")
+	}
+
+	ic, err := Parse([]byte(preamble+body), ParseOptions{SkipPreamble: true})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if ic.Header.Tag != TagUNB {
+		t.Fatalf("interchange header not found past the preamble")
+	}
+	if got := ic.ControlRef(); got != "42" {
+		t.Errorf("control ref = %q, want 42", got)
+	}
+	if len(ic.Messages) != 1 || ic.Messages[0].ID().Type != "PAORES" {
+		t.Errorf("messages = %+v", ic.Messages)
+	}
+	if !hasCode(ic, "preamble_before_interchange") {
+		t.Errorf("skipping a preamble must be reported, not silent: %v", ic.Diagnostics)
+	}
+	for _, d := range ic.Diagnostics {
+		if d.Severity == Error {
+			t.Errorf("unexpected error after skipping the preamble: %v", d)
+		}
+	}
+	// The preamble is not part of the interchange and must not be re-emitted.
+	out, err := ic.Encode(EncodeOptions{})
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if strings.Contains(string(out), "DOC+") || strings.Contains(string(out), "HDR+") {
+		t.Errorf("preamble leaked into the encoded interchange: %q", out)
+	}
+	// And re-parsing must be a fixed point.
+	ic2, err := Parse(out, ParseOptions{SkipPreamble: true})
+	if err != nil {
+		t.Fatalf("re-parse: %v", err)
+	}
+	out2, _ := ic2.Encode(EncodeOptions{SegmentPerLine: false})
+	if string(out) != string(out2) {
+		t.Errorf("not idempotent after skipping a preamble:\n%q\n%q", out, out2)
+	}
+}
+
+// A well-formed interchange must never be re-read by the preamble path.
+func TestNoPreambleRetryOnCleanInput(t *testing.T) {
+	ic, err := Parse([]byte(samplePAORES), ParseOptions{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if hasCode(ic, "preamble_before_interchange") {
+		t.Error("clean input must not trigger the preamble retry")
+	}
+}

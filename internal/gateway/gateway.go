@@ -168,6 +168,9 @@ type IngestOptions struct {
 	// Remote describes where it came from: an address, a certificate subject,
 	// or a file path.
 	Remote string
+	// FromFile marks a message read from a drop directory rather than a live
+	// link, which permits leniencies that would be unsafe on relayed traffic.
+	FromFile bool
 	// HoldReply returns a generated reply in the Result instead of sending it
 	// over the peer's egress. A partner posting over HTTP and waiting on the
 	// response has no egress to receive a reply on, and attempting one would
@@ -260,7 +263,7 @@ func (g *Gateway) IngestWith(ctx context.Context, peerName string, raw []byte, o
 
 // process decodes and applies a captured message.
 func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, res *Result, opts IngestOptions) error {
-	dec, err := g.decode(peer, msg)
+	dec, err := g.decode(peer, msg, opts)
 	if err != nil {
 		return err
 	}

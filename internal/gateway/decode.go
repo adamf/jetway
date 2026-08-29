@@ -99,7 +99,7 @@ func looksLikeEDIFACT(raw []byte) bool {
 }
 
 // decode classifies and parses a captured message.
-func (g *Gateway) decode(peer *Peer, msg *store.Message) (*decoded, error) {
+func (g *Gateway) decode(peer *Peer, msg *store.Message, opts IngestOptions) (*decoded, error) {
 	raw := msg.Raw
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return nil, fmt.Errorf("gateway: empty message")
@@ -109,7 +109,7 @@ func (g *Gateway) decode(peer *Peer, msg *store.Message) (*decoded, error) {
 		err error
 	)
 	if looksLikeEDIFACT(raw) {
-		d, err = g.decodeEDIFACT(peer, raw)
+		d, err = g.decodeEDIFACT(peer, raw, opts)
 	} else {
 		d, err = g.decodeTypeB(peer, raw)
 	}
@@ -119,8 +119,11 @@ func (g *Gateway) decode(peer *Peer, msg *store.Message) (*decoded, error) {
 	return d, err
 }
 
-func (g *Gateway) decodeEDIFACT(peer *Peer, raw []byte) (*decoded, error) {
-	ic, err := edifact.Parse(raw, edifact.ParseOptions{})
+func (g *Gateway) decodeEDIFACT(peer *Peer, raw []byte, opts IngestOptions) (*decoded, error) {
+	// A file dropped by an ERP or a transmission system often wraps the
+	// interchange in a vendor header. Those bytes are read once and never
+	// relayed, so skipping a preamble is safe there and not on a live link.
+	ic, err := edifact.Parse(raw, edifact.ParseOptions{SkipPreamble: opts.FromFile})
 	if err != nil {
 		return nil, fmt.Errorf("gateway: edifact decode: %w", err)
 	}

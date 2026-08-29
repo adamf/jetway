@@ -1,6 +1,7 @@
 package edifact
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -189,6 +190,18 @@ func (ic *Interchange) SyntaxIdentifier() (charset string, version int) {
 // ParseOptions controls interchange decoding.
 type ParseOptions struct {
 	Scan ScanOptions
+	// SkipPreamble allows an interchange to be preceded by a vendor wrapper: an
+	// ERP header block, a transmission banner. Off by default, and deliberately
+	// so.
+	//
+	// Deciding where an interchange starts is a lexical guess, and a guess that
+	// disagrees with the scanner about what counts as a tag makes decoding
+	// depend on its own output -- the same input can then re-encode to
+	// something that decodes differently. Fuzzing found several such cases.
+	// Relayed traffic must be a fixed point, so this stays off there; a file
+	// drop, where the bytes are read once and never re-emitted, is where it
+	// belongs.
+	SkipPreamble bool
 	// Strict turns structural diagnostics at Error severity into a returned
 	// error. Leave it off in a gateway: capture, diagnose and route to review
 	// beats rejecting at the socket.
@@ -202,13 +215,35 @@ type ParseOptions struct {
 func Parse(raw []byte, opts ParseOptions) (*Interchange, error) {
 	ic := &Interchange{Raw: append([]byte(nil), raw...)}
 	ic.HadUNA = len(raw) >= 3 && strings.HasPrefix(strings.TrimLeft(string(raw), " \r\n\t"), TagUNA)
+	var leadingDiag *Diagnostic
 
-	segs, syn, diags, err := Scan(raw, opts.Scan)
+	// An interchange may be preceded by a vendor wrapper: an ERP header block,
+	// a transmission banner. Decide that lexically, before any scanning, so the
+	// choice cannot interact with the syntax-version inference below -- if the
+	// two could influence each other, a first parse and a parse of this
+	// decoder's own output could disagree, and decoding would stop being a
+	// fixed point.
+	body := raw
+	if off := preambleOffsetIf(opts.SkipPreamble, raw); off > 0 {
+		// Only skip it if what follows is a complete interchange. Otherwise the
+		// original reading, however poor, is the honest one.
+		if psegs, _, _, perr := Scan(raw[off:], opts.Scan); perr == nil &&
+			unbIndex(psegs) == 0 && hasTag(psegs, TagUNZ) {
+			body = raw[off:]
+			ic.HadUNA = bytes.HasPrefix(bytes.TrimLeft(body, " \r\n\t"), []byte(TagUNA))
+			leadingDiag = &Diagnostic{Warn, 0, -1, "preamble_before_interchange",
+				fmt.Sprintf("%d bytes preceded the interchange and were skipped", off)}
+		}
+	}
+
+	segs, syn, diags, err := Scan(body, opts.Scan)
 	if err != nil {
 		return nil, err
 	}
+	if leadingDiag != nil {
+		diags = append(diags, *leadingDiag)
+	}
 
-	// The syntax version lives in UNB, which we can only read after scanning.
 	declared, rescanCredible := declaredSyntaxVersion(segs)
 	switch {
 	case declared >= 1 && declared <= MaxSyntaxVersion:
@@ -225,7 +260,7 @@ func Parse(raw []byte, opts ParseOptions) (*Interchange, error) {
 	if opts.Scan.Syntax == nil && !ic.HadUNA && !syn.RepetitionEnabled &&
 		syn.Version >= 4 && rescanCredible {
 		rsyn := DefaultSyntax(syn.Version)
-		rsegs, _, rdiags, rerr := Scan(raw, ScanOptions{
+		rsegs, _, rdiags, rerr := Scan(body, ScanOptions{
 			Syntax:             &rsyn,
 			PreserveLineBreaks: opts.Scan.PreserveLineBreaks,
 			MaxSegments:        opts.Scan.MaxSegments,
@@ -492,4 +527,85 @@ func (ic *Interchange) validateCharset() {
 			}
 		}
 	}
+}
+
+// hasTag reports whether a segment with the given tag is present.
+func hasTag(segs []Segment, tag string) bool {
+	for _, s := range segs {
+		if s.Tag == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// unbIndex returns the position of the interchange header, or -1 when there is
+// none. Anything other than 0 means the interchange does not start where the
+// input does: UNB must be the first segment, optionally preceded only by a UNA.
+func unbIndex(segs []Segment) int {
+	for i, s := range segs {
+		if s.Tag == TagUNB {
+			return i
+		}
+	}
+	return -1
+}
+
+// preambleLength returns how many bytes precede the interchange, or 0 when the
+// input already begins with one.
+//
+// Only a service string advice or an interchange header can open an
+// interchange, so those are the only anchors worth trusting. Input that already
+// starts with one is never narrowed, which is what keeps a well-formed
+// interchange from being reinterpreted.
+// preambleOffsetIf returns the preamble length when the option is enabled.
+func preambleOffsetIf(enabled bool, raw []byte) int {
+	if !enabled {
+		return 0
+	}
+	return preambleLength(raw)
+}
+
+func preambleLength(raw []byte) int {
+	trimmed := bytes.TrimLeft(raw, " \r\n\t")
+	if isTagAt(trimmed, 0, TagUNA) || isTagAt(trimmed, 0, TagUNB) {
+		return 0
+	}
+	best := -1
+	for _, tag := range []string{TagUNA, TagUNB} {
+		for i := 0; ; {
+			j := bytes.Index(raw[i:], []byte(tag))
+			if j < 0 {
+				break
+			}
+			at := i + j
+			if at > 0 && isTagAt(raw, at, tag) && (best < 0 || at < best) {
+				best = at
+				break
+			}
+			i = at + 1
+		}
+	}
+	if best < 0 {
+		return 0
+	}
+	return best
+}
+
+// isTagAt reports whether a three-character segment tag begins at i.
+//
+// The follower must not be alphanumeric. Without that, "UNB0" reads as an
+// interchange header to this check while the scanner rejects it as a
+// four-character tag -- and a decoder whose lexical guess disagrees with its
+// own scanner narrows its own output differently from the input that produced
+// it, which breaks the round-trip fixed point.
+func isTagAt(b []byte, i int, tag string) bool {
+	if i+len(tag) > len(b) || string(b[i:i+len(tag)]) != tag {
+		return false
+	}
+	if i+len(tag) == len(b) {
+		return true
+	}
+	c := b[i+len(tag)]
+	return !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9')
 }

@@ -29,6 +29,8 @@ type Message struct {
 	// or a file path.
 	Remote string
 	Raw    []byte
+	// FromFile marks a message read from a drop directory.
+	FromFile bool
 	// Synchronous means the sender is holding the exchange open for a reply.
 	// Such a message cannot be spooled: the reply only exists once it has been
 	// processed, so processing must happen before the caller is answered.

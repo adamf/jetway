@@ -128,6 +128,7 @@ func (f *FileDrop) sweep(ctx context.Context, h Handler) error {
 		f.inflight.Add(1)
 		_, herr := h(ctx, Message{
 			Peer: f.peer, Transport: f.name, Remote: "file:" + filepath.Base(path), Raw: raw,
+			FromFile: true,
 		})
 		f.inflight.Done()
 		if herr != nil {

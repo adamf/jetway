@@ -343,7 +343,8 @@ func makeHandler(gw *gateway.Gateway, sp *spool.Spool, log *slog.Logger) ingress
 		}
 
 		res, err := gw.IngestWith(ctx, m.Peer, m.Raw, gateway.IngestOptions{
-			Transport: m.Transport, Remote: m.Remote, HoldReply: m.Synchronous,
+			Transport: m.Transport, Remote: m.Remote,
+			HoldReply: m.Synchronous, FromFile: m.FromFile,
 		})
 		if err != nil {
 			return ingress.Receipt{}, err
