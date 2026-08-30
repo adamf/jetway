@@ -145,6 +145,34 @@ never told about, a division the carriers still have not been advised of. None
 of those are errors the pipeline can retry away, and none of them should be
 silent.
 
+![The divergence queue, each item naming the gap that caused it](docs/images/console-queues.jpg)
+
+Every line names the specific gap rather than reporting a generic failure. A
+ticket issued against a segment BA operates cannot be advised, because ticket
+control is an EDIFACT message and that link speaks Type B; a division cannot be
+advised at all, because the AIRIMP divide message is in a manual that has not
+been bought. Both are real states this node is in, and putting them on a queue
+is the difference between a known gap and a silent one.
+
+### Insights
+
+![The insights view: selling, documents, records and traffic](docs/images/console-insights.jpg)
+
+The same traffic read two ways, because two different people ask about it. An
+operator wants to know what is working: how many messages, on which wire, how
+many undecodable, how many retransmissions, and how far this node and its
+partners have drifted apart. The business wants to know what is selling: seats,
+confirmation rate, refusals, how much of it went out free sale without a
+message at all, and what the ancillary documents took in, split by reason for
+issuance.
+
+Both come off the same events. Nothing here is a separate reporting pipeline
+that can quietly disagree with the message log.
+
+The per-carrier table at the bottom is the one worth watching in production: a
+partner whose refusal rate moves, or whose median reply time stretches, is
+telling you something before anyone opens a ticket.
+
 From the command line:
 
 ```sh
@@ -357,6 +385,8 @@ where this is wrong, that is the single most useful contribution available.
 | `internal/metrics` | Prometheus exposition, no client library |
 | `internal/telemetry` | OpenTelemetry tracing, with a hand-rolled OTLP/JSON exporter |
 | `internal/transport` | Framing and link sessions |
+| `internal/node` | The assembly: one wiring, built by both `jetwayd` and the scenario suite |
+| `internal/scenario` | End-to-end scenarios and the load driver that reuses them |
 
 The `pkg/...` tree is the part you would import to build something else. It has
 no dependency on the gateway, the store, or each other beyond the canonical
@@ -379,6 +409,44 @@ the 32⁶ code space: a bijection, so distinct counter values always produce
 distinct locators with no lookup and no retry, while the output order reveals
 nothing about the input order. The alphabet omits `I`, `O`, `0` and `1`,
 because locators get read aloud.
+
+## Testing it, and loading it
+
+The end-to-end scenarios are written once and run two ways.
+
+```sh
+go test ./internal/scenario          # run each once, assert it behaved
+go run ./cmd/jetwayload -list        # what the scenarios are
+go run ./cmd/jetwayload -workers 16 -for 30s
+go run ./cmd/jetwayload -workers 32 -for 2m -dsn "$JETWAY_DSN"
+```
+
+Both drive the **same node assembly `jetwayd` builds**, from `internal/node`,
+with the simulated carriers dialling real TCP into real listeners on ephemeral
+ports. Nothing about the transport is stubbed, and there is no second copy of
+the wiring for tests to pass against.
+
+Sharing the scenarios between the two is the point. A load generator with its
+own private code path measures how fast something nobody has checked can run,
+and an integration suite that never runs under concurrency misses every race.
+
+On a laptop, sixteen workers for twenty seconds:
+
+| Store | Runs | Failed | Throughput |
+| --- | --- | --- | --- |
+| in-memory | 52,044 | 0 | 2,601/sec |
+| postgres | 55,475 | 0 | 2,670/sec |
+
+Postgres being *faster* than the in-memory store was not the expected result.
+The memory store serialises on one mutex; Postgres gets row-level concurrency.
+Worth knowing before treating the `mem` backend as the fast path — it is for
+demos and tests, not for load.
+
+Writing the suite found four real defects, which is the argument for having it.
+The one worth repeating: a booking whose agent name contained a lowercase
+letter could not be requested from an EDIFACT carrier **at all**, because UNOA
+has no lowercase and the whole message failed to encode. Nothing in the unit
+tests used a lowercase agent name.
 
 ## The hosted demo
 

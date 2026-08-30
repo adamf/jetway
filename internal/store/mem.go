@@ -281,6 +281,45 @@ func (s *Mem) UpdatePNR(ctx context.Context, p *pnr.PNR, expected int64, events 
 	return nil
 }
 
+func (s *Mem) DividePNR(ctx context.Context, parent *pnr.PNR, expected int64,
+	child *pnr.PNR, parentEvents, childEvents []Event) error {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Everything is checked before anything is written, so a rejected division
+	// leaves the store exactly as it found it. Holding the lock across both is
+	// what makes this the same promise the Postgres transaction makes.
+	cur, ok := s.pnrs[parent.ID]
+	if !ok {
+		return ErrNotFound
+	}
+	if cur.Version != expected {
+		return ErrConflict
+	}
+	if child.ID == "" {
+		child.ID = ulid.New()
+	}
+	if _, taken := s.byLocator[child.RecordLocator]; taken {
+		return ErrDuplicate
+	}
+	if _, taken := s.pnrs[child.ID]; taken {
+		return ErrDuplicate
+	}
+
+	parent.Version = expected + 1
+	s.pnrs[parent.ID] = clonePNR(parent)
+	s.byLocator[parent.RecordLocator] = parent.ID
+	s.appendEventsLocked(parent.ID, parentEvents)
+
+	child.Version = 1
+	s.pnrs[child.ID] = clonePNR(child)
+	s.byLocator[child.RecordLocator] = child.ID
+	s.appendEventsLocked(child.ID, childEvents)
+	s.trimRecordsLocked()
+	return nil
+}
+
 func (s *Mem) appendEventsLocked(pnrID string, events []Event) {
 	seq := int64(len(s.events[pnrID]))
 	for i := range events {

@@ -231,6 +231,69 @@ func (s *Postgres) UpdatePNR(ctx context.Context, p *pnr.PNR, expected int64, ev
 	})
 }
 
+func (s *Postgres) DividePNR(ctx context.Context, parent *pnr.PNR, expected int64,
+	child *pnr.PNR, parentEvents, childEvents []Event) error {
+
+	if child.ID == "" {
+		child.ID = ulid.New()
+	}
+	child.Version = 1
+	parent.Version = expected + 1
+	parentState, err := json.Marshal(parent)
+	if err != nil {
+		return err
+	}
+	childState, err := json.Marshal(child)
+	if err != nil {
+		return err
+	}
+
+	return s.tx(ctx, func(tx pgx.Tx) error {
+		// The parent goes first, so a losing writer rolls back before the
+		// child locator is consumed. Creating the child first and failing here
+		// is the torn write this method exists to make impossible.
+		tag, err := tx.Exec(ctx, `
+			UPDATE pnr SET version=$2, status=$3, updated_at=$4, state=$5, record_locator=$6,
+			               next_deadline=$8
+			WHERE id=$1 AND version=$7`,
+			parent.ID, parent.Version, parent.Status, parent.UpdatedAt, parentState,
+			parent.RecordLocator, expected, parent.NextDeadline())
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			var exists bool
+			if err := tx.QueryRow(ctx, `SELECT true FROM pnr WHERE id=$1`, parent.ID).Scan(&exists); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				return err
+			}
+			return ErrConflict
+		}
+		var maxSeq int64
+		if err := tx.QueryRow(ctx,
+			`SELECT coalesce(max(seq),0) FROM pnr_event WHERE pnr_id=$1`, parent.ID).Scan(&maxSeq); err != nil {
+			return err
+		}
+		if err := insertEvents(ctx, tx, parent.ID, maxSeq, parentEvents); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO pnr (id, record_locator, version, status, created_at, updated_at, state, next_deadline)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			child.ID, child.RecordLocator, child.Version, child.Status,
+			child.CreatedAt, child.UpdatedAt, childState, child.NextDeadline()); err != nil {
+			if isUniqueViolation(err) {
+				return ErrDuplicate
+			}
+			return err
+		}
+		return insertEvents(ctx, tx, child.ID, 0, childEvents)
+	})
+}
+
 func insertEvents(ctx context.Context, tx pgx.Tx, pnrID string, startSeq int64, events []Event) error {
 	for i := range events {
 		e := events[i]

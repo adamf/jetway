@@ -59,71 +59,80 @@ func (g *Gateway) Split(ctx context.Context, req SplitRequest) (*SplitResult, er
 	if len(req.Passengers) == 0 {
 		return nil, fmt.Errorf("gateway: a split needs at least one passenger")
 	}
-	parent, err := g.Store.GetPNR(ctx, req.Locator)
-	if err != nil {
-		return nil, err
-	}
-	if parent.Status == pnr.StatusCancelled {
-		return nil, fmt.Errorf("gateway: %s is cancelled", parent.RecordLocator)
-	}
-	expected := parent.Version
 
-	locator, err := g.newLocator(ctx)
-	if err != nil {
-		return nil, err
-	}
-	child, err := parent.Divide(req.Passengers, locator)
-	if err != nil {
-		return nil, fmt.Errorf("gateway: %w", err)
-	}
-	// Both halves point at the carrier's single record until it splits too.
-	child.Locators = append(child.Locators, parent.Locators...)
+	// The same retry Cancel uses, and for the same reason: a carrier reply
+	// landing between the read and the write is ordinary traffic, not an
+	// error. What is different here is that the write touches two records, so
+	// it goes through DividePNR and either both land or neither does. Creating
+	// the child and then failing to update the parent left both records
+	// holding the same passengers -- a torn booking that could not be advised
+	// to anyone coherently.
+	const maxAttempts = 5
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		parent, err := g.Store.GetPNR(ctx, req.Locator)
+		if err != nil {
+			return nil, err
+		}
+		if parent.Status == pnr.StatusCancelled {
+			return nil, fmt.Errorf("gateway: %s is cancelled", parent.RecordLocator)
+		}
+		expected := parent.Version
 
-	now := time.Now().UTC()
-	child.CreatedAt, child.UpdatedAt = now, now
-	parent.UpdatedAt = now
+		locator, err := g.newLocator(ctx)
+		if err != nil {
+			return nil, err
+		}
+		child, err := parent.Divide(req.Passengers, locator)
+		if err != nil {
+			return nil, fmt.Errorf("gateway: %w", err)
+		}
+		// Both halves point at the carrier's single record until it splits too.
+		child.Locators = append(child.Locators, parent.Locators...)
 
-	moved := make([]string, 0, len(child.Passengers))
-	for _, p := range child.Passengers {
-		moved = append(moved, p.Surname+"/"+p.Given)
+		now := time.Now().UTC()
+		child.CreatedAt, child.UpdatedAt = now, now
+		parent.UpdatedAt = now
+
+		moved := make([]string, 0, len(child.Passengers))
+		for _, p := range child.Passengers {
+			moved = append(moved, p.Surname+"/"+p.Given)
+		}
+		sort.Strings(moved)
+		detail := fmt.Sprintf("%s divided from %s: %v", child.RecordLocator, parent.RecordLocator, moved)
+		if req.Reason != "" {
+			detail += " (" + req.Reason + ")"
+		}
+		ev := []store.Event{{Type: "split", At: now, Actor: req.By, Detail: detail}}
+		childEv := []store.Event{{Type: "split_created", At: now, Actor: req.By, Detail: detail}}
+
+		switch err := g.Store.DividePNR(ctx, parent, expected, child, ev, childEv); {
+		case err == nil:
+		case errors.Is(err, store.ErrConflict):
+			// Nothing was written, so the next attempt starts from a clean
+			// read. The locator allocated for this attempt is simply not used.
+			lastErr = err
+			continue
+		default:
+			return nil, fmt.Errorf("gateway: record the division: %w", err)
+		}
+
+		g.Bus.Publish(EvPNR, g.pnrView(parent))
+		g.Bus.Publish(EvPNR, g.pnrView(child))
+
+		res := &SplitResult{Parent: parent, Child: child}
+		res.Advised, res.Unadvised = g.adviseSplit(ctx, parent, child, req.By)
+		span.SetAttributes(
+			telemetry.AttrRecordID.String(child.ID),
+			telemetry.AttrPaxCount.Int(len(child.Passengers)),
+			telemetry.AttrNotified.StringSlice(res.Advised),
+			telemetry.AttrUnreachable.StringSlice(res.Unadvised),
+			telemetry.AttrDivergence.Bool(len(res.Unadvised) > 0),
+		)
+		return res, nil
 	}
-	sort.Strings(moved)
-	detail := fmt.Sprintf("%s divided from %s: %v", child.RecordLocator, parent.RecordLocator, moved)
-	if req.Reason != "" {
-		detail += " (" + req.Reason + ")"
-	}
-
-	if err := g.Store.CreatePNR(ctx, child, []store.Event{{
-		Type: "split_created", At: now, Actor: req.By, Detail: detail,
-	}}); err != nil {
-		return nil, fmt.Errorf("gateway: create the divided record: %w", err)
-	}
-
-	if err := g.Store.UpdatePNR(ctx, parent, expected, []store.Event{{
-		Type: "split", At: now, Actor: req.By, Detail: detail,
-	}}); err != nil {
-		// The child exists and holds the passengers. Both records list them
-		// now, which is wrong and recoverable; losing them would not be.
-		g.Log.Error("a division left both records holding the same passengers",
-			"parent", parent.RecordLocator, "child", child.RecordLocator, "err", err)
-		g.queueSplitDivergence(ctx, child, parent.RecordLocator, req.By, err)
-		return nil, fmt.Errorf("gateway: %s was created but %s was not updated: %w",
-			child.RecordLocator, parent.RecordLocator, err)
-	}
-
-	g.Bus.Publish(EvPNR, g.pnrView(parent))
-	g.Bus.Publish(EvPNR, g.pnrView(child))
-
-	res := &SplitResult{Parent: parent, Child: child}
-	res.Advised, res.Unadvised = g.adviseSplit(ctx, parent, child, req.By)
-	span.SetAttributes(
-		telemetry.AttrRecordID.String(child.ID),
-		telemetry.AttrPaxCount.Int(len(child.Passengers)),
-		telemetry.AttrNotified.StringSlice(res.Advised),
-		telemetry.AttrUnreachable.StringSlice(res.Unadvised),
-		telemetry.AttrDivergence.Bool(len(res.Unadvised) > 0),
-	)
-	return res, nil
+	return nil, fmt.Errorf("gateway: gave up dividing %s after %d attempts: %w",
+		req.Locator, maxAttempts, lastErr)
 }
 
 // adviseSplit tells the carriers it can, and records the ones it cannot.
@@ -200,20 +209,6 @@ func (g *Gateway) sendDivide(ctx context.Context, parent, child *pnr.PNR, carrie
 	}
 	_, err = g.SendKeyed(ctx, peer, raw, "PADIS/divide", child.ID, "", "unb:"+ref)
 	return err
-}
-
-func (g *Gateway) queueSplitDivergence(ctx context.Context, child *pnr.PNR, parent, by string, cause error) {
-	if g.Queues == nil {
-		return
-	}
-	if _, err := g.Queues.Place(ctx, &store.QueueItem{
-		Queue: store.QueueDivergence, PNRID: child.ID, Locator: child.RecordLocator,
-		Code:     "split_incomplete",
-		Reason:   fmt.Sprintf("%s was created but %s still lists the same passengers: %v", child.RecordLocator, parent, cause),
-		PlacedBy: by,
-	}); err != nil {
-		g.Log.Error("could not queue an incomplete division", "err", err)
-	}
 }
 
 // ErrNotDivided is returned when a locator names no divided record.

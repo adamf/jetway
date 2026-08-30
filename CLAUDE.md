@@ -82,6 +82,18 @@ both passed their own tests. Guard against it by:
   A hand-built UNB fixture caught an off-by-one in element position that a
   round trip would have missed.
 
+**The scenario suite is the other half.** `go test ./internal/scenario` drives
+end-to-end exchanges through the real assembly from `internal/node` -- the same
+one `jetwayd` builds -- with the demo carriers on real TCP. `cmd/jetwayload`
+runs the identical scenarios concurrently and reports latency. Add a scenario
+for anything that crosses a link; unit tests do not catch what only shows up
+with a partner on the other end. Writing it found four real defects, including
+a booking whose lowercase agent name made every EDIFACT request unencodable.
+
+A new test does not count until it has been **watched to fail** against the old
+behaviour. Every regression test added for the lookup, sweep and scenario work
+was checked that way, and it is cheap: revert the fix, run the test, restore.
+
 Store changes must pass the conformance suite against **both** backends:
 
 ```sh

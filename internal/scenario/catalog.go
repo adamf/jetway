@@ -199,6 +199,13 @@ func FreeSale() Scenario {
 	return Scenario{
 		Name:  "free-sale",
 		About: "a seat covered by a fresh broadcast is sold without asking the carrier",
+		// Meaningful once, not under sustained load. Every free sale decrements
+		// the cached count and the carrier only rebroadcasts on a timer, so a
+		// concurrent run legitimately exhausts what was advertised and the next
+		// booking correctly falls back to asking. That is the mechanism
+		// working; asserting against it would be asserting that free sale is
+		// unlimited, which is the opposite of what a broadcast means.
+		SkipUnderLoad: true,
 		Run: func(ctx context.Context, h *Harness, seq int) error {
 			if err := eventually(ctx, settle, "the availability cache filled",
 				func() (bool, error) { return h.Gw().Avail.Len() > 0, nil }); err != nil {

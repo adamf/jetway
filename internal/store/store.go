@@ -210,6 +210,19 @@ type Store interface {
 	NextLocatorCounter(ctx context.Context) (uint64, error)
 
 	// Lookup finds records by document, external locator or flight.
+	// DividePNR writes a division: the parent as it now stands and the new
+	// child, atomically, under the parent's expected version.
+	//
+	// It is one method rather than a create followed by an update because a
+	// division is one change to two records. Done as two writes, a version
+	// conflict on the second leaves the child created and the parent not
+	// updated -- both records then list the same passengers, which is a torn
+	// booking that no partner can be told about coherently. Under concurrency
+	// that is not a rare case: a carrier reply landing between the read and
+	// the write is exactly what optimistic concurrency is there to catch.
+	DividePNR(ctx context.Context, parent *pnr.PNR, expected int64, child *pnr.PNR,
+		parentEvents, childEvents []Event) error
+
 	Lookup
 
 	// QueueStore holds the work queues records are placed on.

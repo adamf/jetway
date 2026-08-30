@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -234,6 +235,92 @@ func TestDueLookupsOrderByUrgency(t *testing.T) {
 			if p.RecordLocator == "NODL01" {
 				t.Error("a record owing no deadline was reported as due")
 			}
+		}
+	})
+}
+
+// A division is one change to two records, so a rejected one must leave the
+// store exactly as it found it.
+//
+// Done as a create followed by an update, a version conflict on the second
+// write left the child created and the parent not updated: both records then
+// listed the same passengers, and no partner could be told about either
+// coherently. Under concurrency that is not rare -- a carrier reply landing
+// between the read and the write is precisely what the version check catches.
+func TestDividePNRIsAllOrNothing(t *testing.T) {
+	eachBackend(t, func(t *testing.T, s Store) {
+		ctx := context.Background()
+
+		parent := samplePNR("PARENT")
+		parent.Passengers = []pnr.Passenger{
+			{Ref: 1, Surname: "SMITH", Given: "JOHN", Title: "MR"},
+			{Ref: 2, Surname: "SMITH", Given: "JANE", Title: "MS"},
+		}
+		if err := s.CreatePNR(ctx, parent, nil); err != nil {
+			t.Fatalf("CreatePNR: %v", err)
+		}
+		stale := parent.Version
+
+		// Somebody else writes first -- a carrier reply, say.
+		bump, err := s.GetPNR(ctx, "PARENT")
+		if err != nil {
+			t.Fatalf("GetPNR: %v", err)
+		}
+		bump.UpdatedAt = time.Now().UTC()
+		if err := s.UpdatePNR(ctx, bump, bump.Version, nil); err != nil {
+			t.Fatalf("UpdatePNR: %v", err)
+		}
+
+		child := samplePNR("CHILD1")
+		child.Passengers = []pnr.Passenger{{Ref: 1, Surname: "SMITH", Given: "JANE", Title: "MS"}}
+		divided := *parent
+		divided.Passengers = parent.Passengers[:1]
+
+		err = s.DividePNR(ctx, &divided, stale, child,
+			[]Event{{Type: "split", At: time.Now().UTC()}},
+			[]Event{{Type: "split_created", At: time.Now().UTC()}})
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("DividePNR on a stale version = %v, want ErrConflict", err)
+		}
+
+		// The child must not exist. If it does, the passengers are on two
+		// records at once and the booking is torn.
+		if got, err := s.GetPNR(ctx, "CHILD1"); err == nil {
+			t.Fatalf("the child %s was created even though the division was rejected; "+
+				"both records now hold the same passengers", got.RecordLocator)
+		} else if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("GetPNR(CHILD1) = %v, want ErrNotFound", err)
+		}
+
+		// And the parent must be untouched.
+		after, err := s.GetPNR(ctx, "PARENT")
+		if err != nil {
+			t.Fatalf("GetPNR(PARENT): %v", err)
+		}
+		if len(after.Passengers) != 2 {
+			t.Errorf("the parent kept %d passengers, want 2: a rejected division "+
+				"must change nothing", len(after.Passengers))
+		}
+
+		// The same division at the current version succeeds, both halves land.
+		divided2 := *after
+		divided2.Passengers = after.Passengers[:1]
+		child2 := samplePNR("CHILD2")
+		child2.Passengers = []pnr.Passenger{{Ref: 1, Surname: "SMITH", Given: "JANE", Title: "MS"}}
+		if err := s.DividePNR(ctx, &divided2, after.Version, child2, nil, nil); err != nil {
+			t.Fatalf("DividePNR at the current version: %v", err)
+		}
+		gotChild, err := s.GetPNR(ctx, "CHILD2")
+		if err != nil {
+			t.Fatalf("the child was not created: %v", err)
+		}
+		gotParent, err := s.GetPNR(ctx, "PARENT")
+		if err != nil {
+			t.Fatalf("GetPNR(PARENT): %v", err)
+		}
+		if len(gotParent.Passengers) != 1 || len(gotChild.Passengers) != 1 {
+			t.Errorf("passengers did not divide one and one: parent %d, child %d",
+				len(gotParent.Passengers), len(gotChild.Passengers))
 		}
 	})
 }
