@@ -162,6 +162,15 @@ type Recognizer struct {
 	Match func(line string, ctx *context, p *Profile, now time.Time) ([]avail.Entry, bool)
 }
 
+// MaxSeats is the largest seat count this profile can carry in a status token.
+//
+// The wire field is a small number of digits and the recognisers bound it, so
+// the builder clamps to the same bound rather than emitting a token its own
+// parser would reject. Found by round-tripping: Build produced four-digit
+// counts that Parse dropped as unrecognised lines, in silence, which is the
+// decoder-depending-on-its-own-output failure this package now fuzzes for.
+const MaxSeats = 9999
+
 var (
 	// A flight line names the segment that following status lines apply to:
 	//   BA0175/27SEP/LHRJFK
@@ -171,12 +180,12 @@ var (
 	// A status line carries one or more class/status pairs, each optionally
 	// with a seat count for the numeric form:
 	//   Y/O J/C M/L4
-	statusTokenRe = regexp.MustCompile(`^([A-Z])[/ ]?([A-Z]{1,2})(\d{1,3})?$`)
+	statusTokenRe = regexp.MustCompile(`^([A-Z])[/ ]?([A-Z]{1,2})(\d{1,4})?$`)
 
 	// A self-contained line naming the flight and one class:
 	//   BA0175 27SEP LHRJFK Y O4
 	singleRe = regexp.MustCompile(
-		`^(?:AVS +)?([A-Z0-9]{2}) ?(\d{1,4}[A-Z]?)[/ ]+(\d{2}[A-Z]{3})[/ ]+([A-Z]{3})[/ ]?([A-Z]{3})[/ ]+([A-Z])[/ ]?([A-Z]{1,2})(\d{1,3})?$`)
+		`^(?:AVS +)?([A-Z0-9]{2}) ?(\d{1,4}[A-Z]?)[/ ]+(\d{2}[A-Z]{3})[/ ]+([A-Z]{3})[/ ]?([A-Z]{3})[/ ]+([A-Z])[/ ]?([A-Z]{1,2})(\d{1,4})?$`)
 )
 
 func matchSingle(line string, ctx *context, p *Profile, now time.Time) ([]avail.Entry, bool) {
@@ -391,7 +400,12 @@ func (p *Profile) Build(entries []avail.Entry) string {
 		}
 		tok := e.Key.Class + "/" + code
 		if e.SeatsKnown {
-			tok += strconv.Itoa(e.Seats)
+			// Clamped, because a token this profile cannot read back is worse
+			// than an understated one. A seat count is an assertion of "at
+			// least this many free", so MaxSeats is true when the real figure
+			// is higher -- whereas an unparseable line asserts nothing and is
+			// dropped in silence at the far end.
+			tok += strconv.Itoa(min(e.Seats, MaxSeats))
 		}
 		g.classes = append(g.classes, tok)
 	}

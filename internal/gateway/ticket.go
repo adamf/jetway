@@ -314,6 +314,7 @@ func (g *Gateway) sendTicketControl(ctx context.Context, rec *pnr.PNR, t pnr.Tic
 		Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
 		Recipient:  edifact.Party{ID: carrier, Qualifier: "ZZ"},
 		ControlRef: ref, MessageRef: "1",
+		Charset: edifact.CharsetUNOA,
 	})
 	if err != nil {
 		return err
@@ -530,6 +531,7 @@ func (g *Gateway) answerTicketControl(ctx context.Context, peer *Peer, msg *stor
 		Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
 		Recipient:  edifact.Party{ID: peer.Carrier, Qualifier: "ZZ"},
 		ControlRef: ref, MessageRef: "1",
+		Charset: edifact.CharsetUNOA,
 	})
 	if err != nil {
 		return fmt.Errorf("gateway: build ticket control response: %w", err)

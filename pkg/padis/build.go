@@ -21,6 +21,26 @@ type BuildOptions struct {
 	// default for IATA traffic.
 	SyntaxVersion int
 	Test          bool
+	// Charset is the repertoire the interchange will be encoded on. It is
+	// needed at build time, not only at encode time, because the free text
+	// this node authors has to be made to fit before it is placed in a
+	// segment: UNOA has no lowercase, and an agent identifier such as "web"
+	// would otherwise make the whole message unencodable. Zero means UNOA.
+	Charset *edifact.Charset
+}
+
+// text prepares a value this node authored for the declared repertoire.
+//
+// Only for text this node writes or forwards. Bytes received from a partner
+// are evidence and are kept exactly as they arrived -- that rule is about the
+// stored message, and an outbound message is a new artefact this node is
+// responsible for making encodable.
+func (o BuildOptions) text(s string) string {
+	c := o.Charset
+	if c == nil {
+		c = edifact.CharsetUNOA
+	}
+	return c.Sanitise(s)
 }
 
 func (o BuildOptions) now() time.Time {
@@ -61,7 +81,7 @@ func newInterchange(t string, o BuildOptions) *edifact.Interchange {
 func BuildPAOREQ(p *pnr.PNR, carrier string, o BuildOptions) (*edifact.Interchange, error) {
 	body := []edifact.Segment{
 		edifact.Seg("MSG", edifact.Comp("", "11")), // 11: request
-		edifact.Seg("ORG", edifact.Comp(p.Origin.Party, p.Origin.Agent)),
+		edifact.Seg("ORG", edifact.Comp(o.text(p.Origin.Party), o.text(p.Origin.Agent))),
 	}
 	if p.RecordLocator != "" {
 		body = append(body, edifact.Seg("RCI", edifact.Comp(p.Origin.Party, p.RecordLocator, "")))
@@ -216,7 +236,7 @@ func BuildCancel(p *pnr.PNR, carrier string, refs []int, o BuildOptions) (*edifa
 
 	body := []edifact.Segment{
 		edifact.Seg("MSG", edifact.Comp("", "11")),
-		edifact.Seg("ORG", edifact.Comp(p.Origin.Party, p.Origin.Agent)),
+		edifact.Seg("ORG", edifact.Comp(o.text(p.Origin.Party), o.text(p.Origin.Agent))),
 	}
 	// Both locators. A cancellation the carrier cannot match to a booking is a
 	// cancellation that does not happen.

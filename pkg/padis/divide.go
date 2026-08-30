@@ -72,7 +72,7 @@ func BuildDivide(parent, child *pnr.PNR, carrier string, o BuildOptions) (*edifa
 	}
 	body := []edifact.Segment{
 		edifact.Seg("MSG", edifact.Comp("", "11")),
-		edifact.Seg("ORG", edifact.Comp(o.Sender.ID, parent.Origin.Agent)),
+		edifact.Seg("ORG", edifact.Comp(o.text(o.Sender.ID), o.text(parent.Origin.Agent))),
 		edifact.Seg("RCI", edifact.Comp(o.Sender.ID, parent.RecordLocator, "")),
 	}
 	// The carrier's own reference for the booking, so they can find it.

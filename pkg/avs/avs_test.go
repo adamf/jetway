@@ -259,3 +259,86 @@ func TestIsAvailability(t *testing.T) {
 		}
 	}
 }
+
+// FuzzRoundTrip is here because this package shipped without one and a
+// build/parse disagreement went unnoticed as a result: Build emitted seat
+// counts of four digits that Parse dropped as unrecognised, in silence, so a
+// carrier with a large cabin simply stopped being believed.
+//
+// The property is the one that matters for a codec: anything this package
+// writes, it must be able to read back. It is deliberately not "any input
+// parses" -- unrecognised input becoming a diagnostic is correct behaviour.
+func FuzzRoundTrip(f *testing.F) {
+	f.Add("BA", "0175", "LHR", "JFK", "Y", 8, true)
+	f.Add("AA", "2401", "JFK", "DFW", "J", 0, true)
+	f.Add("LH", "0400", "FRA", "JFK", "F", 9999, true)
+	f.Add("BA", "0117", "LHR", "JFK", "M", 12345, true)
+	f.Add("BA", "0902", "LHR", "FRA", "Z", 3, false)
+
+	f.Fuzz(func(t *testing.T, carrier, flight, board, off, class string, seats int, known bool) {
+		if !plausible(carrier, 2) || !plausibleFlight(flight) ||
+			!plausible(board, 3) || !plausible(off, 3) || !plausible(class, 1) {
+			t.Skip()
+		}
+		if seats < 0 {
+			t.Skip()
+		}
+		date := time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)
+		at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+		in := avail.Entry{
+			Key: avail.Key{
+				Carrier: carrier, FlightNum: flight, Board: board, Off: off,
+				Class: class, Date: date.Format("2006-01-02"),
+			},
+			Status: avail.Open, Seats: seats, SeatsKnown: known, AsOf: at,
+		}
+
+		text := Build([]avail.Entry{in})
+		got := Default.Parse(text, at)
+		if len(got.Entries) != 1 {
+			t.Fatalf("Build produced %d lines that Parse could not read back:\n%s\ndiagnostics: %v",
+				1-len(got.Entries), text, got.Diagnostics)
+		}
+		out := got.Entries[0]
+		if out.Key.Carrier != in.Key.Carrier || out.Key.Class != in.Key.Class ||
+			out.Key.Board != in.Key.Board || out.Key.Off != in.Key.Off {
+			t.Fatalf("key changed across the round trip: %+v -> %+v", in.Key, out.Key)
+		}
+		if known {
+			// Clamped, not corrupted: an understated count is a true
+			// assertion, a different one is not.
+			want := in.Seats
+			if want > MaxSeats {
+				want = MaxSeats
+			}
+			if out.Seats != want {
+				t.Fatalf("seats %d came back as %d (want %d) from %q",
+					in.Seats, out.Seats, want, text)
+			}
+		}
+	})
+}
+
+func plausible(s string, n int) bool {
+	if len(s) != n {
+		return false
+	}
+	for _, r := range s {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+func plausibleFlight(s string) bool {
+	if len(s) < 1 || len(s) > 4 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}

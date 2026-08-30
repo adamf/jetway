@@ -321,6 +321,7 @@ func (g *Gateway) RequestFromCarrier(ctx context.Context, rec *pnr.PNR, carrier 
 			Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
 			Recipient:  edifact.Party{ID: carrier, Qualifier: "ZZ"},
 			ControlRef: ref, MessageRef: "1",
+			Charset: edifact.CharsetUNOA,
 		})
 		if err != nil {
 			return "", err
