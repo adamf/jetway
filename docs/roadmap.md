@@ -106,11 +106,14 @@ exists, it is used, and it has found real bugs every time.
   no path produces one, and schedule messages update no schedule of our own --
   they only raise work against records.
 - **`PNL`/`ADL`** passenger lists to departure control are not implemented.
-- **The divide message.** A booking can be split, but the carriers are not told:
-  the AIRIMP message for it is in a manual this build does not have, selling the
-  child again would double-book, and cancelling and reselling risks losing the
-  seats. Both halves therefore carry the same carrier locator, and each division
-  raises a divergence naming the carriers that still hold one record.
+- **The divide message, on teletype only.** An EDIFACT partner is now advised
+  of a division; a teletype partner is not, because the AIRIMP message is in a
+  manual this build does not have and both substitutes are wrong -- selling the
+  child again double-books, cancelling and reselling risks losing the seats.
+  Those carriers still hold one record and each raises a divergence saying so.
+- **No reply is expected to a divide advisory.** The partner is told; whether
+  they return a locator for the divided record, and what this should do with
+  it, is part of the procedure that is paywalled.
 - **NDC shopping.** Orders are implemented; AirShopping and OfferPrice are not
   and will not be. An offer is a priced thing, pricing needs fares, and fares
   are out of scope. An OrderCreateRQ naming only an offer this node never made

@@ -172,6 +172,35 @@ association is recorded locally and the carrier is advised over ticket control.
 either and this node records it; producing one is a fares operation, out of
 scope by the same rule that keeps NDC shopping out.
 
+## Divide advisories (`pkg/padis`)
+
+Telling a partner that one booking has become two.
+
+The interline divide *procedure* is in AIRIMP and is paid. What is public is how
+PADIS **represents** a split, and that turned out to be enough to build the
+EDIFACT half: IATA's free PNRGOV implementation guide documents the group
+carrying it — an `EQN` giving the number of passengers split from or to a record
+(§5.6), alongside the `RCI` segments naming the records involved, whose
+composite is specified there too.
+
+So the segment vocabulary is grounded and the message shape is a profile, the
+same standing as the reservation messages beside it. One field is left empty on
+purpose: `RCI`'s reservation control type takes a code from the PADIS codeset
+directory, which is paid, and guessing which value means "the other half of a
+division" would be worse than omitting a conditional element.
+
+A division is recognised by an `EQN` beside more than one `RCI`, because the
+guide places `EQN` in the split group and nowhere else in a reservation message.
+Without that test every ordinary request would look like a division.
+
+**Teletype partners are still not advised.** The AIRIMP message exists — the
+free table of contents names it at §3.7.10, *Divided PNR Message (DVD)*, with a
+procedure chapter at §3.4 — but its element layout is behind the paywall, and
+the two substitutes available are both wrong: selling the child again
+double-books, and cancelling then reselling risks losing the seats. Those
+carriers keep holding one record and every division says so on the divergence
+queue.
+
 ## SSM and ASM (`pkg/ssim`)
 
 Schedule messages over Type B: the Standard Schedules Message for a repeating

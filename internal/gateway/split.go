@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/pkg/edifact"
+	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
 )
 
@@ -24,9 +26,11 @@ type SplitRequest struct {
 type SplitResult struct {
 	Parent *pnr.PNR
 	Child  *pnr.PNR
+	// Advised lists carriers told about the division.
+	Advised []string
 	// Unadvised lists carriers that still hold a single record covering both
-	// halves. It is not an error; it is the state of the world until they are
-	// told.
+	// halves. It is not an error; it is the state of the world until the
+	// teletype divide message exists.
 	Unadvised []string
 }
 
@@ -106,18 +110,19 @@ func (g *Gateway) Split(ctx context.Context, req SplitRequest) (*SplitResult, er
 	g.Bus.Publish(EvPNR, g.pnrView(child))
 
 	res := &SplitResult{Parent: parent, Child: child}
-	res.Unadvised = g.noteUnadvisedSplit(ctx, parent, child, req.By)
+	res.Advised, res.Unadvised = g.adviseSplit(ctx, parent, child, req.By)
 	return res, nil
 }
 
-// noteUnadvisedSplit records that each carrier still holds one record.
+// adviseSplit tells the carriers it can, and records the ones it cannot.
 //
-// Advising a carrier of a division needs the divide message, which is not
-// implemented: the message exists in AIRIMP and its shape is in a manual this
-// build does not have. Selling the child again would double-book, and
-// cancelling and reselling risks losing the seats altogether, so nothing is
-// sent and the gap is made visible instead of guessed at.
-func (g *Gateway) noteUnadvisedSplit(ctx context.Context, parent, child *pnr.PNR, by string) []string {
+// The EDIFACT half is buildable and is built. The teletype half is not: the
+// divide message is in AIRIMP, which is paid and unbought, and the two
+// available substitutes are both wrong -- selling the child again would
+// double-book, and cancelling then reselling risks losing the seats. So a
+// teletype partner is left holding one record and the gap is named rather than
+// guessed at.
+func (g *Gateway) adviseSplit(ctx context.Context, parent, child *pnr.PNR, by string) (advised, unadvised []string) {
 	carriers := map[string]bool{}
 	for _, s := range child.Segments {
 		if s.Type == pnr.SegmentAir && s.Status != "XX" {
@@ -130,23 +135,58 @@ func (g *Gateway) noteUnadvisedSplit(ctx context.Context, parent, child *pnr.PNR
 	}
 	sort.Strings(names)
 
-	if g.Queues == nil {
-		return names
-	}
 	for _, carrier := range names {
-		if _, err := g.Queues.Place(ctx, &store.QueueItem{
+		err := g.sendDivide(ctx, parent, child, carrier)
+		if err == nil {
+			advised = append(advised, carrier)
+			continue
+		}
+		unadvised = append(unadvised, carrier)
+		g.Log.Warn("a carrier was not told about a division",
+			"parent", parent.RecordLocator, "child", child.RecordLocator,
+			"carrier", carrier, "err", err)
+		if g.Queues == nil {
+			continue
+		}
+		if _, qerr := g.Queues.Place(ctx, &store.QueueItem{
 			Queue: store.QueueDivergence, PNRID: child.ID, Locator: child.RecordLocator,
 			Code: "split_not_advised_" + carrier,
 			Reason: fmt.Sprintf(
-				"%s still holds one record covering both %s and %s; the division has not been advised",
-				carrier, parent.RecordLocator, child.RecordLocator),
+				"%s still holds one record covering both %s and %s: %v",
+				carrier, parent.RecordLocator, child.RecordLocator, err),
 			PlacedBy: by,
-		}); err != nil {
+		}); qerr != nil {
 			g.Log.Error("could not queue an unadvised division",
-				"locator", child.RecordLocator, "err", err)
+				"locator", child.RecordLocator, "err", qerr)
 		}
 	}
-	return names
+	return advised, unadvised
+}
+
+// sendDivide advises one carrier that a booking has been divided.
+func (g *Gateway) sendDivide(ctx context.Context, parent, child *pnr.PNR, carrier string) error {
+	peer := g.PeerForCarrier(carrier)
+	if peer == nil {
+		return fmt.Errorf("no link configured for carrier %q", carrier)
+	}
+	if peer.Format != store.FormatEDIFACT {
+		return fmt.Errorf("peer %s is a teletype link and the AIRIMP divide message is not implemented", peer.Name)
+	}
+	ref := nextControlRef()
+	ic, err := padis.BuildDivide(parent, child, carrier, padis.BuildOptions{
+		Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
+		Recipient:  edifact.Party{ID: carrier, Qualifier: "ZZ"},
+		ControlRef: ref, MessageRef: "1",
+	})
+	if err != nil {
+		return err
+	}
+	raw, err := ic.Encode(edifact.EncodeOptions{SegmentPerLine: true, Charset: edifact.CharsetUNOA})
+	if err != nil {
+		return err
+	}
+	_, err = g.SendKeyed(ctx, peer, raw, "PADIS/divide", child.ID, "", "unb:"+ref)
+	return err
 }
 
 func (g *Gateway) queueSplitDivergence(ctx context.Context, child *pnr.PNR, parent, by string, cause error) {

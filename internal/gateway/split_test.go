@@ -2,10 +2,13 @@ package gateway
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/pkg/edifact"
+	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
 )
 
@@ -102,17 +105,23 @@ func TestSplitKeepsTheCarrierReference(t *testing.T) {
 	}
 }
 
+// An all-teletype booking cannot be advised at all, because the AIRIMP divide
+// message is not implemented. That is not an error; it is the state of the
+// world, and it must not be silent.
 func TestSplitSurfacesThatCarriersHaveNotBeenTold(t *testing.T) {
 	gw, _ := cancelNode(t)
 	ctx := context.Background()
+	// Both carriers on teletype links.
+	gw.AddPeer(&Peer{Name: "AA", Carrier: "AA", Format: store.FormatTypeB, TTYAddress: "DFWRMAA"})
 	partyRecord(t, gw, "SPL003", 2)
 
 	res, err := gw.Split(ctx, SplitRequest{Locator: "SPL003", Passengers: []int{2}, By: "adam"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Not an error: it is the state of the world until the divide message
-	// exists. But it must not be silent.
+	if len(res.Advised) != 0 {
+		t.Errorf("Advised = %v, want none over teletype", res.Advised)
+	}
 	if len(res.Unadvised) != 2 {
 		t.Errorf("Unadvised = %v, want both carriers", res.Unadvised)
 	}
@@ -126,6 +135,10 @@ func TestSplitSurfacesThatCarriersHaveNotBeenTold(t *testing.T) {
 	for _, it := range items {
 		if it.Locator != res.Child.RecordLocator {
 			t.Errorf("divergence filed against %s, want the child", it.Locator)
+		}
+		// The reason should say why, not just that.
+		if !strings.Contains(it.Reason, "teletype") {
+			t.Errorf("reason does not explain the limitation: %q", it.Reason)
 		}
 	}
 }
@@ -177,5 +190,89 @@ func TestSplitTicketsFollowTheirPassenger(t *testing.T) {
 	}
 	if res.Child.Tickets[0].Number.Compact() == res.Parent.Tickets[0].Number.Compact() {
 		t.Error("the two halves ended up sharing a document number")
+	}
+}
+
+func TestSplitAdvisesEdifactCarriersAndNamesTheRest(t *testing.T) {
+	// AA is EDIFACT, BA is teletype: exactly the mixed case an interline
+	// booking produces.
+	gw, sent := cancelNode(t)
+	ctx := context.Background()
+	partyRecord(t, gw, "SPL006", 2)
+
+	res, err := gw.Split(ctx, SplitRequest{Locator: "SPL006", Passengers: []int{2}, By: "adam"})
+	if err != nil {
+		t.Fatalf("Split: %v", err)
+	}
+	if len(res.Advised) != 1 || res.Advised[0] != "AA" {
+		t.Errorf("Advised = %v, want [AA]", res.Advised)
+	}
+	if len(res.Unadvised) != 1 || res.Unadvised[0] != "BA" {
+		t.Errorf("Unadvised = %v, want [BA]", res.Unadvised)
+	}
+
+	// Only the teletype carrier is a divergence now.
+	items, _ := gw.Store.ListQueue(ctx, store.QueueFilter{Queue: store.QueueDivergence})
+	if len(items) != 1 {
+		t.Fatalf("expected one divergence, got %d", len(items))
+	}
+	if !strings.Contains(items[0].Code, "BA") {
+		t.Errorf("the divergence should name the teletype carrier: %s", items[0].Code)
+	}
+
+	// And what AA received says what happened.
+	var advisory *padis.Divide
+	for _, raw := range sent.msgs["AA"] {
+		ic, err := edifact.Parse(raw, edifact.ParseOptions{})
+		if err != nil || len(ic.Messages) == 0 || !padis.IsDivide(ic.Messages[0]) {
+			continue
+		}
+		advisory, err = padis.ParseDivide(ic.Messages[0])
+		if err != nil {
+			t.Fatalf("ParseDivide: %v", err)
+		}
+	}
+	if advisory == nil {
+		t.Fatal("AA was not sent a divide advisory")
+	}
+	if advisory.Passengers != 1 {
+		t.Errorf("Passengers = %d, want 1", advisory.Passengers)
+	}
+	if advisory.Locator != "SPL006" {
+		t.Errorf("Locator = %q, want the record being divided", advisory.Locator)
+	}
+	// The carrier has to be told where the passengers went, or the advisory
+	// says only that something happened.
+	var toChild bool
+	for _, r := range advisory.Split {
+		if r.Locator == res.Child.RecordLocator {
+			toChild = true
+		}
+	}
+	if !toChild {
+		t.Errorf("Split = %+v, want the child locator", advisory.Split)
+	}
+}
+
+func TestDivideAdvisoryIsNotAnOrdinaryRequest(t *testing.T) {
+	gw, sent := cancelNode(t)
+	ctx := context.Background()
+	partyRecord(t, gw, "SPL007", 2)
+	before := len(sent.msgs["AA"])
+
+	if _, err := gw.Split(ctx, SplitRequest{Locator: "SPL007", Passengers: []int{2}}); err != nil {
+		t.Fatal(err)
+	}
+	// An ordinary PAOREQ must not be mistaken for a division, or every request
+	// would look like one.
+	for i, raw := range sent.msgs["AA"] {
+		ic, err := edifact.Parse(raw, edifact.ParseOptions{})
+		if err != nil || len(ic.Messages) == 0 {
+			continue
+		}
+		isDivide := padis.IsDivide(ic.Messages[0])
+		if i < before && isDivide {
+			t.Errorf("a message sent before the split was read as a division")
+		}
 	}
 }

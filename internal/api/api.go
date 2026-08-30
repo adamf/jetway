@@ -707,6 +707,7 @@ func (s *Server) splitRecord(w http.ResponseWriter, r *http.Request) {
 	// Unadvised is reported because it is the state of the world, not an
 	// error: the carriers still hold one record covering both halves.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"parent": res.Parent, "child": res.Child, "unadvised": res.Unadvised,
+		"parent": res.Parent, "child": res.Child,
+		"advised": res.Advised, "unadvised": res.Unadvised,
 	})
 }
