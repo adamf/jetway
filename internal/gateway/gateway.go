@@ -22,6 +22,7 @@ import (
 	"github.com/adamf/jetway/internal/metrics"
 	"github.com/adamf/jetway/internal/queue"
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/internal/telemetry"
 	"github.com/adamf/jetway/internal/ulid"
 	"github.com/adamf/jetway/pkg/airimp"
 	"github.com/adamf/jetway/pkg/avail"
@@ -363,6 +364,12 @@ func (g *Gateway) IngestWith(ctx context.Context, peerName string, raw []byte, o
 	sum := sha256.Sum256(raw)
 
 	peer := g.Peer(peerName)
+	ctx, span := telemetry.Start(ctx, "jetway.ingest",
+		telemetry.AttrPeer.String(peerName),
+		telemetry.AttrDirection.String("in"),
+		telemetry.AttrMessageSize.Int(len(raw)),
+	)
+	defer span.End()
 	if peer == nil {
 		// An unknown peer is a configuration problem, not a reason to drop
 		// traffic. Capture it against a synthetic link and let an operator see
@@ -374,11 +381,13 @@ func (g *Gateway) IngestWith(ctx context.Context, peerName string, raw []byte, o
 	if transport == "" {
 		transport = "link"
 	}
+	traceID, spanID := telemetry.IDs(ctx)
 	msg := &store.Message{
 		ID: ulid.NewAt(now), Direction: store.Inbound, At: now,
 		Transport: transport, Peer: peerName, Format: store.FormatUnknown,
 		Raw: raw, SHA256: hex.EncodeToString(sum[:]), Size: len(raw),
-		Status: store.StatusReceived,
+		Status:  store.StatusReceived,
+		TraceID: traceID, SpanID: spanID,
 	}
 	if err := g.Store.AppendMessage(ctx, msg); err != nil {
 		// Durability failed, so the message is not safe. Return the error and
@@ -387,6 +396,9 @@ func (g *Gateway) IngestWith(ctx context.Context, peerName string, raw []byte, o
 	}
 	g.Bus.Publish(EvMessage, g.msgView(msg))
 	g.trace(msg.ID, "captured", fmt.Sprintf("%d bytes from %s", len(raw), peerName))
+
+	span.SetAttributes(telemetry.AttrMessageID.String(msg.ID),
+		telemetry.AttrTransport.String(transport))
 
 	res := &Result{MessageID: msg.ID}
 	if err := g.process(ctx, peer, msg, res, opts); err != nil {
@@ -400,6 +412,23 @@ func (g *Gateway) IngestWith(ctx context.Context, peerName string, raw []byte, o
 	}
 	if uerr := g.Store.UpdateMessage(ctx, msg); uerr != nil {
 		g.Log.Error("failed to record message outcome", "id", msg.ID, "err", uerr)
+	}
+	// The shape of what arrived, on the span that carried it: format, kind,
+	// outcome and how many diagnostics the decoder raised. A dialect problem
+	// becomes a count here well before it becomes a support ticket.
+	span.SetAttributes(
+		telemetry.AttrFormat.String(string(msg.Format)),
+		telemetry.AttrMessageKind.String(msg.Kind),
+		telemetry.AttrStatus.String(string(msg.Status)),
+		telemetry.AttrDiagnostics.Int(len(msg.Diagnostics)),
+		telemetry.AttrDuplicate.Bool(res.Duplicate),
+	)
+	if msg.PNRID != "" {
+		span.SetAttributes(telemetry.AttrRecordID.String(msg.PNRID),
+			telemetry.AttrLocator.String(res.Locator))
+	}
+	if res.Err != nil {
+		telemetry.Fail(span, res.Err)
 	}
 	g.Bus.Publish(EvMessage, g.msgView(msg))
 	return res, nil
@@ -802,19 +831,31 @@ func (g *Gateway) Send(ctx context.Context, peer *Peer, raw []byte, kind, pnrID,
 // partner's CONTRL quotes back. Without it an acknowledgement has nothing to
 // match against and can only be filed as a divergence.
 func (g *Gateway) SendKeyed(ctx context.Context, peer *Peer, raw []byte, kind, pnrID, correlationID, key string) (string, error) {
+	ctx, span := telemetry.Start(ctx, "jetway.send",
+		telemetry.AttrPeer.String(peer.Name),
+		telemetry.AttrCarrier.String(peer.Carrier),
+		telemetry.AttrFormat.String(string(peer.Format)),
+		telemetry.AttrMessageKind.String(kind),
+		telemetry.AttrMessageSize.Int(len(raw)),
+		telemetry.AttrDirection.String("out"),
+	)
+	defer span.End()
+
 	now := time.Now().UTC()
 	sum := sha256.Sum256(raw)
+	traceID, spanID := telemetry.IDs(ctx)
 	out := &store.Message{
 		ID: ulid.NewAt(now), Direction: store.Outbound, At: now,
 		Transport: "link", Peer: peer.Name, Format: peer.Format, Kind: kind,
 		Raw: raw, SHA256: hex.EncodeToString(sum[:]), Size: len(raw),
 		Status: store.StatusSent, PNRID: pnrID, CorrelationID: correlationID,
-		DedupKey: key,
+		DedupKey: key, TraceID: traceID, SpanID: spanID,
 	}
 	if err := g.Store.AppendMessage(ctx, out); err != nil {
 		return "", fmt.Errorf("gateway: capture outbound: %w", err)
 	}
 	if err := g.Sender.Send(ctx, peer.Name, raw); err != nil {
+		telemetry.Fail(span, err)
 		out.Status = store.StatusUndeliverable
 		out.Error = err.Error()
 		if uerr := g.Store.UpdateMessage(ctx, out); uerr != nil {

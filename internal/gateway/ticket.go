@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/internal/telemetry"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
@@ -38,11 +39,18 @@ func (g *Gateway) IssueTickets(ctx context.Context, locator string, opts IssueOp
 	if len(opts.AirlineCode) != 3 {
 		return nil, fmt.Errorf("gateway: airline code must be three digits, got %q", opts.AirlineCode)
 	}
+	ctx, span := telemetry.Start(ctx, "jetway.ticket.issue",
+		telemetry.AttrLocator.String(locator),
+		telemetry.AttrDocumentType.String(string(pnr.DocTicket)),
+	)
+	defer span.End()
+
 	const maxAttempts = 5
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		rec, err := g.Store.GetPNR(ctx, locator)
 		if err != nil {
+			telemetry.Fail(span, err)
 			return nil, err
 		}
 		if rec.Status == pnr.StatusCancelled {
@@ -106,6 +114,15 @@ func (g *Gateway) IssueTickets(ctx context.Context, locator string, opts IssueOp
 			// A ticket the operating carrier does not know about is a ticket
 			// that exists only here.
 			g.notifyTicketed(ctx, rec, opts.IssuedBy)
+			coupons := 0
+			for _, t := range rec.FlightTickets() {
+				coupons += len(t.Coupons)
+			}
+			span.SetAttributes(
+				telemetry.AttrRecordID.String(rec.ID),
+				telemetry.AttrCouponCount.Int(coupons),
+				telemetry.AttrPaxCount.Int(len(rec.Passengers)),
+			)
 			return rec, nil
 		case errors.Is(err, store.ErrConflict):
 			lastErr = err

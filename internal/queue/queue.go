@@ -31,9 +31,13 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/adamf/jetway/internal/metrics"
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/internal/telemetry"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/rescode"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Publisher is an optional sink notified after a placement is durable.
@@ -108,6 +112,18 @@ func (m *Manager) Place(ctx context.Context, item *store.QueueItem) (bool, error
 	}
 	m.log().Info("queued", "queue", item.Queue, "locator", item.Locator,
 		"code", item.Code, "reason", item.Reason)
+	// Work created, by kind. Backlog per queue is the operational number;
+	// which queues fill is the commercial one, since a rising unable or
+	// divergence count is a partner problem rather than a capacity problem.
+	metrics.Counter("jetway_queue_placed_total", "records placed on a work queue",
+		metrics.Labels{"queue": item.Queue})
+	if span := trace.SpanFromContext(ctx); span.IsRecording() {
+		span.AddEvent("queued", trace.WithAttributes(
+			telemetry.AttrQueue.String(item.Queue),
+			telemetry.AttrQueueCode.String(item.Code),
+			telemetry.AttrLocator.String(item.Locator),
+		))
+	}
 	if m.Notify != nil {
 		m.Notify(item)
 	}

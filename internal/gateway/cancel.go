@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/internal/telemetry"
 	"github.com/adamf/jetway/pkg/airimp"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
@@ -51,6 +52,10 @@ var ErrNothingToCancel = errors.New("gateway: record has no live segment to canc
 // console. None of them could be built while there was no way to say "off" to
 // a carrier.
 func (g *Gateway) Cancel(ctx context.Context, locator string, opts CancelOptions) (*CancelResult, error) {
+	ctx, span := telemetry.Start(ctx, "jetway.cancel",
+		telemetry.AttrLocator.String(locator))
+	defer span.End()
+
 	const maxAttempts = 5
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
@@ -118,7 +123,16 @@ func (g *Gateway) Cancel(ctx context.Context, locator string, opts CancelOptions
 		}
 
 		g.Bus.Publish(EvPNR, g.pnrView(rec))
-		return g.notifyCancel(ctx, rec, outbound, buildErrs, opts), nil
+		res := g.notifyCancel(ctx, rec, outbound, buildErrs, opts)
+		// Unreachable is the number worth alerting on: it is how often this
+		// node and a partner end up disagreeing about what is held.
+		span.SetAttributes(
+			telemetry.AttrRecordID.String(rec.ID),
+			telemetry.AttrNotified.StringSlice(res.Notified),
+			telemetry.AttrUnreachable.StringSlice(res.Unreachable),
+			telemetry.AttrDivergence.Bool(len(res.Unreachable) > 0),
+		)
+		return res, nil
 	}
 	return nil, fmt.Errorf("gateway: gave up cancelling after %d attempts: %w", maxAttempts, lastErr)
 }

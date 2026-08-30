@@ -26,6 +26,7 @@ import (
 	"github.com/adamf/jetway/internal/queue"
 	"github.com/adamf/jetway/internal/spool"
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/internal/telemetry"
 	"github.com/adamf/jetway/pkg/avail"
 )
 
@@ -106,6 +107,29 @@ func run() error {
 	} else {
 		log.Warn("write-ahead spool disabled",
 			"consequence", "a store outage becomes refused acknowledgements to partners")
+	}
+
+	service := cfg.Telemetry.ServiceName
+	if service == "" {
+		service = cfg.Identity.Name
+	}
+	shutdownTracing, err := telemetry.Setup(ctx, telemetry.Config{
+		Endpoint: cfg.Telemetry.Endpoint, Headers: cfg.Telemetry.Headers,
+		ServiceName: service, Environment: cfg.Telemetry.Environment,
+		SampleRatio: cfg.Telemetry.SampleRatio,
+	})
+	if err != nil {
+		return fmt.Errorf("telemetry: %w", err)
+	}
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(sctx); err != nil {
+			log.Warn("tracing did not shut down cleanly", "err", err)
+		}
+	}()
+	if cfg.Telemetry.Endpoint != "" {
+		log.Info("tracing enabled", "endpoint", cfg.Telemetry.Endpoint, "service", service)
 	}
 
 	bus := gateway.NewBus(400)

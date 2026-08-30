@@ -17,17 +17,35 @@ import (
 
 // Config is the whole deployment.
 type Config struct {
-	Identity Identity  `yaml:"identity"`
-	Store    Store     `yaml:"store"`
-	Spool    Spool     `yaml:"spool"`
-	HTTP     HTTP      `yaml:"http"`
-	Ingress  []Ingress `yaml:"ingress"`
-	Peers    []Peer    `yaml:"peers"`
-	Routing  Routing   `yaml:"routing"`
-	Demo     Demo      `yaml:"demo"`
+	Identity  Identity  `yaml:"identity"`
+	Store     Store     `yaml:"store"`
+	Spool     Spool     `yaml:"spool"`
+	HTTP      HTTP      `yaml:"http"`
+	Ingress   []Ingress `yaml:"ingress"`
+	Peers     []Peer    `yaml:"peers"`
+	Routing   Routing   `yaml:"routing"`
+	Telemetry Telemetry `yaml:"telemetry"`
+	Demo      Demo      `yaml:"demo"`
 	// LocatorSecret keys record locator allocation. Prefer the
 	// JETWAY_LOCATOR_SECRET environment variable to putting it in a file.
 	LocatorSecret string `yaml:"locator_secret"`
+}
+
+// Telemetry configures OpenTelemetry tracing.
+//
+// Off unless an endpoint is given: a gateway with nowhere to send spans should
+// not pay to make them.
+type Telemetry struct {
+	// Endpoint is an OTLP HTTP traces endpoint, e.g.
+	// http://collector:4318/v1/traces.
+	Endpoint string `yaml:"endpoint"`
+	// Headers are sent with every export, for a collector behind an API key.
+	Headers map[string]string `yaml:"headers"`
+	// ServiceName identifies this node in traces. Defaults to the identity name.
+	ServiceName string `yaml:"service_name"`
+	Environment string `yaml:"environment"`
+	// SampleRatio is head sampling, 0 to 1. Zero means everything.
+	SampleRatio float64 `yaml:"sample_ratio"`
 }
 
 // Routing controls what the node does with messages addressed elsewhere.

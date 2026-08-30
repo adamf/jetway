@@ -3,14 +3,17 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/internal/telemetry"
 	"github.com/adamf/jetway/pkg/airimp"
 	"github.com/adamf/jetway/pkg/avail"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/rescode"
 	"github.com/adamf/jetway/pkg/typeb"
 )
 
@@ -54,6 +57,10 @@ type BookingRequest struct {
 	Contact      string             `json:"contact,omitempty"`
 	ReceivedFrom string             `json:"received_from,omitempty"`
 	Agent        string             `json:"agent,omitempty"`
+	// Channel says where the booking came from: the console API, an NDC order,
+	// a partner message. It is carried onto the record and onto the span,
+	// because "how much comes through NDC" is a question somebody asks.
+	Channel string `json:"channel,omitempty"`
 }
 
 // Validate checks a request is coherent before anything is written.
@@ -102,7 +109,22 @@ type BookResult struct {
 // first and storing after, produces seats sold against a record that does not
 // exist.
 func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, error) {
+	// The commercial span. Everything the revenue side asks about a booking is
+	// answered from here: how many seats, on how many carriers, how much of it
+	// sold without having to ask, and what the carriers said.
+	channel := telemetry.ChannelAPI
+	if req.Channel != "" {
+		channel = req.Channel
+	}
+	ctx, span := telemetry.Start(ctx, "jetway.book",
+		telemetry.AttrChannel.String(channel),
+		telemetry.AttrPaxCount.Int(len(req.Passengers)),
+		telemetry.AttrSegmentCount.Int(len(req.Segments)),
+	)
+	defer span.End()
+
 	if err := req.Validate(); err != nil {
+		telemetry.Fail(span, err)
 		return nil, err
 	}
 	now := time.Now().UTC()
@@ -114,6 +136,7 @@ func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, e
 			Party: g.Identity.Designator, Agent: req.Agent, Channel: "api",
 		},
 	}
+	rec.Origin.Channel = channel
 	for _, p := range req.Passengers {
 		rec.Passengers = append(rec.Passengers, pnr.Passenger{
 			Surname: upper(p.Surname), Given: upper(p.Given),
@@ -212,7 +235,64 @@ func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, e
 		}
 		res.Sent = append(res.Sent, id)
 	}
+
+	// What the booking actually is, commercially. Seats and carriers are the
+	// volume; free_sale is the share that sold on the carrier's standing
+	// permission rather than costing a round trip, which is the number a
+	// distribution team watches.
+	seats, free := 0, 0
+	for _, sg := range rec.Segments {
+		if sg.Type != pnr.SegmentAir {
+			continue
+		}
+		seats += sg.Seats
+		if sg.Status == "HK" {
+			free++
+		}
+	}
+	span.SetAttributes(
+		telemetry.AttrLocator.String(rec.RecordLocator),
+		telemetry.AttrRecordID.String(rec.ID),
+		telemetry.AttrSeats.Int(seats),
+		telemetry.AttrCarrier.String(strings.Join(rec.Carriers(), ",")),
+		telemetry.AttrInterline.Bool(len(rec.Carriers()) > 1),
+		telemetry.AttrFreeSale.Bool(free == len(rec.Segments) && free > 0),
+		telemetry.AttrOutcome.String(bookingOutcome(rec)),
+	)
 	return res, nil
+}
+
+// bookingOutcome collapses a record to the answer somebody reports on.
+func bookingOutcome(rec *pnr.PNR) string {
+	held, waitlisted, refused, pending := 0, 0, 0, 0
+	for _, s := range rec.Segments {
+		if s.Type != pnr.SegmentAir {
+			continue
+		}
+		code := rescode.ActionCode(s.Status)
+		info, known := code.Info()
+		switch {
+		case known && info.Confirmed:
+			held++
+		case known && info.Waitlisted:
+			waitlisted++
+		case known && info.Category == rescode.CatReply:
+			refused++
+		default:
+			pending++
+		}
+	}
+	switch {
+	case refused > 0:
+		return telemetry.OutcomeRefused
+	case waitlisted > 0:
+		return telemetry.OutcomeWaitlisted
+	case pending > 0:
+		return telemetry.OutcomePending
+	case held > 0:
+		return telemetry.OutcomeConfirmed
+	}
+	return telemetry.OutcomePending
 }
 
 // decide asks the availability cache what to do about a segment.

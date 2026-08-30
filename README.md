@@ -355,6 +355,7 @@ where this is wrong, that is the single most useful contribution available.
 | `internal/spool` | Durable write-ahead buffer for inbound messages |
 | `internal/config` | Deployment configuration |
 | `internal/metrics` | Prometheus exposition, no client library |
+| `internal/telemetry` | OpenTelemetry tracing, with a hand-rolled OTLP/JSON exporter |
 | `internal/transport` | Framing and link sessions |
 
 The `pkg/...` tree is the part you would import to build something else. It has

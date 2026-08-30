@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/internal/telemetry"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
@@ -51,6 +52,10 @@ type SplitResult struct {
 // parent first would mean a failure loses them from one record without putting
 // them on another, and nothing recovers that.
 func (g *Gateway) Split(ctx context.Context, req SplitRequest) (*SplitResult, error) {
+	ctx, span := telemetry.Start(ctx, "jetway.split",
+		telemetry.AttrLocator.String(req.Locator))
+	defer span.End()
+
 	if len(req.Passengers) == 0 {
 		return nil, fmt.Errorf("gateway: a split needs at least one passenger")
 	}
@@ -111,6 +116,13 @@ func (g *Gateway) Split(ctx context.Context, req SplitRequest) (*SplitResult, er
 
 	res := &SplitResult{Parent: parent, Child: child}
 	res.Advised, res.Unadvised = g.adviseSplit(ctx, parent, child, req.By)
+	span.SetAttributes(
+		telemetry.AttrRecordID.String(child.ID),
+		telemetry.AttrPaxCount.Int(len(child.Passengers)),
+		telemetry.AttrNotified.StringSlice(res.Advised),
+		telemetry.AttrUnreachable.StringSlice(res.Unadvised),
+		telemetry.AttrDivergence.Bool(len(res.Unadvised) > 0),
+	)
 	return res, nil
 }
 

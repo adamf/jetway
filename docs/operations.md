@@ -136,3 +136,53 @@ with raw bytes and decoded structure, records with their itineraries and event
 history, and a booking form.
 
 It has no authentication. Do not expose it beyond a trusted network.
+
+## Tracing
+
+Off unless told where to send spans. Point it at any OTLP HTTP collector:
+
+```yaml
+telemetry:
+  endpoint: http://collector:4318/v1/traces
+  service_name: jetway
+  sample_ratio: 1
+```
+
+The spans and the context propagation are real OpenTelemetry; only the exporter
+is written here, because OTLP permits a JSON body and every collector accepts
+it. That keeps the module tree at thirty-three rather than ninety-six — the
+protobuf exporter brings grpc, protobuf and grpc-gateway, the same stack
+`internal/metrics` declined. Carriers audit this tree.
+
+A message arriving over HTTP carries whatever trace the caller propagated, so an
+agent or an NDC client that is already tracing keeps one trace across the
+boundary. Teletype and EDIFACT links have nowhere to put a `traceparent`, so a
+message on one starts a new trace. Either way the trace and span identifiers are
+written against the message in the log, which means a message still names its
+trace long after the spans have been sampled away.
+
+**No passenger data goes in a span.** Spans leave the building, usually to a
+collector somebody else runs, and outlive the intention to keep them. Locators
+and carrier codes are there because they are what an operator follows a booking
+by and are meaningless without the record; names, contacts, documents and
+frequent flyer numbers are not, and a test holds the vocabulary to it.
+
+### What the spans say
+
+The same spans answer an operational question and a commercial one, which is why
+there is one vocabulary rather than two that drift.
+
+| Span | Operations reads | The commercial side reads |
+| --- | --- | --- |
+| `jetway.ingest` | format, kind, status, decoder diagnostics, duplicates | which partners send what, and how much of it is unreadable |
+| `jetway.send` | peer, size, delivery failures | — |
+| `jetway.book` | segments, carriers | seats, interline share, **free sale share**, outcome |
+| `jetway.ticket.issue` | coupons written | tickets and coupons issued |
+| `jetway.emd.issue` | — | **ancillary revenue by reason-for-issuance code**, with the amount and currency |
+| `jetway.cancel` | carriers unreachable | cancellations |
+| `jetway.split` | carriers unadvised | divisions |
+
+The console's **Insights** view reads the same things back out of the store, so
+the demo shows them without a collector. That is computed per request, which is
+honest at demo volume and wrong at scale: a real deployment reads these off the
+metrics endpoint or out of the traces, where they are counted as they happen.

@@ -122,6 +122,12 @@ type Message struct {
 	// message class carries none.
 	DedupKey string `json:"dedup_key,omitempty"`
 
+	// TraceID and SpanID tie this message to the trace that handled it. They
+	// turn "what happened to this message" from a search into a link, and they
+	// survive in the log after the trace itself has been sampled away.
+	TraceID string `json:"trace_id,omitempty"`
+	SpanID  string `json:"span_id,omitempty"`
+
 	// PossibleDuplicate records the Type B PDM indicator. Inbound it means the
 	// sender said this may be a retransmission; outbound it means we marked it
 	// as one on redelivery. A duplicate that arrives flagged is the protocol

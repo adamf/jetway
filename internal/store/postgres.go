@@ -49,11 +49,13 @@ func (s *Postgres) AppendMessage(ctx context.Context, m *Message) error {
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO message (id, direction, at, transport, peer, format, kind,
 		                     raw, sha256, size_bytes, status, error, dedup_key,
-		                     pnr_id, correlation_id, diagnostics, possible_duplicate)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		                     pnr_id, correlation_id, diagnostics, possible_duplicate,
+		                     trace_id, span_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
 		m.ID, m.Direction, m.At, m.Transport, m.Peer, m.Format, nullIfEmpty(m.Kind),
 		m.Raw, m.SHA256, m.Size, m.Status, nullIfEmpty(m.Error), nullIfEmpty(m.DedupKey),
-		nullIfEmpty(m.PNRID), nullIfEmpty(m.CorrelationID), diags, m.PossibleDuplicate)
+		nullIfEmpty(m.PNRID), nullIfEmpty(m.CorrelationID), diags, m.PossibleDuplicate,
+		nullIfEmpty(m.TraceID), nullIfEmpty(m.SpanID))
 	if err != nil {
 		return fmt.Errorf("store: append message: %w", err)
 	}
@@ -85,14 +87,15 @@ func (s *Postgres) UpdateMessage(ctx context.Context, m *Message) error {
 const messageColumns = `id, direction, at, transport, peer, format,
 	coalesce(kind,''), raw, sha256, size_bytes, status, coalesce(error,''),
 	coalesce(dedup_key,''), coalesce(pnr_id,''), coalesce(correlation_id,''), diagnostics,
-	possible_duplicate`
+	possible_duplicate, coalesce(trace_id,''), coalesce(span_id,'')`
 
 func scanMessage(row pgx.Row) (*Message, error) {
 	var m Message
 	var diags []byte
 	err := row.Scan(&m.ID, &m.Direction, &m.At, &m.Transport, &m.Peer, &m.Format,
 		&m.Kind, &m.Raw, &m.SHA256, &m.Size, &m.Status, &m.Error,
-		&m.DedupKey, &m.PNRID, &m.CorrelationID, &diags, &m.PossibleDuplicate)
+		&m.DedupKey, &m.PNRID, &m.CorrelationID, &diags, &m.PossibleDuplicate,
+		&m.TraceID, &m.SpanID)
 	if err != nil {
 		return nil, err
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/internal/telemetry"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
 )
@@ -62,6 +63,24 @@ func (g *Gateway) IssueEMD(ctx context.Context, req EMDRequest) (*pnr.PNR, pnr.T
 	if len(req.Coupons) > pnr.MaxCoupons {
 		return nil, zero, fmt.Errorf("gateway: %d coupons exceeds the %d a document carries",
 			len(req.Coupons), pnr.MaxCoupons)
+	}
+
+	// The ancillary revenue span. RFIC is the revenue category and the amount
+	// is what was charged, which together are what the commercial side means
+	// when it asks what ancillaries are selling.
+	ctx, span := telemetry.Start(ctx, "jetway.emd.issue",
+		telemetry.AttrLocator.String(req.Locator),
+		telemetry.AttrDocumentType.String(string(req.Type)),
+		telemetry.AttrRFIC.String(string(req.RFIC)),
+		telemetry.AttrCouponCount.Int(len(req.Coupons)),
+	)
+	defer span.End()
+	if len(req.Coupons) > 0 {
+		span.SetAttributes(
+			telemetry.AttrRFISC.String(req.Coupons[0].RFISC),
+			telemetry.AttrAmount.String(req.Coupons[0].Amount),
+			telemetry.AttrCurrency.String(req.Coupons[0].Currency),
+		)
 	}
 
 	const maxAttempts = 5
@@ -128,6 +147,10 @@ func (g *Gateway) IssueEMD(ctx context.Context, req EMDRequest) (*pnr.PNR, pnr.T
 			// The carrier providing the service has to know the document
 			// exists, for the same reason a flight ticket does.
 			g.notifyDocument(ctx, rec, doc, req.IssuedBy)
+			span.SetAttributes(
+				telemetry.AttrRecordID.String(rec.ID),
+				telemetry.AttrDocumentNumber.String(doc.Number.String()),
+			)
 			return rec, doc, nil
 		case errors.Is(err, store.ErrConflict):
 			lastErr = err

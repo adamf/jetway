@@ -85,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/carrier/{designator}/pnrs", s.carrierPNRs)
 	mux.HandleFunc("GET /api/carrier/{designator}/inventory", s.carrierInventory)
 	mux.HandleFunc("GET /api/availability", s.availability)
+	mux.HandleFunc("GET /api/insights", s.insights)
 	mux.HandleFunc("GET /api/queues", s.listQueues)
 	mux.HandleFunc("GET /api/queue/{name}", s.getQueue)
 	mux.HandleFunc("POST /api/queue/item/{id}/work", s.workQueueItem)
