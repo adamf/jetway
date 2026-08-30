@@ -177,6 +177,29 @@ What is missing:
 - **Waitlist clearance and schedule change** are the two producers that would
   make queues earn their keep, and neither exists yet.
 
+## Scale
+
+Measured in [scaling.md](scaling.md). The headline is that the record scans on
+the hot path are **correctness** bugs before they are performance bugs:
+`ListPNRs` orders by `updated_at` and takes a limit, so `findTicket` and
+`findByExternalLocator` cannot see an older booking at all, and refuse a
+partner's message with something false. Fix those before anything else.
+
+- **Three hot-path lookups scan the record table.** Linear: 4 ms and 8 MB at ten
+  thousand records. They want indexed queries against the document number and
+  the carrier locator.
+- **The sweeper reads records and filters in Go.** The due-date predicates
+  belong in SQL.
+- **`api.insights` aggregates per request.** Right for a demo, wrong anywhere
+  else; it should read counters.
+- **The availability cache is per process**, so two processes disagree about
+  what is sellable. That is the real obstacle to running more than one.
+- **Channel sequence baselines are per process** and are lost on restart, so a
+  failover reports a gap that is not there.
+- **The message log is not partitioned.** It is append-only with a time-ordered
+  key, which is a natural range partition, and would make retention a
+  `DROP TABLE`.
+
 ## Engineering
 
 - **The spool is not bounded.** It grows until the disk does. A depth limit that
