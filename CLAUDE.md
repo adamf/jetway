@@ -32,6 +32,26 @@ digit — implement one, make it advisory rather than a gate, and document the
 disagreement. Rejecting valid input on an uncertain rule is worse than
 accepting invalid input.
 
+## Search for a free source before writing "blocked"
+
+Every single time this has been done, it paid:
+
+- The free **PNRGOV guide** corrected four `pkg/padis` bugs whose tests passed
+  because the tests encoded the same guess as the code — and later unblocked
+  half the divide feature, because `EQN` and `RCI` describe how PADIS
+  represents a split.
+- The free **EMD guide** corrected three errors in a guessed coupon status list
+  and supplied the open/interim/final structure the guess had missed.
+- The free **CONTRL UNSM** made that whole layer checkable rather than inferred.
+- The free **Type B whitepaper** produced the 4 KB cap and PDM, neither
+  implemented.
+
+Look for: the free table of contents (it names messages and sections, which
+narrows what is genuinely unknown), government and regulator implementation
+guides, vendor and airport-authority reproductions, and adjacent free standards
+sharing a vocabulary. Then state precisely what remains unknown. "We do not
+have the manual" was doing too much work until it was replaced by a table.
+
 ## Invariants — do not break these
 
 - **Capture precedes interpretation.** Raw bytes are durable before anything
