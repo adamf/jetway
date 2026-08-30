@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -227,5 +228,71 @@ func TestSweepSkipsCancelledRecords(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("swept a cancelled record onto %d queues; nothing is owed on it", n)
+	}
+}
+
+// The sweep used to read the most recently updated records and look for stale
+// ones among them. That is inverted: the freshest records are by definition not
+// the stale ones, so once the store held more records than the limit, a
+// ticketing time limit could never fire and an unanswered segment could never
+// be raised. The pass reported nothing to do, with no error and no log line --
+// a booking would sit past its deadline forever and nobody would be told.
+func TestSweepFindsDueRecordsBuriedUnderFreshOnes(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMem()
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-2 * time.Hour)
+
+	// One record past its ticketing deadline, and one whose request has gone
+	// unanswered for longer than the agreed time.
+	expired := record(t, st, "DUE001")
+	expired.Ticketing = []pnr.Ticketing{{Text: "TKTL", Deadline: &past}}
+	expired.UpdatedAt = now.Add(-90 * 24 * time.Hour)
+	if err := st.UpdatePNR(ctx, expired, expired.Version, nil); err != nil {
+		t.Fatal(err)
+	}
+	stalled := record(t, st, "DUE002", pnr.Segment{
+		Ref: 1, Type: pnr.SegmentAir, Carrier: "BA", FlightNum: "0117",
+		Board: "LHR", Off: "JFK", Status: "NN", Seats: 1,
+	})
+	stalled.UpdatedAt = now.Add(-90 * 24 * time.Hour)
+	if err := st.UpdatePNR(ctx, stalled, stalled.Version, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Bury both under more freshly touched records than a pass will handle.
+	for i := 0; i < DefaultSweepLimit+50; i++ {
+		fresh := record(t, st, fmt.Sprintf("FR%04d", i))
+		fresh.UpdatedAt = now.Add(-time.Minute)
+		if err := st.UpdatePNR(ctx, fresh, fresh.Version, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sw := &Sweeper{Records: st, Queues: newManager(st), Now: func() time.Time { return now }}
+	if _, err := sw.Sweep(ctx); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	for _, want := range []struct{ queue, locator, code string }{
+		{store.QueueTicketing, "DUE001", "tktl_expired"},
+		{store.QueuePending, "DUE002", "unanswered_NN"},
+	} {
+		items, err := st.ListQueue(ctx, store.QueueFilter{Queue: want.queue})
+		if err != nil {
+			t.Fatalf("ListQueue: %v", err)
+		}
+		found := false
+		for _, it := range items {
+			if it.Locator == want.locator && it.Code == want.code {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s was never raised on the %s queue; it was buried under "+
+				"%d freshly touched records, which is exactly when the old "+
+				"sweep stopped finding anything", want.locator, want.queue,
+				DefaultSweepLimit+50)
+		}
 	}
 }

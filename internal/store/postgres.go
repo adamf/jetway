@@ -180,9 +180,10 @@ func (s *Postgres) CreatePNR(ctx context.Context, p *pnr.PNR, events []Event) er
 	}
 	return s.tx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO pnr (id, record_locator, version, status, created_at, updated_at, state)
-			VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-			p.ID, p.RecordLocator, p.Version, p.Status, p.CreatedAt, p.UpdatedAt, state)
+			INSERT INTO pnr (id, record_locator, version, status, created_at, updated_at, state, next_deadline)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			p.ID, p.RecordLocator, p.Version, p.Status, p.CreatedAt, p.UpdatedAt, state,
+			p.NextDeadline())
 		if err != nil {
 			if isUniqueViolation(err) {
 				return ErrDuplicate
@@ -203,9 +204,11 @@ func (s *Postgres) UpdatePNR(ctx context.Context, p *pnr.PNR, expected int64, ev
 		// The version predicate is the whole point: if another writer got here
 		// first, this update affects no rows and the caller must re-read.
 		tag, err := tx.Exec(ctx, `
-			UPDATE pnr SET version=$2, status=$3, updated_at=$4, state=$5, record_locator=$6
+			UPDATE pnr SET version=$2, status=$3, updated_at=$4, state=$5, record_locator=$6,
+			               next_deadline=$8
 			WHERE id=$1 AND version=$7`,
-			p.ID, p.Version, p.Status, p.UpdatedAt, state, p.RecordLocator, expected)
+			p.ID, p.Version, p.Status, p.UpdatedAt, state, p.RecordLocator, expected,
+			p.NextDeadline())
 		if err != nil {
 			return err
 		}
@@ -663,4 +666,49 @@ func flightNumberVariants(number string) []string {
 		}
 	}
 	return out
+}
+
+func (s *Postgres) FindPNRsStale(ctx context.Context, before time.Time, limit int) ([]*pnr.PNR, error) {
+	if limit <= 0 {
+		limit = 10000
+	}
+	// Ascending, served by pnr_stale_idx: the most overdue first, so a limit
+	// drops the least urgent work rather than hiding all of it behind fresh
+	// records.
+	return s.queryPNRs(ctx,
+		`SELECT state, version FROM pnr
+		 WHERE status <> $1 AND updated_at < $2
+		 ORDER BY updated_at ASC LIMIT $3`,
+		string(pnr.StatusCancelled), before, limit)
+}
+
+func (s *Postgres) FindPNRsDueBy(ctx context.Context, deadline time.Time, limit int) ([]*pnr.PNR, error) {
+	if limit <= 0 {
+		limit = 10000
+	}
+	// next_deadline is maintained on write because a deadline buried in the
+	// JSONB state cannot be range-scanned. Served by pnr_deadline_idx.
+	return s.queryPNRs(ctx,
+		`SELECT state, version FROM pnr
+		 WHERE status <> $1 AND next_deadline IS NOT NULL AND next_deadline < $2
+		 ORDER BY next_deadline ASC LIMIT $3`,
+		string(pnr.StatusCancelled), deadline, limit)
+}
+
+// queryPNRs runs a query returning (state, version) rows.
+func (s *Postgres) queryPNRs(ctx context.Context, sql string, args ...any) ([]*pnr.PNR, error) {
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*pnr.PNR
+	for rows.Next() {
+		p, err := scanPNRRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }

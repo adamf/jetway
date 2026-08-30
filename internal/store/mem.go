@@ -494,3 +494,53 @@ func (s *Mem) FindPNRsByFlight(ctx context.Context, flightKey, wireDate string, 
 	}
 	return out, nil
 }
+
+func (s *Mem) FindPNRsStale(ctx context.Context, before time.Time, limit int) ([]*pnr.PNR, error) {
+	if limit <= 0 {
+		limit = 10000
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*pnr.PNR
+	for _, p := range s.pnrs {
+		if p.Status == pnr.StatusCancelled || !p.UpdatedAt.Before(before) {
+			continue
+		}
+		out = append(out, clonePNR(p))
+	}
+	// Most overdue first, so a limit drops the least urgent work.
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.Before(out[j].UpdatedAt) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (s *Mem) FindPNRsDueBy(ctx context.Context, deadline time.Time, limit int) ([]*pnr.PNR, error) {
+	if limit <= 0 {
+		limit = 10000
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	type due struct {
+		p  *pnr.PNR
+		at time.Time
+	}
+	var found []due
+	for _, p := range s.pnrs {
+		d := p.NextDeadline()
+		if d == nil || !d.Before(deadline) {
+			continue
+		}
+		found = append(found, due{clonePNR(p), *d})
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].at.Before(found[j].at) })
+	out := make([]*pnr.PNR, 0, len(found))
+	for _, f := range found {
+		out = append(out, f.p)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/adamf/jetway/pkg/pnr"
 )
@@ -37,6 +38,20 @@ type Lookup interface {
 	// because carriers write the same flight both ways and a schedule change
 	// that misses half its holdings is worse than useless.
 	FindPNRsByFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error)
+
+	// FindPNRsStale returns live records untouched since before the given
+	// time, most overdue first.
+	//
+	// The ordering is the point. The sweeper used to read the most recently
+	// updated records and look for stale ones among them, which is inverted:
+	// the freshest records are precisely not the stale ones. Ordering by the
+	// thing that makes a record due means a limit drops the least urgent work
+	// rather than all of it.
+	FindPNRsStale(ctx context.Context, before time.Time, limit int) ([]*pnr.PNR, error)
+
+	// FindPNRsDueBy returns live records owing a ticketing time limit before
+	// the given time, soonest deadline first.
+	FindPNRsDueBy(ctx context.Context, deadline time.Time, limit int) ([]*pnr.PNR, error)
 }
 
 // NormaliseFlightKey renders a carrier and flight number in the one spelling

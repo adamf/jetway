@@ -174,3 +174,66 @@ func TestFindPNRsByFlightSearchesEveryRecord(t *testing.T) {
 		}
 	})
 }
+
+// Both due-lookups order by the thing that makes a record due, so a limit drops
+// the least urgent work. The old sweep did the opposite -- it ordered by most
+// recently touched, which put the stale records it was looking for last.
+func TestDueLookupsOrderByUrgency(t *testing.T) {
+	eachBackend(t, func(t *testing.T, s Store) {
+		ctx := context.Background()
+		now := time.Now().UTC()
+
+		for i := 1; i <= 40; i++ {
+			p := samplePNR(fmt.Sprintf("DUE%03d", i))
+			// The higher the index, the more overdue.
+			p.UpdatedAt = now.Add(-time.Duration(i) * time.Hour)
+			d := now.Add(-time.Duration(i) * time.Hour)
+			p.Ticketing = []pnr.Ticketing{{Text: "TKTL", Deadline: &d}}
+			if err := s.CreatePNR(ctx, p, nil); err != nil {
+				t.Fatalf("CreatePNR: %v", err)
+			}
+		}
+
+		stale, err := s.FindPNRsStale(ctx, now.Add(-time.Hour), 5)
+		if err != nil {
+			t.Fatalf("FindPNRsStale: %v", err)
+		}
+		if len(stale) != 5 {
+			t.Fatalf("got %d stale records, want 5", len(stale))
+		}
+		if stale[0].RecordLocator != "DUE040" {
+			t.Errorf("most overdue = %q, want DUE040; a limit must drop the "+
+				"least urgent work, not the most", stale[0].RecordLocator)
+		}
+		for i := 1; i < len(stale); i++ {
+			if stale[i].UpdatedAt.Before(stale[i-1].UpdatedAt) {
+				t.Fatalf("stale records are not most-overdue-first at %d", i)
+			}
+		}
+
+		due, err := s.FindPNRsDueBy(ctx, now, 5)
+		if err != nil {
+			t.Fatalf("FindPNRsDueBy: %v", err)
+		}
+		if len(due) != 5 || due[0].RecordLocator != "DUE040" {
+			t.Errorf("got %d due records starting %v, want 5 starting DUE040",
+				len(due), due)
+		}
+
+		// A record with no deadline owes nothing and must not appear.
+		plain := samplePNR("NODL01")
+		plain.UpdatedAt = now.Add(-100 * time.Hour)
+		if err := s.CreatePNR(ctx, plain, nil); err != nil {
+			t.Fatalf("CreatePNR: %v", err)
+		}
+		all, err := s.FindPNRsDueBy(ctx, now, 0)
+		if err != nil {
+			t.Fatalf("FindPNRsDueBy: %v", err)
+		}
+		for _, p := range all {
+			if p.RecordLocator == "NODL01" {
+				t.Error("a record owing no deadline was reported as due")
+			}
+		}
+	})
+}

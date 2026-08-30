@@ -19,10 +19,12 @@ import (
 // no queue at all unless something notices the silence. Same for a ticketing
 // time limit: the deadline passing is not an event anyone sends.
 //
-// Scanning is a full pass over the record list. That is honest for the volumes
-// this runs at today and wrong for a large deployment, which wants the due-date
-// predicates pushed into an indexed query instead; Limit is here to bound the
-// damage in the meantime.
+// The due-date predicates are in the query, not in this loop, and that is a
+// correctness property rather than an optimisation. A pass used to read the
+// most recently updated records and look for stale ones among them, which is
+// inverted -- the freshest records are by definition not the stale ones. Above
+// a few hundred records a ticketing time limit could never fire and an
+// unanswered segment could never be raised, with no error and no log line.
 type Sweeper struct {
 	Records store.Store
 	Queues  *Manager
@@ -34,7 +36,9 @@ type Sweeper struct {
 	// TicketingLead is how far ahead of a ticketing deadline to raise it. Zero
 	// uses DefaultTicketingLead.
 	TicketingLead time.Duration
-	// Limit bounds records examined per pass. Zero uses DefaultSweepLimit.
+	// Limit bounds records handled per pass. The store returns the most
+	// overdue first, so this drops the least urgent work rather than
+	// concealing all of it. Zero uses DefaultSweepLimit.
 	Limit int
 
 	// Cancel, when set, cancels a booking whose ticketing time limit has
@@ -104,23 +108,47 @@ func (s *Sweeper) Sweep(ctx context.Context) (int, error) {
 	if s.Records == nil || s.Queues == nil {
 		return 0, nil
 	}
-	recs, err := s.Records.ListPNRs(ctx, s.limit())
-	if err != nil {
-		return 0, fmt.Errorf("queue: sweep: %w", err)
-	}
 	now := s.now()
+	limit := s.limit()
+
+	// Two questions, because they are two different kinds of due and each has
+	// its own index. Asking one question and filtering in Go is what produced
+	// the inverted scan.
+	stale, err := s.Records.FindPNRsStale(ctx, now.Add(-s.pendingAfter()), limit)
+	if err != nil {
+		return 0, fmt.Errorf("queue: sweep for stalled records: %w", err)
+	}
+	due, err := s.Records.FindPNRsDueBy(ctx, now.Add(s.ticketingLead()), limit)
+	if err != nil {
+		return 0, fmt.Errorf("queue: sweep for ticketing deadlines: %w", err)
+	}
+
+	// A record can be both, and sweeping it twice would place the same work
+	// twice -- the queue would dedupe it, but the pass would report a count
+	// nobody could reconcile.
+	seen := make(map[string]bool, len(stale)+len(due))
 	placed := 0
-	for _, rec := range recs {
-		if rec.Status == pnr.StatusCancelled {
-			continue
+	for _, recs := range [][]*pnr.PNR{due, stale} {
+		for _, rec := range recs {
+			if seen[rec.ID] {
+				continue
+			}
+			seen[rec.ID] = true
+			n, err := s.sweepRecord(ctx, rec, now)
+			if err != nil {
+				// One bad record must not stop the pass; the rest still need doing.
+				s.log().Error("sweep failed for a record", "locator", rec.RecordLocator, "err", err)
+				continue
+			}
+			placed += n
 		}
-		n, err := s.sweepRecord(ctx, rec, now)
-		if err != nil {
-			// One bad record must not stop the pass; the rest still need doing.
-			s.log().Error("sweep failed for a record", "locator", rec.RecordLocator, "err", err)
-			continue
-		}
-		placed += n
+	}
+	if len(stale) >= limit || len(due) >= limit {
+		// The overflow is the least urgent work and the next pass will take it,
+		// but saying nothing would let a permanent backlog look like a quiet
+		// system.
+		s.log().Warn("a sweep hit its limit and left work for the next pass",
+			"limit", limit, "stale", len(stale), "due", len(due))
 	}
 	return placed, nil
 }

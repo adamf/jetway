@@ -323,3 +323,26 @@ func (p *PNR) TicketFor(paxRef int) (Ticket, bool) {
 	}
 	return Ticket{}, false
 }
+
+// NextDeadline is the soonest ticketing time limit this record still owes, or
+// nil if it owes none.
+//
+// A ticketed record owes nothing: the deadline was met. Persisting this lets a
+// sweeper ask the store which records are due rather than reading records and
+// deciding afterwards, which is the difference between an indexed query and a
+// full pass.
+func (p *PNR) NextDeadline() *time.Time {
+	if p.Status == StatusCancelled || p.Ticketed() {
+		return nil
+	}
+	var soonest *time.Time
+	for _, t := range p.Ticketing {
+		if t.Deadline == nil {
+			continue
+		}
+		if soonest == nil || t.Deadline.Before(*soonest) {
+			soonest = t.Deadline
+		}
+	}
+	return soonest
+}
