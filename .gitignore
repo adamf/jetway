@@ -11,6 +11,9 @@
 .env
 .env.local
 
+# personal drafts, not part of the project
+/drafts/
+
 # editor and OS noise
 .DS_Store
 *.swp
