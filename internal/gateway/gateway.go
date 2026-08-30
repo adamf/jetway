@@ -146,8 +146,10 @@ type Gateway struct {
 	// queues, which is right for a simulated carrier and wrong for a GDS.
 	Queues *queue.Manager
 
-	// ScheduleScanLimit bounds the record scan a schedule message triggers.
-	// Zero uses defaultScheduleScanLimit.
+	// ScheduleScanLimit caps how many affected bookings one schedule message
+	// may queue. It is a blast-radius limit, not a search boundary: the
+	// lookup behind it searches every record regardless. Zero uses
+	// defaultScheduleScanLimit.
 	ScheduleScanLimit int
 
 	// seq tracks the last channel sequence number seen per link, so a gap in a
@@ -1119,9 +1121,12 @@ func (g *Gateway) applyCONTRL(ctx context.Context, peer *Peer, msg *store.Messag
 // need telling", which is the only reason a distribution system wants the
 // message at all.
 //
-// Matching is a scan over held records. That is honest at these volumes and
-// wrong at scale, where the flight key wants an index; ScheduleScanLimit bounds
-// it in the meantime.
+// Matching asks the store for the holdings on the flight, which is an indexed
+// lookup rather than a walk over recently touched records. It has to be. A
+// schedule change lands months before departure, so the bookings it affects are
+// precisely the ones nobody has touched lately -- a scan bounded by "most
+// recently updated" would quietly tell the fewest passengers when the flight
+// moved furthest in advance.
 func (g *Gateway) applySchedule(ctx context.Context, peer *Peer, msg *store.Message, dec *decoded, res *Result) error {
 	sm := dec.Schedule
 	msg.Status = store.StatusApplied
@@ -1138,20 +1143,30 @@ func (g *Gateway) applySchedule(ctx context.Context, peer *Peer, msg *store.Mess
 	if limit <= 0 {
 		limit = defaultScheduleScanLimit
 	}
-	recs, err := g.Store.ListPNRs(ctx, limit)
-	if err != nil {
-		return fmt.Errorf("gateway: scan records for a schedule change: %w", err)
-	}
 
 	want := sm.Flight.Key()
+	// A single stated date narrows the lookup; a period covers a range this
+	// package does not resolve to dates, so every date of the flight is asked
+	// for and flightMatches applies the period semantics to what comes back.
+	wireDate := ""
+	if sm.Period.Single() {
+		wireDate = sm.Period.From
+	}
+	recs, err := g.Store.FindPNRsByFlight(ctx, want, wireDate, limit)
+	if err != nil {
+		return fmt.Errorf("gateway: find the holdings on a flight: %w", err)
+	}
+	if len(recs) >= limit {
+		// Silence here would read as "these are all the passengers".
+		g.Log.Warn("a schedule change matched more bookings than it may queue",
+			"flight", want, "limit", limit)
+	}
+
 	placed := 0
 	for _, rec := range recs {
-		if rec.Status == pnr.StatusCancelled {
-			continue
-		}
 		for i := range rec.Segments {
 			seg := &rec.Segments[i]
-			if seg.Type != pnr.SegmentAir {
+			if !store.SegmentOnFlight(seg, want, wireDate) {
 				continue
 			}
 			if !flightMatches(seg, want, sm) {
@@ -1182,7 +1197,10 @@ func (g *Gateway) applySchedule(ctx context.Context, peer *Peer, msg *store.Mess
 	return nil
 }
 
-// defaultScheduleScanLimit bounds the record scan a schedule change triggers.
+// defaultScheduleScanLimit caps the bookings one schedule change may queue.
+// A widebody holds fewer than 1000 passengers, so this admits every holding on
+// a real flight while still bounding the damage from a malformed message that
+// matches far more than it should.
 const defaultScheduleScanLimit = 1000
 
 // flightMatches reports whether a held segment is on the flight a schedule

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -249,6 +250,24 @@ func insertEvents(ctx context.Context, tx pgx.Tx, pnrID string, startSeq int64, 
 	return nil
 }
 
+// scanPNRRow decodes one (state, version) row into a record.
+func scanPNRRow(row pgx.Row) (*pnr.PNR, error) {
+	var state []byte
+	var version int64
+	if err := row.Scan(&state, &version); err != nil {
+		return nil, err
+	}
+	var p pnr.PNR
+	if err := json.Unmarshal(state, &p); err != nil {
+		return nil, fmt.Errorf("store: decode pnr state: %w", err)
+	}
+	// The column is authoritative for the version: the projection is written
+	// in the same transaction but the column is what the concurrency check
+	// reads.
+	p.Version = version
+	return &p, nil
+}
+
 func (s *Postgres) getPNR(ctx context.Context, where string, arg any) (*pnr.PNR, error) {
 	var state []byte
 	var version int64
@@ -481,4 +500,167 @@ func (s *Postgres) QueueCounts(ctx context.Context) (map[string]int, error) {
 		out[name] = n
 	}
 	return out, rows.Err()
+}
+
+// findOnePNR runs a containment query and returns the first match.
+//
+// Containment is what the pnr_state_idx GIN index supports (it is built with
+// jsonb_path_ops), so these are index lookups rather than the table scans they
+// replace.
+func (s *Postgres) findOnePNR(ctx context.Context, contains string) (*pnr.PNR, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT state, version FROM pnr WHERE state @> $1::jsonb ORDER BY updated_at DESC LIMIT 1`,
+		contains)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		p, err := scanPNRRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		return p, nil
+	}
+	return nil, rows.Err()
+}
+
+func (s *Postgres) FindPNRByDocument(ctx context.Context, compactNumber string) (*pnr.PNR, error) {
+	// A document number is three digits of airline code and ten of serial, and
+	// it is stored split, so the query has to split it too.
+	if len(compactNumber) != 13 {
+		return nil, nil
+	}
+	q, err := json.Marshal(map[string]any{
+		"tickets": []any{map[string]any{
+			"number": map[string]any{
+				"airline_code": compactNumber[:3],
+				"serial":       compactNumber[3:],
+			},
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.findOnePNR(ctx, string(q))
+}
+
+func (s *Postgres) FindPNRByExternalLocator(ctx context.Context, owner, value string) (*pnr.PNR, error) {
+	if value == "" {
+		return nil, nil
+	}
+	loc := map[string]any{"value": value}
+	if owner != "" {
+		loc["owner"] = owner
+	}
+	q, err := json.Marshal(map[string]any{"locators": []any{loc}})
+	if err != nil {
+		return nil, err
+	}
+	return s.findOnePNR(ctx, string(q))
+}
+
+func (s *Postgres) FindPNRsByFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error) {
+	carrier, number := splitFlightKey(flightKey)
+	if carrier == "" || number == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 10000
+	}
+
+	// Containment matches exactly, and carriers write the same flight with and
+	// without leading zeros, so every spelling has to be asked for.
+	var where strings.Builder
+	args := make([]any, 0, 8)
+	for i, n := range flightNumberVariants(number) {
+		seg := map[string]any{"carrier": carrier, "flight_num": n}
+		if wireDate != "" {
+			seg["wire_date"] = strings.ToUpper(wireDate)
+		}
+		q, err := json.Marshal(map[string]any{"segments": []any{seg}})
+		if err != nil {
+			return nil, err
+		}
+		if i > 0 {
+			where.WriteString(" OR ")
+		}
+		fmt.Fprintf(&where, "state @> $%d::jsonb", i+1)
+		args = append(args, string(q))
+	}
+	np := len(args)
+
+	// Containment is the index's answer, not the question's: it will match a
+	// segment this node has already cancelled, and it ignores segment type. So
+	// it narrows, and SegmentOnFlight decides. That means the rows returned are
+	// a superset, and stopping at the first page could report fewer bookings on
+	// a flight than are really on it -- which is the class of quiet wrong
+	// answer these lookups exist to remove. Page until the rows run out.
+	sql := fmt.Sprintf(
+		`SELECT state, version FROM pnr WHERE (%s) AND status <> $%d
+		 ORDER BY updated_at DESC, id DESC LIMIT $%d OFFSET $%d`,
+		where.String(), np+1, np+2, np+3)
+
+	const page = 500
+	var out []*pnr.PNR
+	for offset := 0; len(out) < limit; offset += page {
+		rows, err := s.pool.Query(ctx, sql, append(append([]any{}, args...),
+			string(pnr.StatusCancelled), page, offset)...)
+		if err != nil {
+			return nil, err
+		}
+		n := 0
+		for rows.Next() {
+			n++
+			p, err := scanPNRRow(rows)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if pnrOnFlight(p, flightKey, wireDate) {
+				out = append(out, p)
+				if len(out) >= limit {
+					break
+				}
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		if n < page {
+			break
+		}
+	}
+	return out, nil
+}
+
+// splitFlightKey separates a flight key such as "BA117" into its parts.
+func splitFlightKey(key string) (carrier, number string) {
+	for i, r := range key {
+		if r >= '0' && r <= '9' {
+			return key[:i], key[i:]
+		}
+	}
+	return "", ""
+}
+
+// flightNumberVariants returns the spellings of a flight number seen on the
+// wire: bare, and zero-padded to three and four digits.
+func flightNumberVariants(number string) []string {
+	bare := strings.TrimLeft(number, "0")
+	if bare == "" {
+		bare = "0"
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, n := range []string{bare, fmt.Sprintf("%03s", bare), fmt.Sprintf("%04s", bare)} {
+		n = strings.ReplaceAll(n, " ", "0")
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
 }

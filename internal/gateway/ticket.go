@@ -412,22 +412,30 @@ func (g *Gateway) applyTicketControl(ctx context.Context, peer *Peer, msg *store
 
 // findTicket locates the record holding a document, and the index of the
 // ticket within it.
+// findTicket locates the record holding a document, and the document's index
+// within it.
+//
+// This asks the store rather than walking a page of recent records. The
+// difference is not performance: a document issued last month is still valid,
+// and a scan bounded by "most recently touched" answered "no record holds this
+// document" about documents this node had itself issued -- in a message sent to
+// the carrier that asked.
 func (g *Gateway) findTicket(ctx context.Context, number pnr.TicketNumber) (*pnr.PNR, int, error) {
-	limit := g.ScheduleScanLimit
-	if limit <= 0 {
-		limit = defaultScheduleScanLimit
-	}
-	recs, err := g.Store.ListPNRs(ctx, limit)
+	rec, err := g.Store.FindPNRByDocument(ctx, number.Compact())
 	if err != nil {
-		return nil, 0, fmt.Errorf("gateway: scan records for a document: %w", err)
+		return nil, 0, fmt.Errorf("gateway: look up a document: %w", err)
 	}
-	for _, rec := range recs {
-		for i, t := range rec.Tickets {
-			if t.Number.Compact() == number.Compact() {
-				return rec, i, nil
-			}
+	if rec == nil {
+		return nil, 0, nil
+	}
+	for i, t := range rec.Tickets {
+		if t.Number.Compact() == number.Compact() {
+			return rec, i, nil
 		}
 	}
+	// The store matched the record but the document is not in it, which means
+	// the projection and the index disagree. Report absence rather than a
+	// coupon index that does not exist.
 	return nil, 0, nil
 }
 
@@ -583,23 +591,16 @@ func (g *Gateway) acceptTicketAdvice(ctx context.Context, peer *Peer, msg *store
 }
 
 // findByExternalLocator locates a record by another system's locator for it.
+// findByExternalLocator locates the record a partner knows by its own locator.
+//
+// Also a whole-store lookup, and for the same reason: a partner referring to a
+// booking made months ago is the ordinary case, not the exotic one.
 func (g *Gateway) findByExternalLocator(ctx context.Context, owner, value string) (*pnr.PNR, error) {
-	limit := g.ScheduleScanLimit
-	if limit <= 0 {
-		limit = defaultScheduleScanLimit
-	}
-	recs, err := g.Store.ListPNRs(ctx, limit)
+	rec, err := g.Store.FindPNRByExternalLocator(ctx, owner, value)
 	if err != nil {
-		return nil, fmt.Errorf("gateway: scan records for a locator: %w", err)
+		return nil, fmt.Errorf("gateway: look up a partner locator: %w", err)
 	}
-	for _, rec := range recs {
-		for _, l := range rec.Locators {
-			if l.Value == value && (owner == "" || l.Owner == owner) {
-				return rec, nil
-			}
-		}
-	}
-	return nil, nil
+	return rec, nil
 }
 
 // firstSegmentFor returns the reference of the first segment a peer operates.

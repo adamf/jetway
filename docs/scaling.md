@@ -67,21 +67,60 @@ production.
 
 **But the worse problem is that these are correctness bugs, not performance
 bugs.** `ListPNRs` is `ORDER BY updated_at DESC LIMIT n`. The scans therefore
-examine only the most recently touched records, so a ticket control message for
-a booking made last month does not find it and is refused with "no record holds
-this document". The partner is told something false. That failure gets *more*
-likely as the store grows, and it is silent.
+examined only the most recently touched records, so a ticket control message for
+a booking made last month did not find it and was refused with "no record holds
+this document". The partner was told something false. That failure got *more*
+likely as the store grew, and it was silent.
 
-Fixing it is not hard and is the first thing to do:
+### Fixed
 
-- Index and query by locator and document number instead of scanning. The
-  `pnr_state_idx` GIN index on the JSONB state already exists; these lookups
-  want either JSON containment queries against it or, better, real columns
-  extracted for document number and carrier locator with btree indexes.
+The three call sites now go through `store.Lookup`, whose contract is that an
+implementation searches every record or returns an error — it may never quietly
+answer from a prefix. Postgres serves all three from the existing
+`pnr_state_idx` GIN index by JSON containment, measured on 20,000 records:
+
+| Lookup | Plan | Time |
+| --- | --- | --- |
+| by document number | Bitmap Index Scan on `pnr_state_idx` | 0.16 ms |
+| by partner locator | Bitmap Index Scan on `pnr_state_idx` | 0.23 ms |
+| by flight and date | BitmapOr over `pnr_state_idx` | 0.55 ms, 23 rows |
+
+Three things were worth learning while doing it:
+
+- **Containment over-matches, so it narrows rather than decides.** It will match
+  a segment this node has already cancelled, and it ignores segment type. Both
+  backends therefore filter what comes back through one shared
+  `store.SegmentOnFlight`, and the Postgres lookup pages until the rows run out
+  rather than trusting the first page — stopping early would report fewer
+  passengers on a flight than are really on it, which is the same class of quiet
+  wrong answer being removed.
+- **Carriers write the same flight both zero-padded and bare**, and containment
+  is exact, so each spelling has to be asked for separately. The planner ORs
+  them into one bitmap, so this costs an extra index probe, not an extra scan.
+- **`ScheduleScanLimit` changed meaning.** It used to bound the search; it now
+  caps how many bookings one schedule message may queue, and the gateway logs a
+  warning when a message hits it. Silence there would read as "these are all the
+  passengers".
+
+The schedule path was the worst of the three, and the regression test says why:
+under the old scan, a flight cancellation for a booking made six months earlier
+queued **zero** tasks. No error, no log line, message marked applied. The
+further ahead the change, the more passengers it missed — exactly backwards,
+since a schedule change months out is the normal case.
+
+Both regression tests were confirmed to fail against the old implementation
+before being kept. This repo has twice shipped tests that encoded the same guess
+as the code, so a new test does not count until it has been watched to fail.
+
+### Still open
+
 - Push the sweeper's due-date predicates into SQL so a pass costs a range scan
   rather than a full read.
 - Compute the Insights aggregate from counters rather than from the store. It
   is honest at demo volume and wrong anywhere else, and the file says so.
+- Extract document number and carrier locator into real columns with btree
+  indexes. Containment against the GIN index is fast enough that this is now an
+  optimisation rather than a fix.
 
 ## PostgreSQL tuning
 

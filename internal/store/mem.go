@@ -438,3 +438,59 @@ func (s *Mem) QueueCounts(ctx context.Context) (map[string]int, error) {
 	}
 	return out, nil
 }
+
+func (s *Mem) FindPNRByDocument(ctx context.Context, compactNumber string) (*pnr.PNR, error) {
+	if compactNumber == "" {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	// Every record, not a recent prefix: a document issued months ago is still
+	// a document, and answering "not found" for it would be a lie.
+	for _, p := range s.pnrs {
+		for _, t := range p.Tickets {
+			if t.Number.Compact() == compactNumber {
+				return clonePNR(p), nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (s *Mem) FindPNRByExternalLocator(ctx context.Context, owner, value string) (*pnr.PNR, error) {
+	if value == "" {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, p := range s.pnrs {
+		for _, l := range p.Locators {
+			if l.Value == value && (owner == "" || l.Owner == owner) {
+				return clonePNR(p), nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (s *Mem) FindPNRsByFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error) {
+	if flightKey == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 10000
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*pnr.PNR
+	for _, p := range s.pnrs {
+		if !pnrOnFlight(p, flightKey, wireDate) {
+			continue
+		}
+		out = append(out, clonePNR(p))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}

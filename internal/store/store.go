@@ -209,6 +209,9 @@ type Store interface {
 	// It is the uniqueness source behind record locator allocation.
 	NextLocatorCounter(ctx context.Context) (uint64, error)
 
+	// Lookup finds records by document, external locator or flight.
+	Lookup
+
 	// QueueStore holds the work queues records are placed on.
 	QueueStore
 

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -163,4 +164,43 @@ func TestCancelledRecordsAreLeftAlone(t *testing.T) {
 	if len(items) != 0 {
 		t.Errorf("a cancelled record owes nobody a schedule notification: %+v", items)
 	}
+}
+
+// The failure this guards against had no error and no log line: a flight moved,
+// the schedule message was accepted and marked applied, and the passengers
+// booked long enough ago to have fallen off the recent-records list were simply
+// never told. The further ahead the change, the more passengers it missed --
+// which is exactly backwards, because a schedule change months out is the
+// normal case.
+func TestScheduleChangeReachesLongStandingBookings(t *testing.T) {
+	gw := scheduleNode(t)
+	ctx := context.Background()
+
+	old := heldRecord(t, gw, "OLDBKG", "BA", "0117", "16DEC")
+	old.UpdatedAt = time.Now().UTC().AddDate(0, -6, 0)
+	if err := gw.Store.UpdatePNR(ctx, old, old.Version, nil); err != nil {
+		t.Fatalf("age the record: %v", err)
+	}
+
+	// Bury it under more recent traffic than any scan limit would cover.
+	limit := defaultScheduleScanLimit
+	for i := 0; i < limit+50; i++ {
+		heldRecord(t, gw, fmt.Sprintf("BG%04d", i), "AA", "0500", "16DEC")
+	}
+
+	if _, err := gw.Ingest(ctx, "BA", scheduleMsg("ASM\nUTC\nCNL\nBA0117/16DEC\nLHR JFK")); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	items, err := gw.Store.ListQueue(ctx, store.QueueFilter{Queue: store.QueueScheduleChange})
+	if err != nil {
+		t.Fatalf("ListQueue: %v", err)
+	}
+	for _, it := range items {
+		if it.Locator == "OLDBKG" {
+			return
+		}
+	}
+	t.Fatalf("a booking made six months ago was not told its flight was cancelled; "+
+		"%d schedule tasks were queued, none of them for it", len(items))
 }
