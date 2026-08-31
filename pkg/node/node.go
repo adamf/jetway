@@ -275,12 +275,9 @@ func (n *Node) LivePeers() []string {
 	for _, m := range n.matip {
 		add(m.Peers())
 	}
-	for _, p := range n.Router.Peers() {
-		if !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
-	}
+	// The router's peer list is configuration, not liveness: senders are
+	// registered at boot and never unregistered, so including them here made
+	// every peer that ever connected read as live forever.
 	return out
 }
 
