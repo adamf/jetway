@@ -703,13 +703,15 @@ func (s *Postgres) FindPNRsByFlight(ctx context.Context, flightKey, wireDate str
 }
 
 // splitFlightKey separates a flight key such as "BA117" into its parts.
+//
+// The designator is the first two characters, not everything before the
+// first digit: U2, 4U and 2B are real designators, and scanning for a digit
+// splits them in half. Same defect, same fix, as NormaliseFlightKey.
 func splitFlightKey(key string) (carrier, number string) {
-	for i, r := range key {
-		if r >= '0' && r <= '9' {
-			return key[:i], key[i:]
-		}
+	if len(key) < 3 {
+		return "", ""
 	}
-	return "", ""
+	return key[:2], key[2:]
 }
 
 // flightNumberVariants returns the spellings of a flight number seen on the

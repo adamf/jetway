@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -321,6 +322,43 @@ func TestDividePNRIsAllOrNothing(t *testing.T) {
 		if len(gotParent.Passengers) != 1 || len(gotChild.Passengers) != 1 {
 			t.Errorf("passengers did not divide one and one: parent %d, child %d",
 				len(gotParent.Passengers), len(gotChild.Passengers))
+		}
+	})
+}
+
+// A third of IATA designators are alphanumeric -- U2, 4U, 2B -- and the
+// flight-key split used to scan for the first digit, cutting easyJet's own
+// designator in half: no U2 booking could ever be matched to a schedule
+// change. The world simulator found it; every hand-written test here had
+// used BA.
+func TestFlightLookupAlphanumericDesignators(t *testing.T) {
+	eachBackend(t, func(t *testing.T, s Store) {
+		ctx := context.Background()
+		for i, tc := range []struct{ carrier, num string }{
+			{"U2", "0001"}, {"4U", "0214"}, {"2B", "0410"},
+		} {
+			p := samplePNR(fmt.Sprintf("ALNU%02d", i))
+			p.Segments[0].Carrier = tc.carrier
+			p.Segments[0].FlightNum = tc.num
+			if err := s.CreatePNR(ctx, p, nil); err != nil {
+				t.Fatalf("CreatePNR: %v", err)
+			}
+			// The key as a schedule message builds it: designator + bare number.
+			key := tc.carrier + strings.TrimLeft(tc.num, "0")
+			got, err := s.FindPNRsByFlight(ctx, key, "15JUN", 0)
+			if err != nil {
+				t.Fatalf("FindPNRsByFlight(%s): %v", key, err)
+			}
+			found := false
+			for _, r := range got {
+				if r.RecordLocator == p.RecordLocator {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("a %s booking cannot be found by flight key %q; "+
+					"the designator was split at its digit", tc.carrier, key)
+			}
 		}
 	})
 }

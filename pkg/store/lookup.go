@@ -59,18 +59,22 @@ type Lookup interface {
 //
 // Carriers write the same flight both zero-padded and bare, sometimes in the
 // same conversation, so a key is only useful if both spellings collapse onto
-// it.
+// it. The designator is taken as the first two characters, never by scanning
+// for the first digit: IATA designators are two characters and a third of
+// them are alphanumeric -- U2, 4U, 2B -- so "the number starts at the first
+// digit" split easyJet's own designator in half and no U2 flight could ever
+// be matched to a schedule change. Found by the world simulator, whose
+// carriers come from the real registry; every hand-written test here had
+// used BA.
 func NormaliseFlightKey(key string) string {
-	for i, r := range key {
-		if r >= '0' && r <= '9' {
-			n := strings.TrimLeft(key[i:], "0")
-			if n == "" {
-				n = "0"
-			}
-			return key[:i] + n
-		}
+	if len(key) <= 2 {
+		return key
 	}
-	return key
+	n := strings.TrimLeft(key[2:], "0")
+	if n == "" {
+		n = "0"
+	}
+	return key[:2] + n
 }
 
 // SegmentOnFlight reports whether a segment is a live holding on a flight.
