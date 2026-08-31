@@ -2,9 +2,11 @@ package matip
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"testing"
 	"testing/iotest"
@@ -387,5 +389,94 @@ func TestCollisionTieBreak(t *testing.T) {
 	}
 	if IgnoreOnCollision(lo, lo) {
 		t.Error("equal addresses should not yield")
+	}
+}
+
+// The client keeps a session up like the plain transport client keeps a
+// link: messages flow both ways, and cancelling its context takes an idle
+// session down promptly rather than leaving it blocked in read.
+func TestClientSessionRoundTripAndIdleCancel(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	serverGot := make(chan []byte, 4)
+	serverDown := make(chan struct{})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		sess, err := Accept(conn, Config{}, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if err := sess.Send([]byte("ZCZC FROM SERVER NNNN")); err != nil {
+			t.Error(err)
+		}
+		for {
+			raw, err := sess.Receive()
+			if err != nil {
+				close(serverDown)
+				return
+			}
+			serverGot <- raw
+		}
+	}()
+
+	got := make(chan []byte, 4)
+	ups := make(chan struct{}, 2)
+	linkCtx, sever := context.WithCancel(ctx)
+	defer sever()
+	cl := &Client{
+		Addr: ln.Addr().String(),
+		Log:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		OnMessage: func(ctx context.Context, raw []byte) error {
+			got <- raw
+			return nil
+		},
+		OnUp: func() { ups <- struct{}{} },
+	}
+	runDone := make(chan struct{})
+	go func() { defer close(runDone); cl.Run(linkCtx) }() //nolint:errcheck
+
+	<-ups
+	if err := cl.Send(ctx, "", []byte("ZCZC FROM CLIENT NNNN")); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	select {
+	case raw := <-serverGot:
+		if string(raw) != "ZCZC FROM CLIENT NNNN" {
+			t.Errorf("server received %q", raw)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the server never received the client's message")
+	}
+	select {
+	case raw := <-got:
+		if string(raw) != "ZCZC FROM SERVER NNNN" {
+			t.Errorf("client received %q", raw)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the client never received the server's message")
+	}
+
+	// Idle now. Cut it.
+	sever()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after cancellation on an idle session")
+	}
+	select {
+	case <-serverDown:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the server side never saw the session die")
 	}
 }
