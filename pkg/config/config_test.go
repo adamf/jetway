@@ -207,3 +207,19 @@ func TestFileConfigReplacesDefaultIngress(t *testing.T) {
 		t.Errorf("a declared ingress list must replace the default, not append: %+v", c.Ingress)
 	}
 }
+
+// by_hello is a complete identification on a tcp listener, refused anywhere
+// else -- https has no frame to say hello in, and a MATIP session open is
+// already its own identification exchange.
+func TestByHelloIdentifiesATCPListener(t *testing.T) {
+	in := Ingress{Name: "link-net", Type: "tcp", Addr: "127.0.0.1:0",
+		Framing:  Framing{Kind: "length_prefix", HeaderBytes: 4},
+		Identify: Identify{ByHello: true}}
+	if err := in.validate(); err != nil {
+		t.Errorf("a by_hello tcp listener failed validation: %v", err)
+	}
+	in.Type = "https"
+	if err := in.validate(); err == nil {
+		t.Error("by_hello on an https listener validated; there is no frame to say hello in")
+	}
+}

@@ -439,7 +439,7 @@ func (id Identify) peers() []string {
 
 // Resolvable reports whether this listener can identify anybody at all.
 func (id Identify) Resolvable() bool {
-	return id.Peer != "" || len(id.ByCertCN) > 0 || len(id.ByCIDR) > 0
+	return id.Peer != "" || len(id.ByCertCN) > 0 || len(id.ByCIDR) > 0 || id.ByHello
 }
 
 func (t *TLS) validate(where string) error {
@@ -483,7 +483,7 @@ func (in *Ingress) validate() error {
 		}
 		if !in.Identify.Resolvable() {
 			return fmt.Errorf("config: ingress %q has no way to identify a peer; "+
-				"set identify.peer, identify.by_cert_cn or identify.by_cidr", in.Name)
+				"set identify.peer, identify.by_cert_cn, identify.by_cidr or identify.by_hello", in.Name)
 		}
 		if len(in.Identify.ByCertCN) > 0 && !in.TLS.Mutual() {
 			return fmt.Errorf("config: ingress %q identifies peers by certificate but has no "+
