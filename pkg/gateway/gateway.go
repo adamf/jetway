@@ -523,12 +523,20 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 		msg.Status = store.StatusApplied
 		res.Status = store.StatusApplied
 		g.trace(msg.ID, "movement", dec.Kind)
-		g.Bus.Publish(EvMovement, map[string]any{
+		ev := map[string]any{
 			"node": g.Identity.Name, "message_id": msg.ID,
 			"kind": string(dec.Movement.Kind), "flight": dec.Movement.Flight,
 			"day": dec.Movement.Day, "registration": dec.Movement.Registration,
 			"station": dec.Movement.Station,
-		})
+		}
+		// A diversion's whole content is where the aircraft is going instead,
+		// so the event carries it; an observer that only heard "DIV" would
+		// know something happened and not what.
+		if ea := dec.Movement.EA; ea != nil {
+			ev["ea_airport"] = ea.Airport
+			ev["ea_time"] = ea.Time
+		}
+		g.Bus.Publish(EvMovement, ev)
 		return nil
 	}
 	return g.apply(ctx, peer, msg, dec, res, opts)
