@@ -83,7 +83,7 @@ both passed their own tests. Guard against it by:
   round trip would have missed.
 
 **The scenario suite is the other half.** `go test ./internal/scenario` drives
-end-to-end exchanges through the real assembly from `internal/node` -- the same
+end-to-end exchanges through the real assembly from `pkg/node` -- the same
 one `jetwayd` builds -- with the demo carriers on real TCP. `cmd/jetwayload`
 runs the identical scenarios concurrently and reports latency. Add a scenario
 for anything that crosses a link; unit tests do not catch what only shows up
@@ -116,6 +116,18 @@ go run ./cmd/jetwayctl decode captured.tty
 
 The demo carriers dial loopback **inside the process**, which is why a container
 host runs this unchanged and a function platform cannot.
+
+## Layering
+
+Everything importable lives under `pkg/`, in two layers. The codec packages
+(`typeb`, `edifact`, `airimp`, `padis`, `avs`, `ssim`, `ndc`, `matip`, `pnr`,
+`rescode`, `avail`) must not import the application packages (`gateway`,
+`store`, `node`, `queue`, `ingress`, `egress`, `transport`, `config`, `demo`,
+`api`, `metrics`, `telemetry`, `spool`, `ulid`). The application packages were
+promoted out of `internal/` on 2026-08-31 so external consumers -- the world
+simulator first among them -- can embed a node; treat their exported surface as
+API now, not as private plumbing. Only `internal/scenario` (the test harness)
+stays internal.
 
 ## Conventions
 

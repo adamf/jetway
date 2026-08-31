@@ -258,7 +258,7 @@ pg_ctl -D /tmp/jwpg -o "-p 55432 -k /tmp -c listen_addresses=127.0.0.1" -l /tmp/
 createdb -h 127.0.0.1 -p 55432 -U postgres jetway_bench
 
 export JETWAY_TEST_DSN="postgres://postgres@127.0.0.1:55432/jetway_bench?sslmode=disable"
-go test ./internal/gateway/ -run XXX -bench 'Ingest|Parse|FindTicket' -benchtime 2s
-go test ./internal/store/   -run XXX -bench Postgres -benchtime 2s
-go test ./internal/store/   -run XXX -bench AppendParallel -cpu 1,4,12,32 -benchtime 2s
+go test ./pkg/gateway/ -run XXX -bench 'Ingest|Parse|FindTicket' -benchtime 2s
+go test ./pkg/store/   -run XXX -bench Postgres -benchtime 2s
+go test ./pkg/store/   -run XXX -bench AppendParallel -cpu 1,4,12,32 -benchtime 2s
 ```

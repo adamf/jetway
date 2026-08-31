@@ -372,25 +372,30 @@ where this is wrong, that is the single most useful contribution available.
 | `pkg/avail` | What is sellable: statuses, seat counts, provenance and age |
 | `pkg/avs` | Availability Status messages, as a per-link profile |
 | `pkg/pnr` | The canonical passenger name record, date resolution and record locator allocation |
-| `internal/store` | Append-only message log and event-sourced PNR store; in-memory and Postgres |
-| `internal/gateway` | The pipeline, routing, response generation and seat inventory |
-| `internal/queue` | Work queues: placement, the time-based sweeper, and the external-publisher seam |
+| `pkg/store` | Append-only message log and event-sourced PNR store; in-memory and Postgres |
+| `pkg/gateway` | The pipeline, routing, response generation and seat inventory |
+| `pkg/queue` | Work queues: placement, the time-based sweeper, and the external-publisher seam |
 | `pkg/ssim` | SSM and ASM schedule messages, as an extensible profile |
 | `pkg/ndc` | NDC order messages over HTTP: create, retrieve, cancel, and the order view |
 | `pkg/matip` | MATIP (RFC 2351): packet format and the Type B session handshake |
-| `internal/ingress` | MATIP, HTTPS, TCP and file-drop listeners, and peer identity |
-| `internal/egress` | Outbound delivery with backoff and restart recovery |
-| `internal/spool` | Durable write-ahead buffer for inbound messages |
-| `internal/config` | Deployment configuration |
-| `internal/metrics` | Prometheus exposition, no client library |
-| `internal/telemetry` | OpenTelemetry tracing, with a hand-rolled OTLP/JSON exporter |
-| `internal/transport` | Framing and link sessions |
-| `internal/node` | The assembly: one wiring, built by both `jetwayd` and the scenario suite |
+| `pkg/ingress` | MATIP, HTTPS, TCP and file-drop listeners, and peer identity |
+| `pkg/egress` | Outbound delivery with backoff and restart recovery |
+| `pkg/spool` | Durable write-ahead buffer for inbound messages |
+| `pkg/config` | Deployment configuration |
+| `pkg/metrics` | Prometheus exposition, no client library |
+| `pkg/telemetry` | OpenTelemetry tracing, with a hand-rolled OTLP/JSON exporter |
+| `pkg/transport` | Framing and link sessions |
+| `pkg/node` | The assembly: one wiring, built by both `jetwayd` and the scenario suite |
 | `internal/scenario` | End-to-end scenarios and the load driver that reuses them |
 
-The `pkg/...` tree is the part you would import to build something else. It has
-no dependency on the gateway, the store, or each other beyond the canonical
-model.
+The whole `pkg/...` tree is importable, in two layers. The codec packages
+(`typeb`, `edifact`, `airimp`, `padis`, `avs`, `ssim`, `ndc`, `matip`, `pnr`,
+`rescode`, `avail`) depend on nothing above them and on each other only through
+the canonical model — import one to parse a format and take nothing else. The
+application packages (`gateway`, `store`, `node`, `queue`, `ingress`, `egress`,
+`transport`, `config`, `demo`) are the running system, importable as a library:
+`pkg/node` builds the same assembly `jetwayd` runs, which is how something like
+a fleet simulator hosts many gateways in one process.
 
 ## Two details that bite in production
 
@@ -421,7 +426,7 @@ go run ./cmd/jetwayload -workers 16 -for 30s
 go run ./cmd/jetwayload -workers 32 -for 2m -dsn "$JETWAY_DSN"
 ```
 
-Both drive the **same node assembly `jetwayd` builds**, from `internal/node`,
+Both drive the **same node assembly `jetwayd` builds**, from `pkg/node`,
 with the simulated carriers dialling real TCP into real listeners on ephemeral
 ports. Nothing about the transport is stubbed, and there is no second copy of
 the wiring for tests to pass against.

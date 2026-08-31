@@ -18,9 +18,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/adamf/jetway/internal/api"
-	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/pkg/api"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/store"
 )
 
 const usage = `jetwayctl — operate and inspect a Jetway gateway

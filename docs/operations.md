@@ -152,7 +152,7 @@ The spans and the context propagation are real OpenTelemetry; only the exporter
 is written here, because OTLP permits a JSON body and every collector accepts
 it. That keeps the module tree at thirty-three rather than ninety-six — the
 protobuf exporter brings grpc, protobuf and grpc-gateway, the same stack
-`internal/metrics` declined. Carriers audit this tree.
+`pkg/metrics` declined. Carriers audit this tree.
 
 A message arriving over HTTP carries whatever trace the caller propagated, so an
 agent or an NDC client that is already tracing keeps one trace across the

@@ -21,9 +21,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/adamf/jetway/internal/gateway"
-	"github.com/adamf/jetway/internal/store"
-	"github.com/adamf/jetway/internal/transport"
+	"github.com/adamf/jetway/pkg/gateway"
+	"github.com/adamf/jetway/pkg/store"
+	"github.com/adamf/jetway/pkg/transport"
 )
 
 func main() {

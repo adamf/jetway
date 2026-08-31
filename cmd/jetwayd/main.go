@@ -16,10 +16,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/adamf/jetway/internal/config"
-	"github.com/adamf/jetway/internal/ingress"
-	"github.com/adamf/jetway/internal/node"
-	"github.com/adamf/jetway/internal/telemetry"
+	"github.com/adamf/jetway/pkg/config"
+	"github.com/adamf/jetway/pkg/ingress"
+	"github.com/adamf/jetway/pkg/node"
+	"github.com/adamf/jetway/pkg/telemetry"
 )
 
 // drainTimeout bounds how long shutdown waits for in-flight work. Long enough

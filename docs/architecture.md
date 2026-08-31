@@ -3,7 +3,7 @@
 ## The inbound pipeline
 
 Every inbound message goes through the same stages in the same order. The
-ordering is the contract, and it is enforced in `internal/gateway.Ingest`.
+ordering is the contract, and it is enforced in `pkg/gateway.Ingest`.
 
 ```
 bytes from a partner
@@ -105,13 +105,13 @@ concurrent-writers test that requires exactly one of eight writers to win.
         │              │               │
         └──────────────┴───────────────┘
                        │
-   internal/config ────┤
-   internal/ingress ───┤                          internal/metrics
-   internal/egress ────┼── internal/gateway ── internal/transport
-   internal/spool ─────┤
-   internal/api ───────┘
+   pkg/config ────┤
+   pkg/ingress ───┤                          pkg/metrics
+   pkg/egress ────┼── pkg/gateway ── pkg/transport
+   pkg/spool ─────┤
+   pkg/api ───────┘
                        │
-                       internal/store  (mem | postgres)
+                       pkg/store  (mem | postgres)
                                  │
    ┌─────────────────────────────┴──────────────────────────────┐
    │                          pkg/pnr                           │  canonical model
@@ -189,7 +189,7 @@ that loop survives restarts.
 ## Queues
 
 A record that needs human attention has to end up somewhere a human looks.
-`internal/queue` is that mechanism, and it has two producers with different
+`pkg/queue` is that mechanism, and it has two producers with different
 characters.
 
 The **gateway** places on a queue when a partner's answer changes a segment into

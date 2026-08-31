@@ -28,7 +28,7 @@ malformed traffic loses messages that a partner considers delivered.
 
 **Test the property, not the implementation.** The two suites worth imitating:
 
-- `internal/store/store_test.go` runs the same assertions against both backends.
+- `pkg/store/store_test.go` runs the same assertions against both backends.
   A test that only runs against memory does not exercise optimistic concurrency
   where it is actually implemented.
 - `pkg/edifact` fuzzes round-trip stability. Six real defects so far, each one

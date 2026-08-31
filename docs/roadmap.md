@@ -164,7 +164,7 @@ switch still does and this does not:
 
 ## Queues
 
-Queues exist (`internal/queue`, `store.QueueStore`) and the console shows them.
+Queues exist (`pkg/queue`, `store.QueueStore`) and the console shows them.
 What is missing:
 
 - **Queue numbering.** Names are Jetway's own vocabulary. A deployment that has
@@ -210,7 +210,7 @@ partner's message with something false. Fix those before anything else.
 - **Locator normalisation is strict.** Characters outside the alphabet are
   rejected rather than corrected, deliberately — see `pnr.NormaliseLocator` —
   but there is no fuzzy lookup for an agent working from a bad transcription.
-- **The demo fleet lives in the shipped binary.** `internal/demo` should be
+- **The demo fleet lives in the shipped binary.** `pkg/demo` should be
   built separately from a production `jetwayd`.
 
 ## Deliberately out of scope

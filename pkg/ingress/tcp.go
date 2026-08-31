@@ -1,0 +1,298 @@
+package ingress
+
+import (
+	"bufio"
+	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/adamf/jetway/pkg/config"
+	"github.com/adamf/jetway/pkg/metrics"
+	"github.com/adamf/jetway/pkg/transport"
+)
+
+// framer is the subset of transport.Framer this package needs.
+type framer = transport.Framer
+
+func lengthFramer(f config.Framing) (framer, error) {
+	return transport.LengthPrefix{
+		HeaderBytes:  f.HeaderBytes,
+		LittleEndian: f.LittleEndian,
+		Inclusive:    f.Inclusive,
+		Max:          f.MaxBytes,
+		Label:        fmt.Sprintf("length-prefix/%dB", f.HeaderBytes),
+	}, nil
+}
+
+func sentinelFramer(f config.Framing) (framer, error) {
+	if f.Terminator == "" {
+		return nil, errors.New("ingress: sentinel framing needs a terminator")
+	}
+	return transport.Sentinel{
+		Terminator: []byte(f.Terminator), Max: f.MaxBytes, Label: "sentinel",
+	}, nil
+}
+
+// TCP accepts framed messages on a socket, optionally over TLS.
+//
+// Unlike the demo link server, there is no application handshake. A partner
+// connects and starts sending; who they are was settled by the TLS handshake or
+// by the network they came from. That is what makes this usable with a real
+// carrier, whose front end will not speak a bespoke hello.
+type TCP struct {
+	name     string
+	addr     string
+	framer   framer
+	tls      *tls.Config
+	resolver *Resolver
+	log      *slog.Logger
+
+	// sessions holds the open connection per peer, so a reply can go back down
+	// the link the request arrived on.
+	mu       sync.RWMutex
+	sessions map[string]*session
+	ln       net.Listener
+	// inflight tracks handlers still running, so shutdown can drain.
+	inflight sync.WaitGroup
+}
+
+type session struct {
+	conn   net.Conn
+	framer framer
+	mu     sync.Mutex
+}
+
+func (s *session) send(raw []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.conn.SetWriteDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		return err
+	}
+	return s.framer.WriteFrame(s.conn, raw)
+}
+
+// NewTCP builds a TCP ingress.
+func NewTCP(c config.Ingress, log *slog.Logger) (*TCP, error) {
+	f, err := FramerFor(c.Framing)
+	if err != nil {
+		return nil, err
+	}
+	tc, err := TLSConfig(c.TLS)
+	if err != nil {
+		return nil, err
+	}
+	r, err := NewResolver(c.Identify)
+	if err != nil {
+		return nil, err
+	}
+	return &TCP{
+		name: c.Name, addr: c.Addr, framer: f, tls: tc, resolver: r,
+		log: log.With("ingress", c.Name), sessions: map[string]*session{},
+	}, nil
+}
+
+func (t *TCP) Name() string { return t.name }
+
+func (t *TCP) Addr() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.ln != nil {
+		return t.ln.Addr().String()
+	}
+	return t.addr
+}
+
+// Listen binds the socket. Separated from Start so that a failure to bind is
+// reported at startup rather than in a goroutine nobody is watching.
+func (t *TCP) Listen() error {
+	ln, err := net.Listen("tcp", t.addr)
+	if err != nil {
+		return fmt.Errorf("ingress %s: listen: %w", t.name, err)
+	}
+	if t.tls != nil {
+		ln = tls.NewListener(ln, t.tls)
+	}
+	t.mu.Lock()
+	t.ln = ln
+	t.mu.Unlock()
+	return nil
+}
+
+func (t *TCP) Start(ctx context.Context, h Handler) error {
+	t.mu.RLock()
+	ln := t.ln
+	t.mu.RUnlock()
+	if ln == nil {
+		if err := t.Listen(); err != nil {
+			return err
+		}
+		t.mu.RLock()
+		ln = t.ln
+		t.mu.RUnlock()
+	}
+	go func() { <-ctx.Done(); ln.Close() }()
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				continue
+			}
+			return err
+		}
+		go t.serve(ctx, conn, h)
+	}
+}
+
+func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
+	defer conn.Close()
+
+	// Complete the TLS handshake before resolving identity: the peer
+	// certificate is not available until it has run.
+	var state *tls.ConnectionState
+	if tc, ok := conn.(*tls.Conn); ok {
+		if err := tc.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
+			return
+		}
+		if err := tc.HandshakeContext(ctx); err != nil {
+			t.log.Warn("tls handshake failed", "remote", conn.RemoteAddr().String(), "err", err)
+			metrics.Counter("jetway_ingress_rejected_total", "connections refused before any message",
+				metrics.Labels{"ingress": t.name, "reason": "tls_handshake"})
+			return
+		}
+		s := tc.ConnectionState()
+		state = &s
+		if err := tc.SetDeadline(time.Time{}); err != nil {
+			return
+		}
+	}
+
+	peer, remote, err := t.resolver.Resolve(state, conn.RemoteAddr())
+	if err != nil {
+		t.log.Warn("refusing unidentified connection",
+			"remote", conn.RemoteAddr().String(), "err", err)
+		metrics.Counter("jetway_ingress_rejected_total", "connections refused before any message",
+			metrics.Labels{"ingress": t.name, "reason": "unidentified"})
+		return
+	}
+
+	sess := &session{conn: conn, framer: t.framer}
+	t.mu.Lock()
+	if prev := t.sessions[peer]; prev != nil {
+		prev.conn.Close()
+	}
+	t.sessions[peer] = sess
+	t.mu.Unlock()
+
+	t.log.Info("link up", "peer", peer, "remote", remote, "framing", t.framer.Name())
+	metrics.Gauge("jetway_ingress_links", "open links per ingress",
+		metrics.Labels{"ingress": t.name}, float64(t.linkCount()))
+
+	defer func() {
+		t.mu.Lock()
+		if t.sessions[peer] == sess {
+			delete(t.sessions, peer)
+		}
+		t.mu.Unlock()
+		t.log.Info("link down", "peer", peer)
+		metrics.Gauge("jetway_ingress_links", "open links per ingress",
+			metrics.Labels{"ingress": t.name}, float64(t.linkCount()))
+	}()
+
+	r := bufio.NewReaderSize(conn, 64<<10)
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		raw, err := t.framer.ReadFrame(r)
+		if len(raw) > 0 {
+			t.inflight.Add(1)
+			_, herr := h(ctx, Message{Peer: peer, Transport: t.name, Remote: remote, Raw: raw})
+			t.inflight.Done()
+			if herr != nil {
+				// The message was not made durable. Closing the link is the only
+				// honest signal available on a raw stream: it makes the partner
+				// retransmit rather than assume delivery.
+				t.log.Error("could not accept message; closing link so it is retransmitted",
+					"peer", peer, "err", herr)
+				metrics.Counter("jetway_ingress_refused_total", "messages the pipeline would not accept",
+					metrics.Labels{"ingress": t.name, "peer": peer})
+				return
+			}
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) && ctx.Err() == nil {
+				t.log.Warn("link read ended", "peer", peer, "err", err)
+			}
+			return
+		}
+	}
+}
+
+func (t *TCP) linkCount() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.sessions)
+}
+
+// Send delivers a message on the open session with a peer, which is how a reply
+// goes back down the link its request arrived on.
+func (t *TCP) Send(ctx context.Context, peer string, raw []byte) error {
+	t.mu.RLock()
+	s := t.sessions[peer]
+	t.mu.RUnlock()
+	if s == nil {
+		return fmt.Errorf("ingress %s: no open link to %q", t.name, peer)
+	}
+	return s.send(raw)
+}
+
+// Peers lists the peers with an open link.
+func (t *TCP) Peers() []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make([]string, 0, len(t.sessions))
+	for p := range t.sessions {
+		out = append(out, p)
+	}
+	return out
+}
+
+// Drain waits for in-flight handlers to finish, then closes every link.
+//
+// Cutting sessions without draining loses whatever was mid-pipeline, which on a
+// store-and-forward link means a partner believes a message was delivered that
+// this process never finished writing.
+func (t *TCP) Drain(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() { t.inflight.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.log.Warn("drain deadline reached with work still in flight")
+	}
+	return t.Close()
+}
+
+func (t *TCP) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, s := range t.sessions {
+		s.conn.Close()
+	}
+	t.sessions = map[string]*session{}
+	if t.ln != nil {
+		return t.ln.Close()
+	}
+	return nil
+}

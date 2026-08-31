@@ -41,7 +41,7 @@ Implemented:
   a header line of its own and written to the origin line. The whitepaper
   describes it as a message header indicator without stating its position,
   so both readings are accepted. `MarkPossibleDuplicate` stamps it onto already
-  encoded bytes, which is how `internal/egress` marks a retransmission without
+  encoded bytes, which is how `pkg/egress` marks a retransmission without
   regenerating a message the partner has already been told about.
 
 Parsing is lenient by design. Diagnostics record every deviation; the only hard
@@ -127,7 +127,7 @@ What the gateway does with it:
   lowercase. Dropping the reason to make it encode would tell the partner
   nothing about why they were refused.
 
-## EMD (`pkg/pnr`, `internal/gateway`)
+## EMD (`pkg/pnr`, `pkg/gateway`)
 
 An electronic miscellaneous document: the same artefact as a ticket in every
 respect this node handles -- number format, coupon structure, status
@@ -416,7 +416,7 @@ The vocabulary both formats share.
 `US`→`HL`, `UC`→ nothing held. Private bilateral codes parse fine and report an
 unknown category rather than failing.
 
-## Transport (`internal/transport`)
+## Transport (`pkg/transport`)
 
 `LengthPrefix` covers most carrier links: header width, byte order, and whether
 the count includes the header are configuration, not code. `Sentinel` frames on

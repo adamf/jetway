@@ -177,7 +177,7 @@ curl -s localhost:9500/inventory   # what it has sold
 Comparing both sides is the test that matters. A booking is only correct if the
 gateway and the carrier agree about it.
 
-For a regression test, the pattern in `internal/gateway/e2e_test.go` wires two
+For a regression test, the pattern in `pkg/gateway/e2e_test.go` wires two
 gateways together with direct calls — no sockets, fully deterministic — and
 asserts on both records, both message logs, and the event trail.
 

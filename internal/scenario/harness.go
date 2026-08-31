@@ -22,12 +22,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/adamf/jetway/internal/config"
-	"github.com/adamf/jetway/internal/demo"
-	"github.com/adamf/jetway/internal/gateway"
-	"github.com/adamf/jetway/internal/node"
-	"github.com/adamf/jetway/internal/queue"
-	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/pkg/config"
+	"github.com/adamf/jetway/pkg/demo"
+	"github.com/adamf/jetway/pkg/gateway"
+	"github.com/adamf/jetway/pkg/node"
+	"github.com/adamf/jetway/pkg/queue"
+	"github.com/adamf/jetway/pkg/store"
 )
 
 // Harness is a running node with its simulated carriers attached.

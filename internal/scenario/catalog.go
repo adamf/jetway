@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adamf/jetway/internal/demo"
-	"github.com/adamf/jetway/internal/gateway"
-	"github.com/adamf/jetway/internal/store"
+	"github.com/adamf/jetway/pkg/demo"
+	"github.com/adamf/jetway/pkg/gateway"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/typeb"
 )
 
