@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/adamf/jetway/pkg/rescode"
 )
 
 // Status is the lifecycle state of a booking.
@@ -331,7 +333,11 @@ func (p *PNR) Recompute() {
 	}
 	live := 0
 	for _, s := range p.Segments {
-		if s.Status != "XX" && s.Status != "HX" && s.Status != "UC" && s.Status != "UN" {
+		if s.Type == SegmentSurface || s.Type == SegmentAux {
+			// Placeholders keep an itinerary honest; they hold nothing.
+			continue
+		}
+		if segmentLive(s.Status) {
 			live++
 		}
 	}
@@ -342,6 +348,35 @@ func (p *PNR) Recompute() {
 		// Ticketing is sticky: a ticketed record stays ticketed.
 	default:
 		p.Status = StatusOpen
+	}
+}
+
+// segmentLive reports whether a status code represents something still held
+// or still being asked for. The dead codes are the cancellations and the
+// refusals: a segment answered NO is exactly as gone as one cancelled XX, and
+// a hand-written dead list that omitted NO is how a cancelled record once rose
+// from the dead when a stray refusal arrived after the cancellation.
+func segmentLive(status string) bool {
+	code := rescode.ActionCode(status)
+	info, known := code.Info()
+	if !known {
+		// Unknown or empty codes hold the record open; a code we cannot read
+		// is not a reason to cancel somebody's booking.
+		return true
+	}
+	switch info.Category {
+	case rescode.CatCancel:
+		return false
+	case rescode.CatReply:
+		// A reply is live only if it confirmed or waitlisted something. The
+		// refusals -- NO, UC, UN -- left nothing behind.
+		return info.Confirmed || info.Waitlisted
+	case rescode.CatAdvice:
+		// Schedule-change advice sits on a segment mid-rebooking, so the
+		// holding persists. The exceptions say cancelled or deleted outright.
+		return code != "IX" && code != "DL"
+	default:
+		return true
 	}
 }
 

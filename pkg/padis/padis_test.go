@@ -404,3 +404,27 @@ func TestBuiltSegmentsRoundTripThroughTheCorrectedMapping(t *testing.T) {
 		t.Errorf("operating carrier did not survive: %+v", got.Segments[0])
 	}
 }
+
+// A cancellation is an advisory: the sender has already cancelled, and nothing
+// in the message asks the recipient to decide anything. Stamping it with the
+// request function code once made carriers answer cancels as if they were
+// sells -- refusing the already-cancelled segments with NO.
+func TestBuildCancelIsAnAdvisoryNotARequest(t *testing.T) {
+	ic, err := BuildCancel(samplePNR(), "BA", nil, buildOpts())
+	if err != nil {
+		t.Fatalf("BuildCancel: %v", err)
+	}
+	if got := MessageFunction(ic.Messages[0]); got != FuncCancellation {
+		t.Errorf("cancel message function = %q, want %q", got, FuncCancellation)
+	}
+}
+
+func TestMessageFunctionReadsTheMSGSegment(t *testing.T) {
+	ic, err := BuildPAOREQ(samplePNR(), "BA", buildOpts())
+	if err != nil {
+		t.Fatalf("BuildPAOREQ: %v", err)
+	}
+	if got := MessageFunction(ic.Messages[0]); got != FuncRequest {
+		t.Errorf("request message function = %q, want %q", got, FuncRequest)
+	}
+}

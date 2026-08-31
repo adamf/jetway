@@ -214,7 +214,11 @@ func (g *Gateway) decodeEDIFACT(peer *Peer, raw []byte, opts IngestOptions) (*de
 			}
 		}
 	}
-	d.NeedsReply = d.Kind == padis.MsgPAOREQ
+	// A PAOREQ whose function code says cancellation is an advisory. The
+	// sender has already cancelled; answering it as if it were a sell request
+	// is how a cancelled booking used to get refused back to life.
+	d.NeedsReply = d.Kind == padis.MsgPAOREQ &&
+		padis.MessageFunction(d.Edifact) != padis.FuncCancellation
 	d.CreatesRecord = d.Kind == padis.MsgPAOREQ
 	return d, nil
 }

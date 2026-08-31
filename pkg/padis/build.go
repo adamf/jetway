@@ -76,11 +76,33 @@ func newInterchange(t string, o BuildOptions) *edifact.Interchange {
 	})
 }
 
+// Message function codes carried in the MSG segment, from UN/EDIFACT data
+// element 1225. The distinction decode logic branches on: a request expects an
+// answer, a response is one, and a cancellation is an advisory -- the sender
+// has already cancelled, and nothing in it asks the recipient to decide
+// anything.
+const (
+	FuncCancellation = "1"
+	FuncRequest      = "11"
+	FuncResponse     = "22"
+)
+
+// MessageFunction returns the 1225 function code of m's MSG segment, or ""
+// when the message carries none.
+func MessageFunction(m edifact.Message) string {
+	for _, seg := range m.Find("MSG") {
+		if fn := seg.Get(0, 1); fn != "" {
+			return fn
+		}
+	}
+	return ""
+}
+
 // BuildPAOREQ renders a reservation request for the segments of p operated by
 // carrier.
 func BuildPAOREQ(p *pnr.PNR, carrier string, o BuildOptions) (*edifact.Interchange, error) {
 	body := []edifact.Segment{
-		edifact.Seg("MSG", edifact.Comp("", "11")), // 11: request
+		edifact.Seg("MSG", edifact.Comp("", FuncRequest)), // 11: request
 		edifact.Seg("ORG", edifact.Comp(o.text(p.Origin.Party), o.text(p.Origin.Agent))),
 	}
 	if p.RecordLocator != "" {
@@ -118,7 +140,7 @@ func BuildPAOREQ(p *pnr.PNR, carrier string, o BuildOptions) (*edifact.Interchan
 // a segment key to the status code decided for it.
 func BuildPAORES(req edifact.Message, p *pnr.PNR, outcomes map[string]string, locator, carrier string, o BuildOptions) (*edifact.Interchange, error) {
 	body := []edifact.Segment{
-		edifact.Seg("MSG", edifact.Comp("", "22")), // 22: response
+		edifact.Seg("MSG", edifact.Comp("", FuncResponse)),
 	}
 	// RCI carries every locator known for the booking. The requester files the
 	// reply against their own locator, so omitting it leaves them unable to
@@ -235,7 +257,10 @@ func BuildCancel(p *pnr.PNR, carrier string, refs []int, o BuildOptions) (*edifa
 	}
 
 	body := []edifact.Segment{
-		edifact.Seg("MSG", edifact.Comp("", "11")),
+		// A cancellation, not a request: stamping this "11" once made carriers
+		// answer cancels as if they were sells, refusing the already-cancelled
+		// segments with NO.
+		edifact.Seg("MSG", edifact.Comp("", FuncCancellation)),
 		edifact.Seg("ORG", edifact.Comp(o.text(p.Origin.Party), o.text(p.Origin.Agent))),
 	}
 	// Both locators. A cancellation the carrier cannot match to a booking is a

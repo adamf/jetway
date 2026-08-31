@@ -119,7 +119,7 @@ func Start(ctx context.Context, opts Options) (*Harness, error) {
 	}
 	for _, c := range carriers {
 		if n := h.Fleet.Node(c.Designator); n != nil {
-			n.Inventory.Capacity = capacity
+			n.Inventory.SetCapacity(capacity)
 		}
 	}
 

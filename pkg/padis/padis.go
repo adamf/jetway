@@ -289,6 +289,9 @@ func handleRPI(p *pnr.PNR, seg edifact.Segment, st *State, opts ApplyOptions) ([
 		// as the request code itself, so the decision step can find it.
 		st.LastSegment.Status = "HN"
 		return []Change{{Op: "segment_requested", Detail: st.LastSegment.Describe()}}, true
+	case code.Category() == rescode.CatCancel:
+		st.LastSegment.Status = string(code)
+		return []Change{{Op: "segment_cancelled", Detail: st.LastSegment.Describe()}}, true
 	default:
 		if h, isReply := rescode.ReplyTo(code); isReply {
 			if h == "" {

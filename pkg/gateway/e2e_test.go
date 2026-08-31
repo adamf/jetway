@@ -341,3 +341,68 @@ func TestBookingValidation(t *testing.T) {
 		}
 	}
 }
+
+// A cancellation must stay cancelled after the carrier hears about it. The
+// EDIFACT path once failed this: the cancel went out stamped as a request, the
+// carrier's responder had nothing to decide (an XX segment is not awaiting a
+// decision), and the reply builder's fallback refused every undecided segment
+// with NO -- which resurrected the cancelled record when it landed back at the
+// distribution side. The message counts pin the conservation law: a cancel is
+// an advisory, so nothing travels back.
+func TestEndToEndCancelStaysCancelled(t *testing.T) {
+	for _, format := range []store.Format{store.FormatTypeB, store.FormatEDIFACT} {
+		t.Run(string(format), func(t *testing.T) {
+			ctx := context.Background()
+			gds, air := wire(t, "BA", format)
+
+			res, err := gds.gw.Book(ctx, booking("Y", 1))
+			if err != nil {
+				t.Fatalf("Book: %v", err)
+			}
+			rec, _ := gds.st.GetPNR(ctx, res.PNR.RecordLocator)
+			if rec.Segments[0].Status != "HK" {
+				t.Fatalf("pre-cancel status = %q, want HK", rec.Segments[0].Status)
+			}
+
+			if _, err := gds.gw.Cancel(ctx, rec.RecordLocator, CancelOptions{
+				By: "test", Reason: "regression",
+			}); err != nil {
+				t.Fatalf("Cancel: %v", err)
+			}
+
+			// The senders are direct calls, so by now any reply the carrier
+			// was ever going to make has already been applied.
+			rec, _ = gds.st.GetPNR(ctx, rec.RecordLocator)
+			if rec.Status != pnr.StatusCancelled {
+				t.Errorf("distribution record = %q, want cancelled", rec.Status)
+			}
+			for _, s := range rec.Segments {
+				if s.Status != "XX" {
+					t.Errorf("segment %d = %q, want XX", s.Ref, s.Status)
+				}
+			}
+
+			airRecs, _ := air.st.ListPNRs(ctx, 10)
+			if len(airRecs) != 1 {
+				t.Fatalf("carrier records = %d, want 1", len(airRecs))
+			}
+			if airRecs[0].Status != pnr.StatusCancelled {
+				t.Errorf("carrier record = %q, want cancelled", airRecs[0].Status)
+			}
+
+			// Book is two messages each side (request out, reply back); the
+			// cancel is exactly one more. A fourth message is the bug.
+			gdsMsgs, _ := gds.st.ListMessages(ctx, store.MessageFilter{Limit: 50})
+			if len(gdsMsgs) != 3 {
+				t.Errorf("distribution side logged %d messages, want 3 (sell, reply, cancel)", len(gdsMsgs))
+				for _, m := range gdsMsgs {
+					t.Logf("  %s %s %s", m.Direction, m.Kind, m.Status)
+				}
+			}
+			airMsgs, _ := air.st.ListMessages(ctx, store.MessageFilter{Limit: 50})
+			if len(airMsgs) != 3 {
+				t.Errorf("carrier side logged %d messages, want 3 (sell, reply, cancel)", len(airMsgs))
+			}
+		})
+	}
+}

@@ -216,3 +216,13 @@ func awaitingDecision(status string) bool {
 	}
 	return rescode.ActionCode(status).NeedsReply()
 }
+
+// SetCapacity replaces the per-class seat count while the inventory may
+// already be answering traffic, which is exactly when a harness or a demo
+// wants to raise it. The Capacity field itself is for configuration before
+// anything else holds a reference.
+func (inv *Inventory) SetCapacity(n int) {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+	inv.Capacity = n
+}
