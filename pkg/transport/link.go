@@ -155,6 +155,10 @@ func (s *Server) Serve(ctx context.Context) error {
 }
 
 func (s *Server) handle(ctx context.Context, conn net.Conn) {
+	// The same promise the client makes: when the context ends, idle inbound
+	// links close rather than lingering blocked in read.
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 	r := bufio.NewReaderSize(conn, 64<<10)
 	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		conn.Close()
@@ -298,6 +302,10 @@ func (c *Client) session(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// serve only notices cancellation between frames, and an idle link sees no
+	// frames. Closing the conn is what actually takes a quiet link down.
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 	if !c.SkipHello {
 		hello, err := json.Marshal(c.Hello)
 		if err != nil {

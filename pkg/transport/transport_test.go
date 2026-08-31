@@ -325,3 +325,80 @@ func waitFor(t *testing.T, ctx context.Context, cond func() bool) {
 		}
 	}
 }
+
+// Cancelling the client's context must take an idle link down promptly. The
+// serve loop only noticed cancellation between frames, so a quiet link --
+// which is exactly what a deliberately severed circuit is -- stayed blocked
+// in read forever, and the far side kept counting the session as live.
+func TestClientCancelClosesIdleLink(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	srv := &Server{
+		Addr: "127.0.0.1:0", Framer: DefaultFramer(), Log: testLogger(),
+		OnMessage: func(ctx context.Context, peer string, raw []byte) error { return nil },
+	}
+	if err := srv.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	go srv.Serve(ctx) //nolint:errcheck
+
+	ups := make(chan struct{}, 2)
+	linkCtx, sever := context.WithCancel(ctx)
+	defer sever()
+	cli := &Client{
+		Addr: srv.Addr, Hello: Hello{Peer: "BA"}, Framer: DefaultFramer(),
+		Log: testLogger(), OnUp: func() { ups <- struct{}{} },
+		OnMessage: func(ctx context.Context, peer string, raw []byte) error { return nil },
+	}
+	runDone := make(chan struct{})
+	go func() { defer close(runDone); cli.Run(linkCtx) }() //nolint:errcheck
+
+	<-ups
+	waitFor(t, ctx, func() bool { return len(srv.Peers()) == 1 })
+
+	// No traffic is in flight; the link is idle. Cut it.
+	sever()
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled on an idle link")
+	}
+	waitFor(t, ctx, func() bool { return len(srv.Peers()) == 0 })
+}
+
+// The server side owes its links the same promptness: when Serve's context
+// ends, idle inbound links must close, not linger blocked in read.
+func TestServerCancelClosesIdleLinks(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	srvCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	srv := &Server{
+		Addr: "127.0.0.1:0", Framer: DefaultFramer(), Log: testLogger(),
+		OnMessage: func(ctx context.Context, peer string, raw []byte) error { return nil },
+	}
+	if err := srv.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	go srv.Serve(srvCtx) //nolint:errcheck
+
+	ups := make(chan struct{}, 2)
+	cli := &Client{
+		Addr: srv.Addr, Hello: Hello{Peer: "BA"}, Framer: DefaultFramer(),
+		Log: testLogger(), OnUp: func() { ups <- struct{}{} },
+		OnMessage: func(ctx context.Context, peer string, raw []byte) error { return nil },
+	}
+	go cli.Run(ctx) //nolint:errcheck
+	<-ups
+	waitFor(t, ctx, func() bool { return len(srv.Peers()) == 1 })
+
+	stop()
+	// The client notices its conn die and starts redialing a dead listener;
+	// what matters here is that the server's link table empties without any
+	// frame ever crossing.
+	waitFor(t, ctx, func() bool { return len(srv.Peers()) == 0 })
+}
