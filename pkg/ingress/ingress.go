@@ -70,6 +70,7 @@ type Resolver struct {
 	static   string
 	byCertCN map[string]string
 	byCIDR   []cidrPeer
+	hello bool
 }
 
 type cidrPeer struct {
@@ -79,7 +80,7 @@ type cidrPeer struct {
 
 // NewResolver builds a resolver from configuration.
 func NewResolver(id config.Identify) (*Resolver, error) {
-	r := &Resolver{static: id.Peer, byCertCN: id.ByCertCN}
+	r := &Resolver{static: id.Peer, byCertCN: id.ByCertCN, hello: id.ByHello}
 	for cidr, peer := range id.ByCIDR {
 		_, n, err := net.ParseCIDR(cidr)
 		if err != nil {
@@ -89,6 +90,10 @@ func NewResolver(id config.Identify) (*Resolver, error) {
 	}
 	return r, nil
 }
+
+// ByHello reports whether the listener identifies peers from the hello
+// frame each connection opens with.
+func (r *Resolver) ByHello() bool { return r.hello }
 
 // ErrUnidentified means nothing about the connection maps to a configured peer.
 type ErrUnidentified struct{ Detail string }

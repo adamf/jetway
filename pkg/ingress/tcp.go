@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -177,7 +178,19 @@ func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 		}
 	}
 
-	peer, remote, err := t.resolver.Resolve(state, conn.RemoteAddr())
+	r := bufio.NewReaderSize(conn, 64<<10)
+	var peer, remote string
+	var err error
+	if t.resolver.ByHello() {
+		// The first frame names the subscriber: one listener, a whole
+		// population. The claim is trusted the way a source network would
+		// be; a link that lies about its identity is a network problem,
+		// not a parsing one.
+		peer, err = readHello(conn, r, t.framer)
+		remote = conn.RemoteAddr().String()
+	} else {
+		peer, remote, err = t.resolver.Resolve(state, conn.RemoteAddr())
+	}
 	if err != nil {
 		t.log.Warn("refusing unidentified connection",
 			"remote", conn.RemoteAddr().String(), "err", err)
@@ -209,7 +222,6 @@ func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 			metrics.Labels{"ingress": t.name}, float64(t.linkCount()))
 	}()
 
-	r := bufio.NewReaderSize(conn, 64<<10)
 	for {
 		if ctx.Err() != nil {
 			return
@@ -237,6 +249,27 @@ func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 			return
 		}
 	}
+}
+
+// readHello reads the identification frame a by_hello listener opens with.
+// The reader is the same one the session then reads from: a subscriber that
+// pipelines its hello and its first message in one write must lose nothing.
+func readHello(conn net.Conn, r *bufio.Reader, f framer) (string, error) {
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return "", err
+	}
+	raw, err := f.ReadFrame(r)
+	if err != nil {
+		return "", fmt.Errorf("reading the hello frame: %w", err)
+	}
+	var hello transport.Hello
+	if err := json.Unmarshal(raw, &hello); err != nil || hello.Peer == "" {
+		return "", &ErrUnidentified{Detail: "the hello frame does not name a peer"}
+	}
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		return "", err
+	}
+	return hello.Peer, nil
 }
 
 func (t *TCP) linkCount() int {

@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/adamf/jetway/pkg/config"
+	"github.com/adamf/jetway/pkg/transport"
 )
 
 func testLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -627,5 +629,126 @@ func waitFor(t *testing.T, ctx context.Context, cond func() bool) {
 			t.Fatal("condition not met within the timeout")
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+// One listener, a whole subscriber population: with by_hello identification
+// each connection names itself in its first frame. A subscriber that
+// pipelines the hello and its first message in one write loses nothing --
+// the hello reader and the session reader are the same reader.
+func TestTCPIdentifiesFromHello(t *testing.T) {
+	tcp, err := NewTCP(config.Ingress{
+		Name: "link-net", Type: "tcp", Addr: "127.0.0.1:0",
+		Framing:  config.Framing{Kind: "length_prefix", HeaderBytes: 4},
+		Identify: config.Identify{ByHello: true},
+	}, testLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tcp.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	defer tcp.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	got := make(chan Message, 8)
+	go tcp.Start(ctx, func(ctx context.Context, m Message) (Receipt, error) { //nolint:errcheck
+		got <- m
+		return Receipt{ID: "m"}, nil
+	})
+	waitListening(t, tcp.Addr())
+	f, _ := FramerFor(config.Framing{Kind: "length_prefix", HeaderBytes: 4})
+
+	dial := func(peer string) net.Conn {
+		t.Helper()
+		conn, err := net.Dial("tcp", tcp.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		// Hello and first message pipelined in one write: the trap this
+		// test exists to hold shut.
+		var buf bytes.Buffer
+		hello, _ := json.Marshal(transport.Hello{Peer: peer, Role: "carrier"})
+		if err := f.WriteFrame(&buf, hello); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.WriteFrame(&buf, []byte("FIRST FROM "+peer)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Write(buf.Bytes()); err != nil {
+			t.Fatal(err)
+		}
+		return conn
+	}
+	ba := dial("BA")
+	dial("AF")
+
+	seen := map[string]string{}
+	for i := 0; i < 2; i++ {
+		select {
+		case m := <-got:
+			seen[m.Peer] = string(m.Raw)
+		case <-ctx.Done():
+			t.Fatalf("only %d of 2 pipelined messages arrived: %v", i, seen)
+		}
+	}
+	if seen["BA"] != "FIRST FROM BA" || seen["AF"] != "FIRST FROM AF" {
+		t.Errorf("messages misattributed: %v", seen)
+	}
+
+	// Replies route by the asserted name.
+	waitFor(t, ctx, func() bool { return len(tcp.Peers()) == 2 })
+	if err := tcp.Send(ctx, "BA", []byte("REPLY FOR BA")); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := f.ReadFrame(newReader(ba))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(reply) != "REPLY FOR BA" {
+		t.Errorf("reply = %q", reply)
+	}
+}
+
+// A connection that cannot say who it is gets nothing.
+func TestTCPHelloRefusesTheNameless(t *testing.T) {
+	tcp, err := NewTCP(config.Ingress{
+		Name: "link-net", Type: "tcp", Addr: "127.0.0.1:0",
+		Framing:  config.Framing{Kind: "length_prefix", HeaderBytes: 4},
+		Identify: config.Identify{ByHello: true},
+	}, testLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tcp.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	defer tcp.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go tcp.Start(ctx, func(ctx context.Context, m Message) (Receipt, error) { //nolint:errcheck
+		t.Error("a message from an unidentified link was handled")
+		return Receipt{}, nil
+	})
+	waitListening(t, tcp.Addr())
+
+	conn, err := net.Dial("tcp", tcp.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	f, _ := FramerFor(config.Framing{Kind: "length_prefix", HeaderBytes: 4})
+	if err := f.WriteFrame(conn, []byte("this is not a hello")); err != nil {
+		t.Fatal(err)
+	}
+	// The listener drops the connection rather than serving the nameless.
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:errcheck
+	if _, err := newReader(conn).ReadByte(); err == nil {
+		t.Error("the connection was not closed")
+	}
+	if n := len(tcp.Peers()); n != 0 {
+		t.Errorf("%d peers registered from a nameless connection", n)
 	}
 }

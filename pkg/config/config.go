@@ -148,6 +148,11 @@ type Identify struct {
 	// ByCIDR maps a source network to a peer name. Weaker than a certificate
 	// and only appropriate on a private link.
 	ByCIDR map[string]string `yaml:"by_cidr"`
+	// ByHello accepts the peer name the connection asserts in its first
+	// frame -- a transport hello. This is how one listener serves a whole
+	// subscriber population. It is an assertion, not a proof, so it belongs
+	// only where the network itself is trusted, exactly like ByCIDR.
+	ByHello bool `yaml:"by_hello"`
 }
 
 // Ingress is one way messages get in.
@@ -493,6 +498,9 @@ func (in *Ingress) validate() error {
 		}
 	default:
 		return fmt.Errorf("config: ingress %q: type must be matip, tcp, https or filedrop, got %q", in.Name, in.Type)
+	}
+	if in.Identify.ByHello && in.Type != "tcp" {
+		return fmt.Errorf("config: ingress %q: by_hello identification is only for tcp listeners", in.Name)
 	}
 	if in.Type != "filedrop" && in.Type != "matip" {
 		if err := in.Framing.validate("ingress " + in.Name); err != nil {
