@@ -49,11 +49,24 @@ type Server struct {
 	Ready func(ctx context.Context) error
 	// LinkPeers lists peers with a live link, for /api/status.
 	LinkPeers func() []string
+
+	// Extend, when set, is called with the mux before the built-in routes are
+	// registered, letting an embedder add pages and endpoints to the same
+	// listener. Paths under /api/ and the root are taken; pick a prefix.
+	Extend func(mux *http.ServeMux)
 }
 
 // Handler returns the HTTP routes.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	// An embedder's routes first, so they cannot be shadowed by a later
+	// addition here. The console grew up as jetwayd's own; a node embedded in
+	// something larger -- a simulator with a map, an operator with their own
+	// pages -- gets to extend the same mux on the same port rather than
+	// running a second listener nothing else knows about.
+	if s.Extend != nil {
+		s.Extend(mux)
+	}
 
 	// Liveness never depends on anything external: a process that answers is
 	// alive, and restarting it because a database blipped makes the outage

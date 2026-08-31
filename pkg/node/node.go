@@ -61,6 +61,9 @@ type Options struct {
 	// SkipConsole omits the HTTP server. A load run wants the pipeline, not
 	// the console.
 	SkipConsole bool
+	// ExtendAPI is passed through to the console's mux, so an embedder can
+	// serve its own pages from the node's one listener.
+	ExtendAPI func(mux *http.ServeMux)
 }
 
 // Build assembles a node without starting anything that accepts work.
@@ -132,6 +135,7 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Optio
 	if !opts.SkipConsole {
 		n.API = &api.Server{
 			Gateway: n.Gateway, Store: st, Bus: n.Bus, Log: log,
+			Extend:  opts.ExtendAPI,
 			Console: cfg.HTTP.Console,
 			Metrics: cfg.HTTP.Metrics,
 			Ready: func(ctx context.Context) error {
