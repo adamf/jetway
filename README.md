@@ -513,7 +513,7 @@ two are configuration. See [docs/adding-a-carrier.md](docs/adding-a-carrier.md).
 ## Built on it
 
 [wholesky](https://github.com/adamf/wholesky) simulates global passenger
-aviation on this library: a Jetway node in relay mode as the message switch,
+aviation on this library — live at https://wholesky-demo.fly.dev : a Jetway node in relay mode as the message switch,
 carrier reservation systems as multi-tenant hosts, and a GDS reaching every
 carrier through one switch link -- AIRIMP over Type B and PADIS over EDIFACT,
 relayed by address line and UNB recipient. It is also why the application
