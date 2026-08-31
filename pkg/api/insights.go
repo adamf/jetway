@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/rescode"
+	"github.com/adamf/jetway/pkg/store"
 )
 
 // insights answers the questions an operator and a commercial team ask about
