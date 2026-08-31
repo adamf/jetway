@@ -64,7 +64,11 @@ type BookingRequest struct {
 }
 
 // Validate checks a request is coherent before anything is written.
-func (r *BookingRequest) Validate() error {
+func (r *BookingRequest) Validate() error { return r.validate(time.Now().UTC()) }
+
+// validate is Validate against a caller-supplied clock, so a gateway driving
+// time resolves booking dates in the same "today" it stamps everything else.
+func (r *BookingRequest) validate(now time.Time) error {
 	if len(r.Passengers) == 0 {
 		return fmt.Errorf("booking needs at least one passenger")
 	}
@@ -87,7 +91,7 @@ func (r *BookingRequest) Validate() error {
 		case len(s.Board) != 3 || len(s.Off) != 3:
 			return fmt.Errorf("segment %d: board and off points must be three-letter codes", i+1)
 		}
-		if _, err := pnr.ResolveDate(s.Date, time.Now().UTC()); err != nil {
+		if _, err := pnr.ResolveDate(s.Date, now); err != nil {
 			return fmt.Errorf("segment %d: %w", i+1, err)
 		}
 	}
@@ -123,11 +127,11 @@ func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, e
 	)
 	defer span.End()
 
-	if err := req.Validate(); err != nil {
+	now := g.now()
+	if err := req.validate(now); err != nil {
 		telemetry.Fail(span, err)
 		return nil, err
 	}
-	now := time.Now().UTC()
 
 	rec := &pnr.PNR{
 		Status: pnr.StatusOpen, CreatedAt: now, UpdatedAt: now,
@@ -316,7 +320,7 @@ func (g *Gateway) RequestFromCarrier(ctx context.Context, rec *pnr.PNR, carrier 
 	}
 	switch peer.Format {
 	case store.FormatEDIFACT:
-		ref := nextControlRef()
+		ref := g.nextControlRef()
 		ic, err := padis.BuildPAOREQ(rec, carrier, padis.BuildOptions{
 			Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
 			Recipient:  edifact.Party{ID: carrier, Qualifier: "ZZ"},
@@ -349,7 +353,7 @@ func (g *Gateway) RequestFromCarrier(ctx context.Context, rec *pnr.PNR, carrier 
 		}
 		out := &typeb.Message{
 			Priority: "QU", Destinations: []typeb.Address{dest},
-			Origin: mustAddress(g.Identity.TTYAddress), OriginTime: nowOriginTime(),
+			Origin: mustAddress(g.Identity.TTYAddress), OriginTime: g.nowOriginTime(),
 			Text: text,
 		}
 		raw, err := out.Encode(typeb.EncodeOptions{Charset: typeb.CharsetITA2, CRLF: true})

@@ -286,7 +286,7 @@ func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 	// they branch before the reservation grammar rather than being fed to it
 	// and producing a message full of unrecognised elements.
 	if avs.IsAvailability(tb.Text) {
-		am := peer.avs().Parse(tb.Text, msgTime(peer))
+		am := peer.avs().Parse(tb.Text, g.msgTime(peer))
 		d.AVS = am
 		d.Kind = "AVS"
 		for _, x := range am.Diagnostics {
@@ -355,5 +355,6 @@ func typeBDedupKey(tb *typeb.Message) string {
 	return "tty:" + tb.Origin.String() + ":" + tb.OriginTime.String() + ":" + hex.EncodeToString(sum[:8])
 }
 
-// msgTime anchors date resolution. Kept as a hook so replay can pin it.
-func msgTime(*Peer) time.Time { return time.Now().UTC() }
+// msgTime anchors date resolution through the gateway's clock seam, so a
+// simulation driving time gets consistent date windows too.
+func (g *Gateway) msgTime(*Peer) time.Time { return g.now() }

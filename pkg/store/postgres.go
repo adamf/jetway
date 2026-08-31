@@ -18,6 +18,17 @@ import (
 // Postgres is the production Store.
 type Postgres struct {
 	pool *pgxpool.Pool
+
+	// Now, when set, stamps defaults instead of the wall clock. Set before
+	// use; read without a lock.
+	Now func() time.Time
+}
+
+func (s *Postgres) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now().UTC()
 }
 
 // OpenPostgres connects and verifies the schema is present.
@@ -190,7 +201,7 @@ func (s *Postgres) CreatePNR(ctx context.Context, p *pnr.PNR, events []Event) er
 			}
 			return err
 		}
-		return insertEvents(ctx, tx, p.ID, 0, events)
+		return insertEvents(ctx, tx, p.ID, 0, events, s.now)
 	})
 }
 
@@ -227,7 +238,7 @@ func (s *Postgres) UpdatePNR(ctx context.Context, p *pnr.PNR, expected int64, ev
 			`SELECT coalesce(max(seq),0) FROM pnr_event WHERE pnr_id=$1`, p.ID).Scan(&maxSeq); err != nil {
 			return err
 		}
-		return insertEvents(ctx, tx, p.ID, maxSeq, events)
+		return insertEvents(ctx, tx, p.ID, maxSeq, events, s.now)
 	})
 }
 
@@ -276,7 +287,7 @@ func (s *Postgres) DividePNR(ctx context.Context, parent *pnr.PNR, expected int6
 			`SELECT coalesce(max(seq),0) FROM pnr_event WHERE pnr_id=$1`, parent.ID).Scan(&maxSeq); err != nil {
 			return err
 		}
-		if err := insertEvents(ctx, tx, parent.ID, maxSeq, parentEvents); err != nil {
+		if err := insertEvents(ctx, tx, parent.ID, maxSeq, parentEvents, s.now); err != nil {
 			return err
 		}
 
@@ -290,18 +301,18 @@ func (s *Postgres) DividePNR(ctx context.Context, parent *pnr.PNR, expected int6
 			}
 			return err
 		}
-		return insertEvents(ctx, tx, child.ID, 0, childEvents)
+		return insertEvents(ctx, tx, child.ID, 0, childEvents, s.now)
 	})
 }
 
-func insertEvents(ctx context.Context, tx pgx.Tx, pnrID string, startSeq int64, events []Event) error {
+func insertEvents(ctx context.Context, tx pgx.Tx, pnrID string, startSeq int64, events []Event, now func() time.Time) error {
 	for i := range events {
 		e := events[i]
 		if e.ID == "" {
 			e.ID = ulid.New()
 		}
 		if e.At.IsZero() {
-			e.At = time.Now().UTC()
+			e.At = now()
 		}
 		startSeq++
 		_, err := tx.Exec(ctx, `
@@ -479,7 +490,7 @@ func (s *Postgres) Enqueue(ctx context.Context, item *QueueItem) error {
 		item.ID = ulid.New()
 	}
 	if item.PlacedAt.IsZero() {
-		item.PlacedAt = time.Now().UTC()
+		item.PlacedAt = s.now()
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO queue_item (id, queue, pnr_id, locator, code, reason,

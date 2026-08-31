@@ -42,6 +42,11 @@ type Event struct {
 // Subscribers get a buffered channel and are dropped from a send if they fall
 // behind. A slow browser tab must never be able to stall message processing.
 type Bus struct {
+	// Now, when set, stamps events instead of the wall clock, so a driven
+	// simulation's bus timeline matches its stores. Set it before Publish is
+	// first called; it is read without a lock.
+	Now func() time.Time
+
 	mu      sync.RWMutex
 	subs    map[int]chan Event
 	nextSub int
@@ -49,6 +54,13 @@ type Bus struct {
 
 	history    []Event
 	historyCap int
+}
+
+func (b *Bus) now() time.Time {
+	if b.Now != nil {
+		return b.Now()
+	}
+	return time.Now().UTC()
 }
 
 // NewBus returns a bus retaining the last n events.
@@ -63,7 +75,7 @@ func NewBus(n int) *Bus {
 func (b *Bus) Publish(t EventType, data any) {
 	b.mu.Lock()
 	b.seq++
-	ev := Event{Seq: b.seq, Type: t, At: time.Now().UTC(), Data: data}
+	ev := Event{Seq: b.seq, Type: t, At: b.now(), Data: data}
 	b.history = append(b.history, ev)
 	if len(b.history) > b.historyCap {
 		b.history = b.history[len(b.history)-b.historyCap:]

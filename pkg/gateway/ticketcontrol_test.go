@@ -79,7 +79,7 @@ func tkcreq(t *testing.T, number pnr.TicketNumber, from string, coupon int, stat
 			// A distinct control reference per call: identical ones make the
 			// second message a retransmission and it is deduplicated before it
 			// is ever applied.
-			ControlRef: nextControlRef(), MessageRef: "1",
+			ControlRef: (&Gateway{}).nextControlRef(), MessageRef: "1",
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +291,7 @@ func TestOperatingCarrierRecordsAnAdvisedTicket(t *testing.T) {
 		&pnr.PNR{RecordLocator: "ISS999"}, number, 2,
 		[]padis.CouponRef{{Number: 1, Status: pnr.CouponOpen}}, padis.BuildOptions{
 			Sender: edifact.Party{ID: "1V", Qualifier: "ZZ"}, Recipient: edifact.Party{ID: "1J", Qualifier: "ZZ"},
-			ControlRef: nextControlRef(), MessageRef: "1",
+			ControlRef: (&Gateway{}).nextControlRef(), MessageRef: "1",
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -339,7 +339,7 @@ func TestAdviceForAnUnknownBookingIsStillRefused(t *testing.T) {
 		&pnr.PNR{RecordLocator: "NOSUCH"}, number, 1,
 		[]padis.CouponRef{{Number: 1, Status: pnr.CouponOpen}}, padis.BuildOptions{
 			Sender: edifact.Party{ID: "1V", Qualifier: "ZZ"}, Recipient: edifact.Party{ID: "1J", Qualifier: "ZZ"},
-			ControlRef: nextControlRef(), MessageRef: "1",
+			ControlRef: (&Gateway{}).nextControlRef(), MessageRef: "1",
 		})
 	if err != nil {
 		t.Fatal(err)

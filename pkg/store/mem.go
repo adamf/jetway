@@ -24,6 +24,10 @@ type Mem struct {
 	MaxMessages int
 	MaxRecords  int
 
+	// Now, when set, stamps defaults instead of the wall clock. Set before
+	// use; read without a lock.
+	Now func() time.Time
+
 	mu sync.RWMutex
 
 	messages   map[string]*Message
@@ -43,6 +47,13 @@ type Mem struct {
 	queue        map[string]*QueueItem // by id
 	queueIDs     []string              // ULIDs, kept sorted
 	queuePending map[string]string     // queue|pnr|code -> id, pending items only
+}
+
+func (s *Mem) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now().UTC()
 }
 
 // NewMem returns an empty in-memory store.
@@ -406,7 +417,7 @@ func (s *Mem) Enqueue(ctx context.Context, item *QueueItem) error {
 		item.ID = ulid.New()
 	}
 	if item.PlacedAt.IsZero() {
-		item.PlacedAt = time.Now().UTC()
+		item.PlacedAt = s.now()
 	}
 	k := pendingKey(item.Queue, item.PNRID, item.Code, item.SegmentRef)
 	if _, dup := s.queuePending[k]; dup {
@@ -431,7 +442,7 @@ func (s *Mem) WorkQueueItem(ctx context.Context, id, by, note string) error {
 	if !it.Pending() {
 		return ErrConflict
 	}
-	now := time.Now().UTC()
+	now := s.now()
 	it.WorkedAt = &now
 	it.WorkedBy = by
 	it.Note = note

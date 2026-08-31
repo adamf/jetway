@@ -138,6 +138,11 @@ type Gateway struct {
 	// system that only originates them.
 	Responder Responder
 
+	// Now, when set, replaces the wall clock. Every timestamp this gateway
+	// stamps -- records, events, messages, references -- comes through it, so
+	// a simulation can drive time and a replay can pin it. Nil reads the wall.
+	Now func() time.Time
+
 	// Avail is what this node believes is sellable. Nil disables free sale,
 	// and every segment is then requested -- correct, just slower.
 	Avail *avail.Cache
@@ -362,7 +367,7 @@ func (g *Gateway) Ingest(ctx context.Context, peerName string, raw []byte) (*Res
 
 // IngestWith is Ingest with per-message options.
 func (g *Gateway) IngestWith(ctx context.Context, peerName string, raw []byte, opts IngestOptions) (*Result, error) {
-	now := time.Now().UTC()
+	now := g.now()
 	sum := sha256.Sum256(raw)
 
 	peer := g.Peer(peerName)
@@ -782,6 +787,14 @@ func (g *Gateway) newLocator(ctx context.Context) (string, error) {
 	return g.locators.Allocate(n), nil
 }
 
+// now reads the clock through the seam.
+func (g *Gateway) now() time.Time {
+	if g.Now != nil {
+		return g.Now()
+	}
+	return time.Now().UTC()
+}
+
 // respond generates and sends a reply when the message requires one.
 func (g *Gateway) respond(ctx context.Context, peer *Peer, msg *store.Message, dec *decoded, rec *pnr.PNR, res *Result, opts IngestOptions) error {
 	if g.Responder == nil || !dec.NeedsReply {
@@ -813,7 +826,7 @@ func (g *Gateway) respond(ctx context.Context, peer *Peer, msg *store.Message, d
 	}
 	expected := rec.Version
 	rec.Recompute()
-	rec.UpdatedAt = time.Now().UTC()
+	rec.UpdatedAt = g.now()
 	if err := g.Store.UpdatePNR(ctx, rec, expected, events); err != nil {
 		return fmt.Errorf("gateway: record decision: %w", err)
 	}
@@ -862,14 +875,14 @@ func (g *Gateway) buildReply(peer *Peer, dec *decoded, rec *pnr.PNR, outcomes ma
 			Priority:     "QU",
 			Destinations: []typeb.Address{dec.ReplyTo},
 			Origin:       mustAddress(g.Identity.TTYAddress),
-			OriginTime:   nowOriginTime(),
+			OriginTime:   g.nowOriginTime(),
 			Text:         text,
 		}
 		raw, err := out.Encode(typeb.EncodeOptions{Charset: typeb.CharsetITA2, CRLF: true})
 		return raw, "AIRIMP/reply", "", err
 
 	case store.FormatEDIFACT:
-		ref := nextControlRef()
+		ref := g.nextControlRef()
 		ic, err := padis.BuildPAORES(dec.Edifact, rec, outcomes, rec.RecordLocator,
 			g.Identity.Designator, padis.BuildOptions{
 				Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
@@ -888,7 +901,7 @@ func (g *Gateway) buildReply(peer *Peer, dec *decoded, rec *pnr.PNR, outcomes ma
 
 // record writes an outbound message to the log without transmitting it.
 func (g *Gateway) record(ctx context.Context, peer *Peer, raw []byte, kind, pnrID, correlationID string, st store.Status) (string, error) {
-	now := time.Now().UTC()
+	now := g.now()
 	sum := sha256.Sum256(raw)
 	out := &store.Message{
 		ID: ulid.NewAt(now), Direction: store.Outbound, At: now,
@@ -927,7 +940,7 @@ func (g *Gateway) SendKeyed(ctx context.Context, peer *Peer, raw []byte, kind, p
 	)
 	defer span.End()
 
-	now := time.Now().UTC()
+	now := g.now()
 	sum := sha256.Sum256(raw)
 	traceID, spanID := telemetry.IDs(ctx)
 	out := &store.Message{
@@ -968,8 +981,8 @@ func mustAddress(s string) typeb.Address {
 	return a
 }
 
-func nowOriginTime() typeb.OriginTime {
-	n := time.Now().UTC()
+func (g *Gateway) nowOriginTime() typeb.OriginTime {
+	n := g.now()
 	return typeb.OriginTime{Day: n.Day(), Hour: n.Hour(), Minute: n.Minute(), Present: true}
 }
 
@@ -979,12 +992,12 @@ var controlRefSeq int64
 // nextControlRef returns an interchange control reference. It only needs to be
 // unique per sender, and the sequence restarts on process restart, which is why
 // the value is combined with a timestamp component.
-func nextControlRef() string {
+func (g *Gateway) nextControlRef() string {
 	controlRefMu.Lock()
 	controlRefSeq++
 	n := controlRefSeq
 	controlRefMu.Unlock()
-	return fmt.Sprintf("%d%04d", time.Now().Unix()%100000, n%10000)
+	return fmt.Sprintf("%d%04d", g.now().Unix()%100000, n%10000)
 }
 
 // msgView renders a message for observers.
@@ -1118,7 +1131,7 @@ func (g *Gateway) sendCONTRL(ctx context.Context, peer *Peer, msg *store.Message
 	ic, err := report.Build(edifact.CONTRLOptions{
 		Sender:        edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
 		Recipient:     edifact.Party{ID: dec.EdifactSender, Qualifier: "ZZ"},
-		ControlRef:    nextControlRef(),
+		ControlRef:    g.nextControlRef(),
 		SyntaxVersion: dec.Interchange.Syntax.Version,
 		Date:          msg.At.Format("060102"),
 		Time:          msg.At.Format("1504"),

@@ -97,7 +97,7 @@ func (g *Gateway) IssueEMD(ctx context.Context, req EMDRequest) (*pnr.PNR, pnr.T
 			return nil, zero, fmt.Errorf("gateway: %s has no passenger %d", rec.RecordLocator, req.PaxRef)
 		}
 
-		now := time.Now().UTC()
+		now := g.now()
 		number, err := g.nextTicketNumber(ctx, req.AirlineCode)
 		if err != nil {
 			return nil, zero, err
@@ -256,7 +256,7 @@ func (g *Gateway) AssociateEMD(ctx context.Context, locator string, number pnr.T
 			coupon, target.Status, target.Status.Meaning())
 	}
 
-	now := time.Now().UTC()
+	now := g.now()
 	expected := rec.Version
 	var detail string
 	if segmentRef == 0 {

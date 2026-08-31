@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"time"
 
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
@@ -90,7 +89,7 @@ func (g *Gateway) Split(ctx context.Context, req SplitRequest) (*SplitResult, er
 		// Both halves point at the carrier's single record until it splits too.
 		child.Locators = append(child.Locators, parent.Locators...)
 
-		now := time.Now().UTC()
+		now := g.now()
 		child.CreatedAt, child.UpdatedAt = now, now
 		parent.UpdatedAt = now
 
@@ -193,7 +192,7 @@ func (g *Gateway) sendDivide(ctx context.Context, parent, child *pnr.PNR, carrie
 	if peer.Format != store.FormatEDIFACT {
 		return fmt.Errorf("peer %s is a teletype link and the AIRIMP divide message is not implemented", peer.Name)
 	}
-	ref := nextControlRef()
+	ref := g.nextControlRef()
 	ic, err := padis.BuildDivide(parent, child, carrier, padis.BuildOptions{
 		Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
 		Recipient:  edifact.Party{ID: carrier, Qualifier: "ZZ"},

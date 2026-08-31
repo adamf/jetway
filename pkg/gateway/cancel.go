@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"time"
 
 	"github.com/adamf/jetway/pkg/airimp"
 	"github.com/adamf/jetway/pkg/edifact"
@@ -70,7 +69,7 @@ func (g *Gateway) Cancel(ctx context.Context, locator string, opts CancelOptions
 		}
 		carriers := map[string][]int{}
 		expected := rec.Version
-		now := time.Now().UTC()
+		now := g.now()
 		var events []store.Event
 
 		// Two passes over the segments, and the order is the point. The
@@ -216,7 +215,7 @@ func (g *Gateway) buildCancel(rec *pnr.PNR, carrier string, refs []int) (*cancel
 	}
 	switch peer.Format {
 	case store.FormatEDIFACT:
-		ref := nextControlRef()
+		ref := g.nextControlRef()
 		ic, err := padis.BuildCancel(rec, carrier, refs, padis.BuildOptions{
 			Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
 			Recipient:  edifact.Party{ID: carrier, Qualifier: "ZZ"},
@@ -245,7 +244,7 @@ func (g *Gateway) buildCancel(rec *pnr.PNR, carrier string, refs []int) (*cancel
 			Priority:     "QU",
 			Destinations: []typeb.Address{dest},
 			Origin:       mustAddress(g.Identity.TTYAddress),
-			OriginTime:   nowOriginTime(),
+			OriginTime:   g.nowOriginTime(),
 			Text:         text,
 		}
 		raw, err := out.Encode(typeb.EncodeOptions{Charset: typeb.CharsetITA2, CRLF: true})

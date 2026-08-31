@@ -67,7 +67,7 @@ func (g *Gateway) IssueTickets(ctx context.Context, locator string, opts IssueOp
 			return nil, ErrNothingToTicket
 		}
 
-		now := time.Now().UTC()
+		now := g.now()
 		expected := rec.Version
 		var events []store.Event
 
@@ -309,7 +309,7 @@ func (g *Gateway) sendTicketControl(ctx context.Context, rec *pnr.PNR, t pnr.Tic
 		// something they cannot read.
 		return fmt.Errorf("peer %s is a teletype link and carries no ticket control", peer.Name)
 	}
-	ref := nextControlRef()
+	ref := g.nextControlRef()
 	ic, err := padis.BuildTKCREQ(rec, t.Number, len(t.Coupons), coupons, padis.BuildOptions{
 		Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
 		Recipient:  edifact.Party{ID: carrier, Qualifier: "ZZ"},
@@ -448,7 +448,7 @@ func (g *Gateway) findTicket(ctx context.Context, number pnr.TicketNumber) (*pnr
 // would make the document worth nothing.
 func (g *Gateway) applyCouponChanges(ctx context.Context, rec *pnr.PNR, ticketIdx int,
 	peer *Peer, tc *padis.TicketControl, msg *store.Message) ([]padis.CouponRef, string) {
-	now := time.Now().UTC()
+	now := g.now()
 	var applied []padis.CouponRef
 	var refusal string
 	var events []store.Event
@@ -526,7 +526,7 @@ func operates(peer *Peer, seg *pnr.Segment) bool {
 
 func (g *Gateway) answerTicketControl(ctx context.Context, peer *Peer, msg *store.Message,
 	tc *padis.TicketControl, applied []padis.CouponRef, total int, refusal string) error {
-	ref := nextControlRef()
+	ref := g.nextControlRef()
 	ic, err := padis.BuildTKCRES(tc.Number, total, applied, refusal, padis.BuildOptions{
 		Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
 		Recipient:  edifact.Party{ID: peer.Carrier, Qualifier: "ZZ"},
@@ -561,7 +561,7 @@ func (g *Gateway) acceptTicketAdvice(ctx context.Context, peer *Peer, msg *store
 		return nil, err
 	}
 
-	now := time.Now().UTC()
+	now := g.now()
 	expected := rec.Version
 	t := pnr.Ticket{
 		Number: tc.Number, IssuedAt: now, IssuedBy: tc.Party,
