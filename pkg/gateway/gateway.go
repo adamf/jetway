@@ -544,6 +544,23 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 		g.Bus.Publish(EvMovement, ev)
 		return nil
 	}
+
+	// A name list is for an airport and a bag message is about a bag; neither
+	// touches a record here. Filing them applied keeps them out of the dead
+	// letter view and on the ledger, which is where a departure control or
+	// sortation system would read them.
+	if dec.NameList != nil {
+		msg.Status = store.StatusApplied
+		res.Status = store.StatusApplied
+		g.trace(msg.ID, "name_list", dec.Kind)
+		return nil
+	}
+	if dec.Baggage != nil {
+		msg.Status = store.StatusApplied
+		res.Status = store.StatusApplied
+		g.trace(msg.ID, "baggage", dec.Kind)
+		return nil
+	}
 	return g.apply(ctx, peer, msg, dec, res, opts)
 }
 

@@ -10,9 +10,11 @@ import (
 
 	"github.com/adamf/jetway/pkg/airimp"
 	"github.com/adamf/jetway/pkg/avs"
+	"github.com/adamf/jetway/pkg/baggage"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/mvt"
 	"github.com/adamf/jetway/pkg/padis"
+	"github.com/adamf/jetway/pkg/pnl"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/ssim"
 	"github.com/adamf/jetway/pkg/store"
@@ -53,6 +55,12 @@ type decoded struct {
 	Airimp *airimp.Message
 	// AVS is set when the message carries availability rather than a booking.
 	AVS *avs.Message
+	// NameList is set when the message is a PNL or ADL: a list for an
+	// airport, not an amendment to any one booking.
+	NameList *pnl.Message
+	// Baggage is set when the message is a BSM or BPM: about a bag, not a
+	// booking.
+	Baggage *baggage.Message
 	// Schedule is set when the message is an SSM or ASM. Like availability, a
 	// schedule change touches no single record and must not create one.
 	Schedule *ssim.Message
@@ -282,6 +290,44 @@ func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 		return d, nil
 	}
 
+	// Name lists are addressed to an airport about a departure, not to a
+	// reservation system about a booking; they classify and file, and feed
+	// nothing to the record grammar.
+	if pnl.IsNameList(tb.Text) {
+		nm, err := pnl.Parse(tb.Text)
+		if err != nil {
+			d.Kind = firstWord(tb.Text)
+			d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+				Layer: "pnl", Severity: "warn", Code: "unreadable_name_list",
+				Detail: err.Error(),
+			})
+			return d, nil
+		}
+		d.NameList = nm
+		d.Kind = string(nm.Kind) + "/" + nm.Flight
+		return d, nil
+	}
+
+	// Baggage messages are about a bag. Same rule: classify, file, and keep
+	// them away from the booking grammar.
+	if baggage.IsBaggage(tb.Text) {
+		bm, err := baggage.Parse(tb.Text)
+		if err != nil {
+			d.Kind = firstWord(tb.Text)
+			d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+				Layer: "baggage", Severity: "warn", Code: "unreadable_bag_message",
+				Detail: err.Error(),
+			})
+			return d, nil
+		}
+		d.Baggage = bm
+		d.Kind = string(bm.Kind)
+		if bm.Outbound != nil {
+			d.Kind += "/" + bm.Outbound.Flight
+		}
+		return d, nil
+	}
+
 	// Availability messages are Type B but say nothing about any booking, so
 	// they branch before the reservation grammar rather than being fed to it
 	// and producing a message full of unrecognised elements.
@@ -358,3 +404,12 @@ func typeBDedupKey(tb *typeb.Message) string {
 // msgTime anchors date resolution through the gateway's clock seam, so a
 // simulation driving time gets consistent date windows too.
 func (g *Gateway) msgTime(*Peer) time.Time { return g.now() }
+
+func firstWord(text string) string {
+	for _, ln := range strings.Split(text, "\n") {
+		if f := strings.Fields(ln); len(f) > 0 {
+			return f[0]
+		}
+	}
+	return "typeb"
+}

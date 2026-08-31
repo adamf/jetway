@@ -438,3 +438,48 @@ func TestFreeSaleExhaustionFallsBackToRequest(t *testing.T) {
 		t.Errorf("outcomes = %v, want 4 HK and 2 HL", statuses)
 	}
 }
+
+// A PNL is for an airport and a BSM is about a bag; both must classify,
+// file, and leave the record store alone. Feeding either to the booking
+// grammar would spray unrecognised-element diagnostics and, worse, invent a
+// record no passenger ever made.
+func TestNameListAndBaggageClassifyWithoutBookings(t *testing.T) {
+	ctx := context.Background()
+	_, air := wire(t, "BA", store.FormatTypeB)
+
+	wrap := func(text string) []byte {
+		return []byte("QU LHRRMBA\n.LONRM1J 010900\n" + text)
+	}
+	pnlText := "PNL\nBA0117/16DEC LHR PART1\n-JFK02Y\n1SMITH/JOHNMR .L/AB12CD\n1JONES/AMYMS\nENDPNL"
+	bsmText := "BSM\n.V/1LLHR\n.F/BA0117/16DEC/JFK/Y\n.N/0125999888001\n.P/SMITH/JOHN\nENDBSM"
+
+	for _, tc := range []struct{ text, wantKind string }{
+		{pnlText, "PNL/BA0117"},
+		{bsmText, "BSM/BA0117"},
+	} {
+		res, err := air.gw.Ingest(ctx, "1J", wrap(tc.text))
+		if err != nil {
+			t.Fatalf("ingest %s: %v", tc.wantKind, err)
+		}
+		m, err := air.st.GetMessage(ctx, res.MessageID)
+		if err != nil {
+			t.Fatalf("GetMessage: %v", err)
+		}
+		if m.Kind != tc.wantKind {
+			t.Errorf("kind = %q, want %q", m.Kind, tc.wantKind)
+		}
+	}
+	recs, _ := air.st.ListPNRs(ctx, 10)
+	if len(recs) != 0 {
+		t.Errorf("a name list or bag message created %d records", len(recs))
+	}
+	msgs, _ := air.st.ListMessages(ctx, store.MessageFilter{Limit: 10})
+	if len(msgs) != 2 {
+		t.Errorf("messages filed = %d, want 2", len(msgs))
+	}
+	for _, m := range msgs {
+		if m.Status == store.StatusDLQ || m.Status == store.StatusRejected {
+			t.Errorf("message %s (%s) landed at %s", m.ID, m.Kind, m.Status)
+		}
+	}
+}
