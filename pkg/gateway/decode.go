@@ -11,6 +11,7 @@ import (
 	"github.com/adamf/jetway/pkg/airimp"
 	"github.com/adamf/jetway/pkg/avs"
 	"github.com/adamf/jetway/pkg/edifact"
+	"github.com/adamf/jetway/pkg/mvt"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/ssim"
@@ -35,6 +36,9 @@ type decoded struct {
 	// Locators are the record locators the message refers to, in the order to
 	// try them when finding the record it belongs to.
 	Locators []string
+
+	// Movement is a parsed MVT/MVA/DIV, when the message is one.
+	Movement *mvt.Message
 
 	// NeedsReply reports that the sender is waiting for an answer.
 	NeedsReply bool
@@ -245,6 +249,30 @@ func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 			d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
 				Layer: "ssim", Severity: x.Severity.String(), Code: x.Code,
 				Detail: x.Detail, Line: x.Line,
+			})
+		}
+		return d, nil
+	}
+
+	// Movement messages are about an aircraft, not a booking, so they too
+	// branch before the reservation grammar. A parse failure is a diagnostic
+	// rather than a rejection: the bytes are already captured, and an MVT a
+	// profile cannot read is evidence, not garbage.
+	if mvt.IsMovement(tb.Text) {
+		mm, err := mvt.Parse(tb.Text)
+		if err != nil {
+			d.Kind = "MVT"
+			d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+				Layer: "mvt", Severity: "warn", Code: "unreadable_movement",
+				Detail: err.Error(),
+			})
+			return d, nil
+		}
+		d.Movement = mm
+		d.Kind = string(mm.Kind) + "/" + mm.Flight
+		for _, u := range mm.Unrecognised {
+			d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+				Layer: "mvt", Severity: "info", Code: "unrecognised_line", Detail: u,
 			})
 		}
 		return d, nil

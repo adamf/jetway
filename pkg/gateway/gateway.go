@@ -509,6 +509,23 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 	if dec.AVS != nil {
 		return g.applyAvailability(ctx, msg, dec, res)
 	}
+
+	// A movement message needs no application here yet: it touches no record
+	// and no cache. Marking it applied keeps it out of the dead letter view,
+	// and publishing it puts it on the bus, which is where an operations
+	// display -- the simulator's globe first among them -- watches from.
+	if dec.Movement != nil {
+		msg.Status = store.StatusApplied
+		res.Status = store.StatusApplied
+		g.trace(msg.ID, "movement", dec.Kind)
+		g.Bus.Publish(EvMovement, map[string]any{
+			"node": g.Identity.Name, "message_id": msg.ID,
+			"kind": string(dec.Movement.Kind), "flight": dec.Movement.Flight,
+			"day": dec.Movement.Day, "registration": dec.Movement.Registration,
+			"station": dec.Movement.Station,
+		})
+		return nil
+	}
 	return g.apply(ctx, peer, msg, dec, res, opts)
 }
 

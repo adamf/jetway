@@ -378,6 +378,7 @@ where this is wrong, that is the single most useful contribution available.
 | `pkg/ssim` | SSM and ASM schedule messages, as an extensible profile |
 | `pkg/ndc` | NDC order messages over HTTP: create, retrieve, cancel, and the order view |
 | `pkg/matip` | MATIP (RFC 2351): packet format and the Type B session handshake |
+| `pkg/mvt` | MVT/MVA/DIV aircraft movement messages: departures, arrivals, delays, diversions |
 | `pkg/ingress` | MATIP, HTTPS, TCP and file-drop listeners, and peer identity |
 | `pkg/egress` | Outbound delivery with backoff and restart recovery |
 | `pkg/spool` | Durable write-ahead buffer for inbound messages |

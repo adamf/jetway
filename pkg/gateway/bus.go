@@ -19,6 +19,10 @@ const (
 	EvAvail EventType = "avail"
 	// EvQueue reports a record placed on a work queue.
 	EvQueue EventType = "queue"
+	// EvMovement reports an aircraft movement message: a departure, an
+	// arrival, a delay, a diversion. It is what an operations display draws
+	// planes from.
+	EvMovement EventType = "movement"
 	// EvTrace narrates a pipeline step, which is what makes the console show
 	// the path a booking took rather than only its result.
 	EvTrace EventType = "trace"
