@@ -488,6 +488,11 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 			return nil
 		}
 	}
+	if g.Relay && dec.Interchange != nil {
+		if done := g.relayEDIFACT(ctx, peer, msg, dec, res); done {
+			return nil
+		}
+	}
 
 	if dec.TicketControl != nil {
 		return g.applyTicketControl(ctx, peer, msg, dec, res)
@@ -527,6 +532,60 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 		return nil
 	}
 	return g.apply(ctx, peer, msg, dec, res, opts)
+}
+
+// relayEDIFACT forwards an interchange to the peer its UNB recipient names,
+// and reports whether it was pure transit.
+//
+// EDIFACT is point-to-point where Type B broadcasts: one recipient, named in
+// the envelope rather than on an address line. The switch matches it against
+// the carrier designator its peers are registered under. Nothing is ever sent
+// back down the link it arrived on, and an interchange for a recipient this
+// switch does not know goes to undeliverable loudly -- a message switch that
+// quietly ate traffic for unknown subscribers would be the worst version of
+// itself.
+//
+// A transit interchange is not acknowledged here. CONTRL is a conversation
+// between the endpoints; the network's job is carriage, and an ack from the
+// middle would tell the sender their partner had received something the
+// partner may never receive.
+func (g *Gateway) relayEDIFACT(ctx context.Context, from *Peer, msg *store.Message, dec *decoded, res *Result) bool {
+	recipient := dec.Interchange.Recipient().ID
+	if recipient == "" || recipient == g.Identity.Designator {
+		return false
+	}
+	to := g.PeerForCarrier(recipient)
+	if to == nil {
+		to = g.Peer(recipient)
+	}
+
+	msg.Status = store.StatusApplied
+	res.Status = store.StatusApplied
+	switch {
+	case to == nil:
+		msg.Status = store.StatusUndeliverable
+		msg.Error = "interchange for " + recipient + ", who is not on this switch"
+		res.Status = store.StatusUndeliverable
+		g.trace(msg.ID, "relay", "no subscriber "+recipient)
+	case to.Name == from.Name:
+		// Addressed to its own sender's link. Never send it back.
+		msg.Status = store.StatusUndeliverable
+		msg.Error = "interchange for " + recipient + " arrived on that subscriber's own link"
+		res.Status = store.StatusUndeliverable
+		g.trace(msg.ID, "relay", "refusing to bounce "+recipient+" traffic back at them")
+	default:
+		id, err := g.Send(ctx, to, msg.Raw, "relay", "", msg.ID)
+		if err != nil {
+			msg.Status = store.StatusUndeliverable
+			msg.Error = "could not forward to " + recipient + ": " + err.Error()
+			res.Status = store.StatusUndeliverable
+			g.trace(msg.ID, "relay", recipient+": "+err.Error())
+		} else {
+			res.Replies = append(res.Replies, id)
+			g.trace(msg.ID, "relay", "forwarded to "+recipient)
+		}
+	}
+	return true
 }
 
 // relay forwards a message to the addressees that are not this node, and
