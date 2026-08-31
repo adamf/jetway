@@ -68,13 +68,17 @@ func (b *Bus) Publish(t EventType, data any) {
 	if len(b.history) > b.historyCap {
 		b.history = b.history[len(b.history)-b.historyCap:]
 	}
-	subs := make([]chan Event, 0, len(b.subs))
-	for _, c := range b.subs {
-		subs = append(subs, c)
-	}
 	b.mu.Unlock()
 
-	for _, c := range subs {
+	// The sends happen under the read lock, and that is a correctness rule,
+	// not a style choice: Unsubscribe closes the channel under the write
+	// lock, and a send racing that close panics the process. Snapshotting
+	// the subscriber list and sending unlocked -- the previous shape -- left
+	// exactly that window, and a world simulator tearing down five hundred
+	// subscribers found it. The sends are non-blocking, so holding the read
+	// lock costs microseconds.
+	b.mu.RLock()
+	for _, c := range b.subs {
 		select {
 		case c <- ev:
 		default:
@@ -82,6 +86,7 @@ func (b *Bus) Publish(t EventType, data any) {
 			// job is moving airline traffic, not guaranteeing delivery to a UI.
 		}
 	}
+	b.mu.RUnlock()
 }
 
 // Subscribe returns a channel of events and a function to release it.
