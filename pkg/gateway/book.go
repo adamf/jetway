@@ -63,6 +63,24 @@ type BookingRequest struct {
 	Channel string `json:"channel,omitempty"`
 }
 
+// nameOutsideWire reports the first character of s that cannot survive both
+// wire charsets -- teletype ITA2 and EDIFACT level A. A name outside this
+// repertoire encodes for nobody: the booking would be accepted, every request
+// to a carrier would fail to build, and the record would sit at HN forever.
+// Refusing at the counter is what every real distribution system does, and is
+// why ticketed names are plain uppercase Latin the world over.
+func nameOutsideWire(s string) (rune, bool) {
+	for _, r := range strings.ToUpper(s) {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == ' ', r == '-', r == '\'', r == '.', r == '/':
+		default:
+			return r, true
+		}
+	}
+	return 0, false
+}
+
 // Validate checks a request is coherent before anything is written.
 func (r *BookingRequest) Validate() error { return r.validate(time.Now().UTC()) }
 
@@ -78,6 +96,15 @@ func (r *BookingRequest) validate(now time.Time) error {
 	for i, p := range r.Passengers {
 		if p.Surname == "" || p.Given == "" {
 			return fmt.Errorf("passenger %d needs a surname and a given name", i+1)
+		}
+		for _, f := range []struct{ what, v string }{
+			{"surname", p.Surname}, {"given name", p.Given}, {"title", p.Title},
+		} {
+			if bad, ok := nameOutsideWire(f.v); ok {
+				return fmt.Errorf("passenger %d: %s contains %q, which no interline "+
+					"wire format can carry; names are limited to letters, digits, "+
+					"spaces, hyphens, apostrophes, periods and slashes", i+1, f.what, bad)
+			}
 		}
 	}
 	for i, s := range r.Segments {
