@@ -195,11 +195,21 @@ type MATIP struct {
 
 // Egress is how replies and requests reach a peer.
 type Egress struct {
-	// Type is "tcp_dial", "tcp_accept", "https_post" or "filedrop".
+	// Type is "tcp_dial", "tcp_accept", "https_post", "filedrop" or "via".
 	//
 	// "tcp_accept" means the peer connects to us and we reply on that session,
 	// which is the common arrangement when we host the listener.
+	//
+	// "via" means this peer is reached through another peer's link, named in
+	// Via. This is how the real network is wired: a carrier does not hold a
+	// circuit to every partner, it holds one to the message switch and
+	// addresses the rest by their teletype address. The transit link carries
+	// the bytes; the address line already names the true destination, and the
+	// switch routes on it.
 	Type string `yaml:"type"`
+	// Via names the peer whose link carries this peer's traffic, for
+	// egress type "via".
+	Via  string `yaml:"via"`
 	Addr string `yaml:"addr"`
 	URL  string `yaml:"url"`
 	Dir  string `yaml:"dir"`

@@ -243,7 +243,41 @@ func framerFor(f config.Framing) (transport.Framer, error) {
 // Build constructs the sender for a peer's configured egress. sessions supplies
 // delivery over an inbound link for the "tcp_accept" arrangement, where the
 // partner connects to us and replies go back down that same session.
+// Resolver finds another peer's sender, which is what a "via" egress needs:
+// the transit peer's link is looked up at send time, so registration order
+// does not matter and a transit link that reconnects is picked up.
+type Resolver interface {
+	Sender(peer string) (Sender, bool)
+}
+
 func Build(p config.Peer, sessions func(ctx context.Context, peer string, raw []byte) error, log *slog.Logger) (Sender, error) {
+	return BuildWith(p, sessions, nil, log)
+}
+
+// BuildWith is Build with a resolver for "via" egress. Build keeps its
+// signature because most peers do not transit.
+func BuildWith(p config.Peer, sessions func(ctx context.Context, peer string, raw []byte) error, transit Resolver, log *slog.Logger) (Sender, error) {
+	switch p.Egress.Type {
+	case "via":
+		if p.Egress.Via == "" {
+			return nil, fmt.Errorf("egress: peer %q uses via but names no transit peer", p.Name)
+		}
+		if transit == nil {
+			return nil, fmt.Errorf("egress: peer %q uses via but no resolver was supplied", p.Name)
+		}
+		through := p.Egress.Via
+		name := p.Name
+		return SenderFunc{
+			Fn: func(ctx context.Context, raw []byte) error {
+				s, ok := transit.Sender(through)
+				if !ok {
+					return fmt.Errorf("egress: no link to %q to carry traffic for %q", through, name)
+				}
+				return s.Send(ctx, raw)
+			},
+			Desc: "via " + through,
+		}, nil
+	}
 	switch p.Egress.Type {
 	case "tcp_accept":
 		if sessions == nil {

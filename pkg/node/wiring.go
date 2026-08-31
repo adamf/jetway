@@ -126,7 +126,7 @@ func (n *Node) registerPeers() error {
 			Name: p.Name, Carrier: p.Carrier, Format: format,
 			TTYAddress: p.TTYAddress, Addresses: p.Addresses, CONTRL: p.CONTRL,
 		})
-		s, err := egress.Build(p, sessions, log)
+		s, err := egress.BuildWith(p, sessions, router, log)
 		if err != nil {
 			return err
 		}
