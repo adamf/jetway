@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strconv"
@@ -90,11 +91,25 @@ type carrierRow struct {
 	Unreachable int   `json:"unreachable"`
 }
 
+// insightsTTL is how long a computed snapshot serves repeat requests. The
+// aggregate walks thousands of records and messages; twenty open consoles
+// polling every couple of seconds must cost one computation, not twenty.
+const insightsTTL = 2 * time.Second
+
 func (s *Server) insights(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
 	limit := intParam(r, "limit", 2000)
+	s.insightsMu.Lock()
+	if s.insightsBody != nil && s.insightsFor == limit && time.Since(s.insightsAt) < insightsTTL {
+		body := s.insightsBody
+		s.insightsMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body) //nolint:errcheck
+		return
+	}
+	s.insightsMu.Unlock()
 	recs, err := s.Store.ListPNRs(ctx, limit)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -240,7 +255,16 @@ func (s *Server) insights(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Carrier < rows[j].Carrier })
 	out.Carriers = rows
 
-	writeJSON(w, http.StatusOK, out)
+	body, err := json.Marshal(out)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.insightsMu.Lock()
+	s.insightsBody, s.insightsFor, s.insightsAt = body, limit, time.Now()
+	s.insightsMu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body) //nolint:errcheck
 }
 
 // addAmount accumulates a money amount per category and currency. Currencies

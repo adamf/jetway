@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/adamf/jetway/pkg/demo"
@@ -38,6 +39,13 @@ type Server struct {
 	// Fleet is the simulated carrier fleet, when one is running. Nil in a
 	// deployment with real partners.
 	Fleet *demo.RunningFleet
+
+	// The last insights snapshot, served to repeat requests inside a short
+	// TTL so open consoles share one computation.
+	insightsMu   sync.Mutex
+	insightsAt   time.Time
+	insightsFor  int
+	insightsBody []byte
 
 	// Console serves the operations console. It is unauthenticated, so a
 	// deployment reachable beyond a trusted network should turn it off.

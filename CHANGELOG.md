@@ -1,0 +1,67 @@
+# Changelog
+
+Jetway is pre-1.0: the API moves when the evidence says it should. Most of
+what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
+driving hundreds of embedded jetway assemblies through a simulated day of
+global airline traffic -- the widening exercise surface is the test plan.
+
+## v0.1.14
+- The `/api/insights` aggregate serves a short-TTL snapshot, so twenty open
+  consoles cost one computation instead of twenty.
+- Migration 0006 partitions the Postgres message log by time when it is
+  empty -- a month of history becomes a partition to drop, not millions of
+  rows to delete. A log that already holds data is left alone with a notice.
+
+## v0.1.13 — Name lists and bag messages
+- New `pnl` package: the Passenger Name List and Additions and Deletions
+  List (RP 1707/1708, reconstructed from free documentation), with Type B
+  envelope partitioning.
+- New `baggage` package: the Baggage Source and Baggage Processed messages
+  (RP 1745), unknown elements carried verbatim.
+- The gateway classifies both on ingest and keeps them away from the
+  booking grammar.
+
+## v0.1.12 — The availability cache advises; it never bars the door
+- A locally exhausted free-sale count no longer fabricates a "carrier
+  reported closed" refusal; the next booking asks the carrier.
+- A genuine carrier Closed bars free sale but not the request -- the
+  carrier answers, often with the waitlist the old shortcut denied.
+
+## v0.1.11 — MATIP client
+- The MATIP package gained the initiating side: a reconnecting client with
+  the same contract as the plain transport client, so airline hosts can
+  dial in over RFC 2351.
+
+## v0.1.10 — Names outside the wire charset are refused at the counter
+- A surname no wire format can carry (underscores, accents) is refused at
+  booking validation instead of being accepted and stranded at HN forever.
+
+## v0.1.9 — A clock seam
+- Gateway, Bus and both stores take an optional `Now func() time.Time`;
+  every stamped timestamp reads through it, so simulations can drive time
+  and replays can pin it.
+
+## v0.1.8 — LivePeers means sessions
+- `LivePeers` no longer folds in the router's configured egress list, which
+  never shrinks; a dead link now reads as dead.
+
+## v0.1.7 — Idle links die with their context
+- Both transport sides close the conn via `context.AfterFunc`, so
+  cancelling a quiet link actually takes it down.
+
+## v0.1.6 — Cancellations stay cancelled
+- EDIFACT cancels carry message function 1 (cancellation) and are applied
+  as advisories, never answered as sells.
+- `Recompute` derives liveness from the rescode vocabulary: refusals and
+  cancellations are dead, unknown codes stay live.
+
+## v0.1.5 and earlier
+- v0.1.5: bus publishes under the read lock (subscribe/publish race).
+- v0.1.4: the console serves from any path prefix.
+- v0.1.3: movement events carry the diversion airport.
+- v0.1.2: flight keys split at the designator, so U2 and other
+  alphanumeric designators route correctly.
+- v0.1.1: embedders can extend the console mux.
+- v0.1.0: first public cut -- Type B/AIRIMP and EDIFACT/PADIS gateways, the
+  PNR store, queues, sweeps, AVS, MVT, SSM/ASM, NDC, MATIP ingress, the
+  live console.
