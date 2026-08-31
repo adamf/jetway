@@ -101,7 +101,9 @@ func TestDecisions(t *testing.T) {
 		want   Decision
 	}{
 		{Open, FreeSale},
-		{Closed, Refuse},
+		// Closed bars free sale, not the request: the carrier answers, and
+		// may waitlist what a refusing shortcut would have denied.
+		{Closed, Ask},
 		{Waitlist, AskWaitlist},
 		{Request, Ask},
 	}
@@ -135,8 +137,9 @@ func TestSeatCountBoundsFreeSale(t *testing.T) {
 }
 
 // Two bookings in quick succession must not both sell the last seat on the
-// strength of one broadcast.
-func TestSoldDecrementsAndCloses(t *testing.T) {
+// strength of one broadcast -- and the exhausted count means ask, because
+// the decrement is our bookkeeping, not a carrier assertion.
+func TestSoldDecrementsAndStopsFreeSale(t *testing.T) {
 	now := at(2026, time.September, 1, 12)
 	c := newTestCache(now)
 	c.Put(Entry{Key: key("Y"), Status: Open, Seats: 2, SeatsKnown: true, Source: SourceAVS, AsOf: now})
@@ -148,11 +151,11 @@ func TestSoldDecrementsAndCloses(t *testing.T) {
 	}
 	c.Sold(key("Y"), 1)
 	e, _, _ = c.Lookup(key("Y"))
-	if e.Seats != 0 || e.Status != Closed {
-		t.Errorf("selling the last seat must close the class: %+v", e)
+	if e.Seats != 0 || e.Status != Open {
+		t.Errorf("selling the last seat empties the count but asserts nothing: %+v", e)
 	}
-	if d, _ := c.Decide(key("Y"), 1); d != Refuse {
-		t.Errorf("decision after sell-out = %q, want refuse", d)
+	if d, _ := c.Decide(key("Y"), 1); d != Ask {
+		t.Errorf("decision after sell-out = %q, want ask", d)
 	}
 	// A status with no count is not decremented; there is nothing to decrement.
 	c2 := newTestCache(now)
@@ -283,5 +286,39 @@ func TestConcurrentUse(t *testing.T) {
 	wg.Wait()
 	if c.Len() != 20 {
 		t.Errorf("entries = %d, want 20", c.Len())
+	}
+}
+
+// Selling down a broadcast locally is bookkeeping, not a carrier assertion.
+// Sold once flipped the entry to Closed, and Decide then refused with
+// "carrier reported closed" -- words the carrier never sent. Exhausting the
+// free-sale count means the next booking asks the carrier, nothing more.
+func TestSoldOutLocallyMeansAskNotRefuse(t *testing.T) {
+	c := NewCache()
+	k := NewKey("BA", "0175", time.Now().AddDate(0, 0, 30), "LHR", "JFK", "Y")
+	c.Put(Entry{Key: k, Status: Open, Seats: 2, SeatsKnown: true,
+		Source: SourceAVS, AsOf: time.Now()})
+
+	if d, _ := c.Decide(k, 1); d != FreeSale {
+		t.Fatalf("fresh open entry decided %v, want free sale", d)
+	}
+	c.Sold(k, 2)
+	d, reason := c.Decide(k, 1)
+	if d != Ask {
+		t.Errorf("after selling the broadcast down, Decide = %v (%s), want Ask: "+
+			"the carrier is the authority on what happens next", d, reason)
+	}
+}
+
+// A carrier reporting closed means no free sale; it does not mean the door
+// is barred. Real distribution still places the request, and the carrier
+// answers -- often with a waitlist the refusing shortcut would have denied.
+func TestCarrierClosedStillAsksTheCarrier(t *testing.T) {
+	c := NewCache()
+	k := NewKey("BA", "0175", time.Now().AddDate(0, 0, 30), "LHR", "JFK", "Y")
+	c.Put(Entry{Key: k, Status: Closed, Source: SourceAVS, AsOf: time.Now()})
+	d, reason := c.Decide(k, 1)
+	if d != Ask {
+		t.Errorf("closed entry decided %v (%s), want Ask", d, reason)
 	}
 }

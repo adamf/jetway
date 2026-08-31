@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adamf/jetway/pkg/avail"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/store"
 )
@@ -404,5 +405,36 @@ func TestEndToEndCancelStaysCancelled(t *testing.T) {
 				t.Errorf("carrier side logged %d messages, want 3 (sell, reply, cancel)", len(airMsgs))
 			}
 		})
+	}
+}
+
+// A warm availability cache must never make service worse. With free sale
+// exhausted the next booking falls back to asking the carrier -- which
+// waitlists it -- rather than being refused on the strength of the GDS's own
+// bookkeeping. Six bookings against four seats and a warm cache settle
+// exactly as they would have cold: four confirmed, two waitlisted.
+func TestFreeSaleExhaustionFallsBackToRequest(t *testing.T) {
+	ctx := context.Background()
+	gds, _ := wire(t, "BA", store.FormatTypeB)
+
+	depart := time.Now().UTC().AddDate(0, 0, 30)
+	gds.gw.Avail = avail.NewCache()
+	gds.gw.Avail.Put(avail.Entry{
+		Key:    avail.NewKey("BA", "0175", depart, "LHR", "JFK", "Y"),
+		Status: avail.Open, Seats: 4, SeatsKnown: true,
+		Source: avail.SourceAVS, AsOf: time.Now(),
+	})
+
+	statuses := map[string]int{}
+	for i := 0; i < 6; i++ {
+		res, err := gds.gw.Book(ctx, booking("Y", 1))
+		if err != nil {
+			t.Fatalf("booking %d refused: %v", i+1, err)
+		}
+		rec, _ := gds.st.GetPNR(ctx, res.PNR.RecordLocator)
+		statuses[rec.Segments[0].Status]++
+	}
+	if statuses["HK"] != 4 || statuses["HL"] != 2 {
+		t.Errorf("outcomes = %v, want 4 HK and 2 HL", statuses)
 	}
 }

@@ -207,8 +207,8 @@ func TestParsedMessageFeedsTheCache(t *testing.T) {
 		t.Errorf("Y with four seats open should free-sell, got %q (%s)", d, why)
 	}
 	d, why = c.Decide(avail.NewKey("BA", "0175", depart, "LHR", "JFK", "J"), 1)
-	if d != avail.Refuse {
-		t.Errorf("J closed should refuse, got %q (%s)", d, why)
+	if d != avail.Ask {
+		t.Errorf("J closed should bar free sale and ask the carrier, got %q (%s)", d, why)
 	}
 	d, _ = c.Decide(avail.NewKey("BA", "0175", depart, "LHR", "JFK", "F"), 1)
 	if d != avail.Ask {

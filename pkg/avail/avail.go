@@ -260,7 +260,10 @@ func (c *Cache) Decide(k Key, seats int) (Decision, string) {
 	}
 	switch e.Status {
 	case Closed:
-		return Refuse, fmt.Sprintf("carrier reported closed %s ago via %s", age, e.Source)
+		// Closed means no free sale, not a barred door: real distribution
+		// still places the request, and the carrier answers -- often with
+		// the waitlist a refusing shortcut would have denied.
+		return Ask, fmt.Sprintf("carrier reported closed %s ago via %s; requesting", age, e.Source)
 	case Waitlist:
 		return AskWaitlist, fmt.Sprintf("carrier reported waitlist %s ago via %s", age, e.Source)
 	case Open:
@@ -279,6 +282,12 @@ func (c *Cache) Decide(k Key, seats int) (Decision, string) {
 // Sold decrements a known seat count after a free sale, so two bookings in
 // quick succession cannot both sell the last seat on the strength of one
 // broadcast.
+//
+// The count is bookkeeping, not a carrier assertion: the status stays what
+// the carrier said. At zero the decision logic stops free-selling and asks
+// the carrier -- it once flipped the entry to Closed instead, and the next
+// booking was refused with "carrier reported closed", words the carrier
+// never sent.
 func (c *Cache) Sold(k Key, seats int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -287,9 +296,8 @@ func (c *Cache) Sold(k Key, seats int) {
 		return
 	}
 	e.Seats -= seats
-	if e.Seats <= 0 {
+	if e.Seats < 0 {
 		e.Seats = 0
-		e.Status = Closed
 	}
 	c.entries[k] = e
 }
