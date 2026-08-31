@@ -532,7 +532,7 @@ const state = {
 
 /* ---------------- status & topology ---------------- */
 async function loadStatus(){
-  const r = await fetch("/api/status"); const s = await r.json();
+  const r = await fetch("api/status"); const s = await r.json();
   state.identity = s.identity; state.peers = s.peers || [];
   $("#ident").textContent = `${s.identity.designator} · ${s.identity.tty}`;
 
@@ -572,7 +572,7 @@ function pulse(peer, reverse){
 
 /* ---------------- flights ---------------- */
 async function loadFlights(){
-  const r = await fetch("/api/flights"); const d = await r.json();
+  const r = await fetch("api/flights"); const d = await r.json();
   const fl = $("#fl");
   for (const f of d.flights){
     const o = el("option", null,
@@ -600,7 +600,7 @@ function updateHint(){
   let h = peer ? `${f.c} speaks ${peer.format === "edifact" ? "PADIS EDIFACT" : "Type B / AIRIMP"}.` : "";
   $("#bookhint").textContent = h;
   // Say what availability implies before the button is pressed.
-  fetch("/api/availability").then(r => r.json()).then(d => {
+  fetch("api/availability").then(r => r.json()).then(d => {
     const e = (d.entries||[]).find(x => x.carrier===f.c && x.flight_num===f.n &&
       x.board===f.b && x.off===f.o && x.class===cls && x.fresh);
     if (!e){ $("#bookhint").textContent = h + " No availability held — this will be requested."; return; }
@@ -627,7 +627,7 @@ $("#go").addEventListener("click", async () => {
   const ssr = $("#ssr").value;
   if (ssr) body.ssrs = [{code:ssr, carrier:f.c}];
   try {
-    const r = await fetch("/api/book", {method:"POST", headers:{"Content-Type":"application/json"},
+    const r = await fetch("api/book", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify(body)});
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || "booking failed");
@@ -649,7 +649,7 @@ function schedule(name, fn){
 
 /* ---------------- live stream ---------------- */
 function connect(){
-  const src = new EventSource("/api/stream");
+  const src = new EventSource("api/stream");
   src.addEventListener("message", e => onMessage(JSON.parse(e.data).Data ?? JSON.parse(e.data).data));
   src.addEventListener("pnr", e => { const d = payload(e); onPnr(d); });
   src.addEventListener("link", () => loadStatus());
@@ -754,7 +754,7 @@ async function openMessage(id, node){
   const q = src && src !== state.identity.designator ? "?node=" + encodeURIComponent(src) : "";
   let data = null, fetchErr = "";
   try {
-    const r = await fetch(`/api/message/${encodeURIComponent(id)}${q}`);
+    const r = await fetch(`api/message/${encodeURIComponent(id)}${q}`);
     if (r.ok) data = await r.json();
     else fetchErr = ((await r.json().catch(()=>({}))).error) || r.statusText || ("HTTP " + r.status);
   } catch(e){ fetchErr = e.message; }
@@ -819,7 +819,7 @@ async function openMessage(id, node){
     const rb = el("button","ghost","Replay"); rb.style.marginLeft = "auto";
     rb.addEventListener("click", async () => {
       rb.disabled = true; rb.textContent = "Replaying…";
-      await fetch(`/api/message/${encodeURIComponent(id)}/replay`, {method:"POST"});
+      await fetch(`api/message/${encodeURIComponent(id)}/replay`, {method:"POST"});
       rb.textContent = "Replay"; rb.disabled = false;
     });
     rh.appendChild(rb);
@@ -845,7 +845,7 @@ function fieldList(fields){
 /* ---------------- records ---------------- */
 async function refreshAvail(){
   let d;
-  try { d = await (await fetch("/api/availability")).json(); } catch(e){ return; }
+  try { d = await (await fetch("api/availability")).json(); } catch(e){ return; }
   const list = $("#availlist"); list.innerHTML = "";
   $("#availcount").textContent = d.held || 0;
   const rows = (d.entries || []);
@@ -888,7 +888,7 @@ async function refreshAvail(){
 
 async function refreshPnrs(){
   try{
-    const r = await fetch("/api/pnrs?limit=200"); const d = await r.json();
+    const r = await fetch("api/pnrs?limit=200"); const d = await r.json();
     state.pnrs = d.pnrs || [];
   }catch(e){ return; }
   renderPnrs();
@@ -975,7 +975,7 @@ async function selectPnr(loc, keepPane){
   document.querySelectorAll(".tab[data-pane]").forEach(x =>
     x.classList.toggle("on", x.dataset.pane === "pnr"));
   refreshPnrs();
-  const r = await fetch("/api/pnr/" + encodeURIComponent(loc));
+  const r = await fetch("api/pnr/" + encodeURIComponent(loc));
   if (!r.ok){ blank("Record not found."); return; }
   const d = await r.json(); const p = d.pnr;
 
@@ -1083,7 +1083,7 @@ function renderSplitCard(box, p){
     }
     go.disabled = true;
     try {
-      const r = await fetch(`/api/pnr/${encodeURIComponent(p.record_locator)}/split?by=console`,
+      const r = await fetch(`api/pnr/${encodeURIComponent(p.record_locator)}/split?by=console`,
         {method:"POST", headers:{"content-type":"application/json"},
          body: JSON.stringify({passengers: chosen})});
       const d = await r.json().catch(() => ({}));
@@ -1145,7 +1145,7 @@ function renderTicketCard(box, p){
       }
       go.disabled = true;
       try {
-        const r = await fetch(`/api/pnr/${encodeURIComponent(p.record_locator)}/ticket?airline_code=${code.value}&by=console`,
+        const r = await fetch(`api/pnr/${encodeURIComponent(p.record_locator)}/ticket?airline_code=${code.value}&by=console`,
           {method:"POST"});
         if (!r.ok){
           const e = await r.json().catch(() => ({}));
@@ -1191,7 +1191,7 @@ function renderCancelCard(box, p){
     }
     btn.disabled = true;
     try {
-      const r = await fetch(`/api/pnr/${encodeURIComponent(p.record_locator)}/cancel?by=console`, {method:"POST"});
+      const r = await fetch(`api/pnr/${encodeURIComponent(p.record_locator)}/cancel?by=console`, {method:"POST"});
       const d = await r.json().catch(() => ({}));
       if (!r.ok){ b.appendChild(el("div","err", d.error || ("cancel failed: " + r.status))); return; }
       if ((d.unreachable||[]).length){
@@ -1329,7 +1329,7 @@ const pct = (part, whole) => whole ? Math.round(100 * part / whole) + "%" : "\u2
 async function refreshInsights(){
   const box = $("#insights");
   let d;
-  try { d = await fetch("/api/insights").then(r => r.json()); } catch (e) { return; }
+  try { d = await fetch("api/insights").then(r => r.json()); } catch (e) { return; }
   box.innerHTML = "";
 
   box.appendChild(el("div","sect","Selling"));
@@ -1412,7 +1412,7 @@ state.queueCounts = [];
 
 async function refreshQueues(){
   try {
-    const qs = await fetch("/api/queues").then(r => r.json());
+    const qs = await fetch("api/queues").then(r => r.json());
     state.queueCounts = qs.queues || [];
     const total = qs.pending || 0;
     const badge = $("#qtotal");
@@ -1446,7 +1446,7 @@ async function loadQueueItems(){
   $("#qname").textContent = state.queue ? state.queue : "All queues";
   let items = [];
   try {
-    items = (await fetch(`/api/queue/${encodeURIComponent(name)}${worked}`).then(r => r.json())).items || [];
+    items = (await fetch(`api/queue/${encodeURIComponent(name)}${worked}`).then(r => r.json())).items || [];
   } catch (e) { return; }
   const box = $("#qitems"); box.innerHTML = "";
   $("#qcount").textContent = items.length;
@@ -1472,7 +1472,7 @@ function queueItem(it){
     const b = el("button", "qwork", "Work");
     b.addEventListener("click", async () => {
       b.disabled = true;
-      const r = await fetch(`/api/queue/item/${encodeURIComponent(it.id)}/work?by=console`, {method:"POST"});
+      const r = await fetch(`api/queue/item/${encodeURIComponent(it.id)}/work?by=console`, {method:"POST"});
       // A 409 means somebody else cleared it first; refreshing shows the truth
       // either way, so both paths do the same thing.
       if (!r.ok && r.status !== 409) b.disabled = false;
@@ -1573,7 +1573,7 @@ function renderRecords(){
 async function openRecord(loc){
   state.selPnr = loc;
   renderRecords();
-  const r = await fetch("/api/pnr/" + encodeURIComponent(loc));
+  const r = await fetch("api/pnr/" + encodeURIComponent(loc));
   const box = $("#rdetail"); box.innerHTML = "";
   if (!r.ok){ box.appendChild(el("div","empty","Record not found.")); return; }
   const d = await r.json(); const p = d.pnr;
