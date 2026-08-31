@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/adamf/jetway/pkg/ulid"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/ulid"
 )
 
 // Mem is an in-memory Store.

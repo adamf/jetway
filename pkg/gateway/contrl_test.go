@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adamf/jetway/pkg/queue"
-	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/queue"
+	"github.com/adamf/jetway/pkg/store"
 )
 
 // contrlNode builds a gateway with an EDIFACT peer and captures what it sends.

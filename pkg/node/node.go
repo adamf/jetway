@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/adamf/jetway/pkg/api"
+	"github.com/adamf/jetway/pkg/avail"
 	"github.com/adamf/jetway/pkg/config"
 	"github.com/adamf/jetway/pkg/demo"
 	"github.com/adamf/jetway/pkg/egress"
@@ -24,7 +25,6 @@ import (
 	"github.com/adamf/jetway/pkg/queue"
 	"github.com/adamf/jetway/pkg/spool"
 	"github.com/adamf/jetway/pkg/store"
-	"github.com/adamf/jetway/pkg/avail"
 )
 
 // Node is an assembled gateway: store, links, queues, sweeper and console.

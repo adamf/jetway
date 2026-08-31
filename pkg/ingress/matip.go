@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/adamf/jetway/pkg/config"
-	"github.com/adamf/jetway/pkg/metrics"
 	"github.com/adamf/jetway/pkg/matip"
+	"github.com/adamf/jetway/pkg/metrics"
 )
 
 // MATIP accepts Type B traffic over MATIP sessions, per RFC 2351.

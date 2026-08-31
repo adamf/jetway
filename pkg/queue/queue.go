@@ -32,10 +32,10 @@ import (
 	"time"
 
 	"github.com/adamf/jetway/pkg/metrics"
-	"github.com/adamf/jetway/pkg/store"
-	"github.com/adamf/jetway/pkg/telemetry"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/rescode"
+	"github.com/adamf/jetway/pkg/store"
+	"github.com/adamf/jetway/pkg/telemetry"
 
 	"go.opentelemetry.io/otel/trace"
 )

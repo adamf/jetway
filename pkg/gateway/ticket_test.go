@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/queue"
 	"github.com/adamf/jetway/pkg/store"
-	"github.com/adamf/jetway/pkg/pnr"
 )
 
 func ticketNode(t *testing.T) *Gateway {

@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/rescode"
+	"github.com/adamf/jetway/pkg/store"
 )
 
 // Sweeper places records on queues for things that happen because time passed

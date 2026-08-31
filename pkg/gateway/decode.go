@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/airimp"
 	"github.com/adamf/jetway/pkg/avs"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/ssim"
+	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/typeb"
 )
 

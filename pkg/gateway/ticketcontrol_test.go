@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/store"
 )
 
 // ticketControlNode is a gateway with two EDIFACT carriers, so a coupon can be

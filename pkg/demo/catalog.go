@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/avail"
+	"github.com/adamf/jetway/pkg/store"
 )
 
 // Carrier describes a simulated airline reservation system.

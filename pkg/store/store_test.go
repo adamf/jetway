@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adamf/jetway/pkg/ulid"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/ulid"
 )
 
 // Every backend must satisfy the same contract. Running one suite over both is

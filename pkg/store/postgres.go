@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/adamf/jetway/pkg/ulid"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/ulid"
 )
 
 // Postgres is the production Store.

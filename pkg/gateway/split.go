@@ -7,11 +7,11 @@ import (
 	"sort"
 	"time"
 
-	"github.com/adamf/jetway/pkg/store"
-	"github.com/adamf/jetway/pkg/telemetry"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/store"
+	"github.com/adamf/jetway/pkg/telemetry"
 )
 
 // SplitRequest asks for passengers to be divided onto their own record.

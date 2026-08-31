@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adamf/jetway/pkg/ulid"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/ulid"
 )
 
 // benchStore returns the Postgres backend, or skips. These numbers decide how

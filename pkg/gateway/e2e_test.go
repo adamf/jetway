@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/store"
 )
 
 // node bundles a gateway with the store behind it, for assertions.

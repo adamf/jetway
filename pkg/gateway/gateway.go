@@ -19,19 +19,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/adamf/jetway/pkg/metrics"
-	"github.com/adamf/jetway/pkg/queue"
-	"github.com/adamf/jetway/pkg/store"
-	"github.com/adamf/jetway/pkg/telemetry"
-	"github.com/adamf/jetway/pkg/ulid"
 	"github.com/adamf/jetway/pkg/airimp"
 	"github.com/adamf/jetway/pkg/avail"
 	"github.com/adamf/jetway/pkg/avs"
 	"github.com/adamf/jetway/pkg/edifact"
+	"github.com/adamf/jetway/pkg/metrics"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/queue"
 	"github.com/adamf/jetway/pkg/ssim"
+	"github.com/adamf/jetway/pkg/store"
+	"github.com/adamf/jetway/pkg/telemetry"
 	"github.com/adamf/jetway/pkg/typeb"
+	"github.com/adamf/jetway/pkg/ulid"
 )
 
 // Identity is how this node names itself to partners.

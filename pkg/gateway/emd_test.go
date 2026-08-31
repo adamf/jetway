@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/store"
 )
 
 func emdNode(t *testing.T) (*Gateway, *sentTo) { return ticketControlNode(t) }

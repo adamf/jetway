@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/typeb"
 )
 
