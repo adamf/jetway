@@ -70,7 +70,7 @@ type Resolver struct {
 	static   string
 	byCertCN map[string]string
 	byCIDR   []cidrPeer
-	hello bool
+	hello    bool
 }
 
 type cidrPeer struct {
