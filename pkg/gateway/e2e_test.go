@@ -5,12 +5,14 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/adamf/jetway/pkg/avail"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/store"
+	"github.com/adamf/jetway/pkg/ulid"
 )
 
 // node bundles a gateway with the store behind it, for assertions.
@@ -482,4 +484,70 @@ func TestNameListAndBaggageClassifyWithoutBookings(t *testing.T) {
 			t.Errorf("message %s (%s) landed at %s", m.ID, m.Kind, m.Status)
 		}
 	}
+}
+
+// On a bounded store under load, a message can be evicted between capture
+// and outcome -- on a starved machine the gap stretches past the eviction
+// horizon. Recording the outcome of an evicted message is a no-op -- the
+// ledger chose to forget it -- and must not error: on a busy switch the old
+// ERROR fired thousands of times a minute, and the logging alone was a real
+// cost on a small machine. The shim forces the gap deterministically.
+func TestOutcomeOfAnEvictedMessageIsQuiet(t *testing.T) {
+	ctx := context.Background()
+	log, counted := countingLogger()
+	mem := store.NewMem()
+	mem.MaxMessages = 2
+	gw := New(Identity{Designator: "1J", TTYAddress: "LONRM1J", Name: "evict"},
+		mem, NewBus(16), log, []byte("evict-test"))
+	gw.Store = evictBetween{Store: mem, mem: mem}
+	gw.AddPeer(&Peer{Name: "BA", Carrier: "BA", Format: store.FormatTypeB, TTYAddress: "LHRRMBA"})
+
+	raw := []byte("QU LONRM1J\n.LHRRMBA 010900\nAVS\nBA0175/15DEC/LHRJFK\nY/O2\n")
+	if _, err := gw.Ingest(ctx, "BA", raw); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if n := counted(); n != 0 {
+		t.Errorf("%d error lines logged for an outcome the ledger had already forgotten", n)
+	}
+}
+
+// evictBetween trims the message between its capture and its outcome, which
+// is what a bounded ledger under sustained load really does.
+type evictBetween struct {
+	store.Store
+	mem *store.Mem
+}
+
+func (e evictBetween) UpdateMessage(ctx context.Context, m *store.Message) error {
+	for i := 0; i < 3; i++ {
+		filler := &store.Message{
+			ID: ulid.New(), Direction: store.Inbound, At: time.Now().UTC(),
+			Transport: "test", Peer: "XX", Format: store.FormatTypeB,
+			Raw: []byte("filler"), Status: store.StatusApplied,
+		}
+		if err := e.mem.AppendMessage(ctx, filler); err != nil {
+			return err
+		}
+	}
+	return e.Store.UpdateMessage(ctx, m)
+}
+
+// countingLogger counts error-level lines, so a test can assert quiet.
+func countingLogger() (*slog.Logger, func() int) {
+	var n atomic.Int64
+	h := slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError})
+	counting := countingHandler{Handler: h, n: &n}
+	return slog.New(counting), func() int { return int(n.Load()) }
+}
+
+type countingHandler struct {
+	slog.Handler
+	n *atomic.Int64
+}
+
+func (c countingHandler) Handle(ctx context.Context, r slog.Record) error {
+	if r.Level >= slog.LevelError {
+		c.n.Add(1)
+	}
+	return c.Handler.Handle(ctx, r)
 }

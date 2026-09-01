@@ -418,7 +418,16 @@ func (g *Gateway) IngestWith(ctx context.Context, peerName string, raw []byte, o
 		g.trace(msg.ID, "dlq", err.Error())
 	}
 	if uerr := g.Store.UpdateMessage(ctx, msg); uerr != nil {
-		g.Log.Error("failed to record message outcome", "id", msg.ID, "err", uerr)
+		if errors.Is(uerr, store.ErrNotFound) {
+			// A bounded ledger trimmed the message between capture and
+			// outcome, which sustained load makes routine. The ledger chose
+			// to forget it; there is nothing left to record and nothing
+			// wrong -- and on a busy switch this once logged as an error
+			// thousands of times a minute, a real cost all by itself.
+			g.Log.Debug("message evicted before its outcome", "id", msg.ID)
+		} else {
+			g.Log.Error("failed to record message outcome", "id", msg.ID, "err", uerr)
+		}
 	}
 	// The shape of what arrived, on the span that carried it: format, kind,
 	// outcome and how many diagnostics the decoder raised. A dialect problem
