@@ -298,6 +298,14 @@ func handleRPI(p *pnr.PNR, seg edifact.Segment, st *State, opts ApplyOptions) ([
 				st.LastSegment.Status = string(code)
 				return []Change{{Op: "segment_refused", Detail: st.LastSegment.Describe()}}, true
 			}
+			if rescode.ActionCode(st.LastSegment.Status).Category() == rescode.CatCancel {
+				// The reply and the cancellation crossed on the network. The
+				// cancellation stands -- a dead segment must not be confirmed
+				// back to life -- and the change is named so the layer above
+				// can tell the partner again.
+				return []Change{{Op: "late_confirmation_ignored",
+					Detail: st.LastSegment.Describe() + " answered " + string(code) + " after cancellation"}}, true
+			}
 			st.LastSegment.Status = string(h)
 		} else {
 			st.LastSegment.Status = string(code)

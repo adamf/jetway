@@ -277,10 +277,17 @@ func BuildCancel(p *pnr.PNR, carrier string, refs []int, o BuildOptions) (*edifa
 
 	n := 0
 	for _, s := range p.Segments {
-		if s.Carrier != carrier || s.Type != pnr.SegmentAir || s.Status == "XX" {
+		if s.Carrier != carrier || s.Type != pnr.SegmentAir {
 			continue
 		}
-		if len(want) > 0 && !want[s.Ref] {
+		// Already-cancelled segments are skipped by default -- a partial
+		// cancel must not re-cancel the rest -- but a caller naming refs
+		// explicitly is re-issuing, and gets exactly what it asked for.
+		if len(want) > 0 {
+			if !want[s.Ref] {
+				continue
+			}
+		} else if s.Status == "XX" {
 			continue
 		}
 		body = append(body, tvlSegment(s), edifact.Seg("RPI",

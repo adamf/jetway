@@ -775,6 +775,7 @@ func (g *Gateway) apply(ctx context.Context, peer *Peer, msg *store.Message, dec
 			g.trace(msg.ID, "applied", fmt.Sprintf("%s v%d, %d change(s)",
 				rec.RecordLocator, rec.Version, len(changes)))
 			g.enqueueStatusChanges(ctx, rec, before, msg)
+			g.reCancelAfterLateConfirmation(ctx, peer, rec, changes, msg)
 			return g.respond(ctx, peer, msg, dec, rec, res, opts)
 
 		case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrDuplicate):
@@ -791,6 +792,55 @@ func (g *Gateway) apply(ctx context.Context, peer *Peer, msg *store.Message, dec
 	return fmt.Errorf("gateway: gave up applying after %d attempts: %w", maxAttempts, lastErr)
 }
 
+// reCancelAfterLateConfirmation answers a confirmation that crossed a
+// cancellation on the network. The apply layer kept the segment dead and
+// named the change; here the partner is told again -- their reply proves
+// they are still holding seats this record no longer wants -- and the
+// divergence is queued so a person can see the network reordered itself.
+func (g *Gateway) reCancelAfterLateConfirmation(ctx context.Context, peer *Peer,
+	rec *pnr.PNR, changes []change, msg *store.Message) {
+
+	late := false
+	for _, c := range changes {
+		if c.Op == "late_confirmation_ignored" {
+			late = true
+		}
+	}
+	if !late || peer.Carrier == "" {
+		return
+	}
+	var refs []int
+	for _, seg := range rec.Segments {
+		if seg.Carrier == peer.Carrier && seg.Status == "XX" {
+			refs = append(refs, seg.Ref)
+		}
+	}
+	m, err := g.buildCancel(rec, peer.Carrier, refs)
+	if err != nil {
+		g.Log.Error("could not re-cancel after a late confirmation",
+			"locator", rec.RecordLocator, "carrier", peer.Carrier, "err", err)
+		g.queueCancelDivergence(ctx, rec, peer.Carrier, err, "late-confirmation")
+		return
+	}
+	if _, err := g.SendKeyed(ctx, m.peer, m.raw, m.kind, rec.ID, msg.ID, m.key); err != nil {
+		g.queueCancelDivergence(ctx, rec, peer.Carrier, err, "late-confirmation")
+		return
+	}
+	g.Log.Info("re-sent a cancellation after a late confirmation",
+		"locator", rec.RecordLocator, "carrier", peer.Carrier)
+	if g.Queues != nil {
+		if _, qerr := g.Queues.Place(ctx, &store.QueueItem{
+			Queue: store.QueueDivergence, PNRID: rec.ID, Locator: rec.RecordLocator,
+			Code:     "late_confirmation_" + peer.Carrier,
+			Reason:   peer.Carrier + " confirmed a cancelled segment; the cancellation was re-sent",
+			PlacedBy: "late-confirmation",
+		}); qerr != nil {
+			g.Log.Error("could not queue the late-confirmation divergence",
+				"locator", rec.RecordLocator, "err", qerr)
+		}
+	}
+}
+
 // resolveRecord finds the record a message refers to, or returns a new one.
 func (g *Gateway) resolveRecord(ctx context.Context, dec *decoded) (*pnr.PNR, bool, error) {
 	for _, loc := range dec.Locators {
@@ -803,6 +853,30 @@ func (g *Gateway) resolveRecord(ctx context.Context, dec *decoded) (*pnr.PNR, bo
 		}
 		if !errors.Is(err, store.ErrNotFound) {
 			return nil, false, err
+		}
+	}
+	// None of the names on the message are ours -- but a partner names
+	// bookings by their own locator, and our copy may carry theirs as an
+	// external reference. A cancellation can arrive before the reply that
+	// would have taught the sender our locator; refusing it because the name
+	// on it is the sender's own was this network's biggest source of dead
+	// letters. Only messages that amend may resolve this way -- a message
+	// allowed to create must create rather than adopt a lookalike -- the
+	// fallback runs only after every plain lookup missed, and the search is
+	// scoped to the sending peer where the link names one, because two
+	// partners' locator values may collide.
+	if !dec.CreatesRecord {
+		owner := ""
+		if dec.peer != nil {
+			owner = dec.peer.Carrier
+		}
+		for _, loc := range dec.Locators {
+			if loc == "" {
+				continue
+			}
+			if rec, err := g.Store.FindPNRByExternalLocator(ctx, owner, loc); err == nil && rec != nil {
+				return rec, true, nil
+			}
 		}
 	}
 	// A message that answers or amends an existing booking must never be

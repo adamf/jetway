@@ -162,6 +162,16 @@ func applySegment(p *pnr.PNR, el *Segment, opts ApplyOptions, add func(string, s
 			add("segment_refused", "%s %s", existing.Describe(), el.Action)
 			return
 		}
+		if ActionCode(existing.Status).Category() == CatCancel {
+			// A confirmation for a segment already cancelled: the reply and
+			// the cancellation crossed on the network, the way store-and-
+			// forward retries reorder things. The cancellation stands -- a
+			// dead segment must not be confirmed back to life -- and the
+			// change is named so the layer above can tell the partner again.
+			add("late_confirmation_ignored", "%s answered %s after cancellation",
+				existing.Describe(), el.Action)
+			return
+		}
 		existing.Status = string(holding)
 		existing.Seats = el.Seats
 		add("segment_confirmed", "%s -> %s", existing.Describe(), holding)
@@ -364,12 +374,15 @@ func BuildCancel(p *pnr.PNR, carrier string, refs []int) string {
 		if s.Carrier != carrier || s.Type != pnr.SegmentAir {
 			continue
 		}
-		if len(want) > 0 && !want[s.Ref] {
-			continue
-		}
-		// Already cancelled: saying so again invites the carrier to look for a
-		// holding they no longer have.
-		if s.Status == "XX" {
+		// Already-cancelled segments are skipped by default -- a partial
+		// cancel must not re-cancel the rest -- but a caller naming refs
+		// explicitly is re-issuing a cancellation a partner shows no sign of
+		// having applied, and gets exactly what it asked for.
+		if len(want) > 0 {
+			if !want[s.Ref] {
+				continue
+			}
+		} else if s.Status == "XX" {
 			continue
 		}
 		els = append(els, &Segment{

@@ -11,6 +11,7 @@ import (
 
 	"github.com/adamf/jetway/pkg/avail"
 	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/queue"
 	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/ulid"
 )
@@ -550,4 +551,142 @@ func (c countingHandler) Handle(ctx context.Context, r slog.Record) error {
 		c.n.Add(1)
 	}
 	return c.Handler.Handle(ctx, r)
+}
+
+// A free sale is a sale: the carrier must end up holding the record, its
+// inventory decremented, and a later cancellation must find something to
+// cancel. At real demand volume the deployed world showed carriers
+// dead-lettering cancels for bookings they never heard of -- every one a
+// free sale whose report went missing.
+func TestFreeSaleTellsTheCarrier(t *testing.T) {
+	for _, format := range []store.Format{store.FormatTypeB, store.FormatEDIFACT} {
+		t.Run(string(format), func(t *testing.T) {
+			ctx := context.Background()
+			gds, air := wire(t, "BA", format)
+			gds.gw.Avail = avail.NewCache()
+			depart := time.Now().UTC().AddDate(0, 0, 30)
+			gds.gw.Avail.Put(avail.Entry{
+				Key:    avail.NewKey("BA", "0175", depart, "LHR", "JFK", "Y"),
+				Status: avail.Open, Seats: 4, SeatsKnown: true,
+				Source: avail.SourceAVS, AsOf: time.Now(),
+			})
+
+			res, err := gds.gw.Book(ctx, booking("Y", 1))
+			if err != nil {
+				t.Fatalf("Book: %v", err)
+			}
+			rec, _ := gds.st.GetPNR(ctx, res.PNR.RecordLocator)
+			if rec.Segments[0].Status != "HK" {
+				t.Fatalf("not a free sale: status %q", rec.Segments[0].Status)
+			}
+
+			airRecs, _ := air.st.ListPNRs(ctx, 10)
+			if len(airRecs) != 1 {
+				t.Fatalf("the carrier holds %d records of the free sale, want 1", len(airRecs))
+			}
+			if got := airRecs[0].Segments[0].Status; got != "HK" {
+				t.Errorf("carrier copy status = %q, want HK", got)
+			}
+
+			if _, err := gds.gw.Cancel(ctx, res.PNR.RecordLocator, CancelOptions{By: "test"}); err != nil {
+				t.Fatalf("Cancel: %v", err)
+			}
+			airRecs, _ = air.st.ListPNRs(ctx, 10)
+			if airRecs[0].Status != pnr.StatusCancelled {
+				t.Errorf("the carrier's copy was not cancelled: %s", airRecs[0].Status)
+			}
+			msgs, _ := air.st.ListMessages(ctx, store.MessageFilter{Limit: 20})
+			for _, m := range msgs {
+				if m.Status == store.StatusDLQ {
+					t.Errorf("dead-lettered at the carrier: %s %s", m.Kind, m.Error)
+				}
+			}
+		})
+	}
+}
+
+// A confirmation that crossed a cancellation on the network must not revive
+// the record -- the second resurrection class real volume found, after
+// v0.1.6's refusals. Store-and-forward retries reorder messages, so a KK
+// lands after the XX that overtook it. The harness holds the carrier's
+// replies in a pocket and releases them after the cancellation, which is
+// exactly what a retried delivery does. The segment stays dead, the partner
+// is told to cancel again -- their reply proves they are still holding
+// seats nobody wants -- and the divergence is queued for a person.
+func TestLateConfirmationDoesNotReviveACancelledRecord(t *testing.T) {
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	gdsStore, airStore := store.NewMem(), store.NewMem()
+	gdsGW := New(Identity{Designator: "1J", TTYAddress: "LONRM1J", Name: "gds"},
+		gdsStore, NewBus(100), log, []byte("gds-late"))
+	gdsGW.Queues = &queue.Manager{Store: gdsStore, Log: log}
+	airGW := New(Identity{Designator: "BA", TTYAddress: "LHRRMBA", Name: "ba"},
+		airStore, NewBus(100), log, []byte("air-late"))
+	inv := NewInventory()
+	inv.Carrier = "BA"
+	airGW.Responder = inv
+
+	gdsGW.AddPeer(&Peer{Name: "BA", Carrier: "BA", Format: store.FormatTypeB, TTYAddress: "LHRRMBA"})
+	airGW.AddPeer(&Peer{Name: "1J", Carrier: "1J", Format: store.FormatTypeB, TTYAddress: "LONRM1J"})
+
+	toAir := 0
+	gdsGW.Sender = SenderFunc(func(ctx context.Context, peer string, raw []byte) error {
+		toAir++
+		_, err := airGW.Ingest(ctx, "1J", raw)
+		return err
+	})
+	// The carrier's replies go into a pocket instead of the wire: a retried
+	// delivery, mid-retry.
+	var held [][]byte
+	airGW.Sender = SenderFunc(func(ctx context.Context, peer string, raw []byte) error {
+		held = append(held, append([]byte(nil), raw...))
+		return nil
+	})
+
+	res, err := gdsGW.Book(ctx, booking("Y", 1))
+	if err != nil {
+		t.Fatalf("Book: %v", err)
+	}
+	rec, _ := gdsStore.GetPNR(ctx, res.PNR.RecordLocator)
+	if rec.Segments[0].Status != "HN" {
+		t.Fatalf("pre-release status = %q, want HN while the reply is in flight", rec.Segments[0].Status)
+	}
+	if len(held) == 0 {
+		t.Fatal("the carrier answered nothing")
+	}
+
+	if _, err := gdsGW.Cancel(ctx, rec.RecordLocator, CancelOptions{By: "test"}); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	sentBefore := toAir
+
+	// The retry finally lands: the KK arrives after the cancellation.
+	for _, raw := range held {
+		if _, err := gdsGW.Ingest(ctx, "BA", raw); err != nil {
+			t.Fatalf("release held reply: %v", err)
+		}
+	}
+
+	rec, _ = gdsStore.GetPNR(ctx, rec.RecordLocator)
+	if rec.Status != pnr.StatusCancelled {
+		t.Errorf("record = %q after the late KK, want still cancelled", rec.Status)
+	}
+	for _, s := range rec.Segments {
+		if s.Status != "XX" {
+			t.Errorf("segment = %q, want still XX", s.Status)
+		}
+	}
+	if toAir <= sentBefore {
+		t.Error("no re-cancellation went to the carrier still holding seats")
+	}
+	items, _ := gdsStore.ListQueue(ctx, store.QueueFilter{Queue: store.QueueDivergence})
+	found := false
+	for _, it := range items {
+		if it.Locator == rec.RecordLocator && strings.Contains(it.Code, "late_confirmation") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no divergence queued; %d divergence items", len(items))
+	}
 }
