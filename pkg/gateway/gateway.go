@@ -537,20 +537,7 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 		msg.Status = store.StatusApplied
 		res.Status = store.StatusApplied
 		g.trace(msg.ID, "movement", dec.Kind)
-		ev := map[string]any{
-			"node": g.Identity.Name, "message_id": msg.ID,
-			"kind": string(dec.Movement.Kind), "flight": dec.Movement.Flight,
-			"day": dec.Movement.Day, "registration": dec.Movement.Registration,
-			"station": dec.Movement.Station,
-		}
-		// A diversion's whole content is where the aircraft is going instead,
-		// so the event carries it; an observer that only heard "DIV" would
-		// know something happened and not what.
-		if ea := dec.Movement.EA; ea != nil {
-			ev["ea_airport"] = ea.Airport
-			ev["ea_time"] = ea.Time
-		}
-		g.Bus.Publish(EvMovement, ev)
+		g.publishMovement(msg, dec)
 		return nil
 	}
 
@@ -571,6 +558,27 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 		return nil
 	}
 	return g.apply(ctx, peer, msg, dec, res, opts)
+}
+
+// publishMovement puts a decoded movement on the bus. The apply path uses it
+// for traffic addressed here; the relay uses it for traffic in transit,
+// because a network's switch is where an operations display actually watches
+// the sky from -- it sees every movement, whoever it was addressed to.
+func (g *Gateway) publishMovement(msg *store.Message, dec *decoded) {
+	ev := map[string]any{
+		"node": g.Identity.Name, "message_id": msg.ID,
+		"kind": string(dec.Movement.Kind), "flight": dec.Movement.Flight,
+		"day": dec.Movement.Day, "registration": dec.Movement.Registration,
+		"station": dec.Movement.Station,
+	}
+	// A diversion's whole content is where the aircraft is going instead,
+	// so the event carries it; an observer that only heard "DIV" would
+	// know something happened and not what.
+	if ea := dec.Movement.EA; ea != nil {
+		ev["ea_airport"] = ea.Airport
+		ev["ea_time"] = ea.Time
+	}
+	g.Bus.Publish(EvMovement, ev)
 }
 
 // relayEDIFACT forwards an interchange to the peer its UNB recipient names,
@@ -671,6 +679,11 @@ func (g *Gateway) relay(ctx context.Context, from *Peer, msg *store.Message, dec
 	if forUs {
 		// We are an addressee too, so the message is ours to apply as well.
 		return false
+	}
+	if dec.Movement != nil {
+		// A movement in transit is still a movement: the switch is where an
+		// operations display watches the whole sky from.
+		g.publishMovement(msg, dec)
 	}
 	// Pure transit. Nothing here to apply, and inventing a record from a
 	// message addressed to somebody else would be worse than doing nothing.
