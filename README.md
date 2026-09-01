@@ -286,6 +286,10 @@ See [Provenance](#provenance-and-what-this-is-not).
 
 ## Architecture
 
+Sequence diagrams for every message flow and state diagrams for every
+status vocabulary live in [docs/](docs/README.md) — who talks to whom, in
+what order, and what a status is allowed to become.
+
 ```mermaid
 flowchart LR
   P["carrier reservation systems<br/>BA · AA · LH"]
