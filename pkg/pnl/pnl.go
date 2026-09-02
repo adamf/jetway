@@ -212,18 +212,32 @@ func BuildParts(kind Kind, flight, date, board string, groups []Group) ([]string
 			pending := g.Names
 			for len(pending) > 0 {
 				room := linesPerPart - lines - 1 // group heading
-				if room < 1 {
+				// Take names while their lines fit: a folded item is
+				// more than one line, so the room is counted in lines
+				// rendered, not in names.
+				take, used := 0, 0
+				for take < len(pending) {
+					n := len(nameLines(pending[take]))
+					if used+n > room && take > 0 {
+						break
+					}
+					used += n
+					take++
+					if used >= room {
+						break
+					}
+				}
+				if take == 0 {
 					if err := flush(false); err != nil {
 						return nil, err
 					}
 					continue
 				}
-				take := min(room, len(pending))
 				cur.Groups = append(cur.Groups, Group{
 					Dest: g.Dest, Count: countOf(pending[:take]), Class: g.Class,
 					Names: pending[:take],
 				})
-				lines += 1 + take
+				lines += 1 + used
 				pending = pending[take:]
 			}
 			continue
@@ -233,7 +247,10 @@ func BuildParts(kind Kind, flight, date, board string, groups []Group) ([]string
 		// the next part.
 		need := 1
 		for _, sec := range g.Sections {
-			need += 1 + len(sec.Names)
+			need++
+			for _, n := range sec.Names {
+				need += len(nameLines(n))
+			}
 		}
 		if lines+need+1 > linesPerPart && len(cur.Groups) > 0 {
 			if err := flush(false); err != nil {

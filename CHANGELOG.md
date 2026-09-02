@@ -5,6 +5,12 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.34 — Parts count lines, not names
+- `pnl.BuildParts` paginates on the lines a folded item renders to, so a
+  cabin of families with tickets still fits every part inside the Type B
+  envelope. The v0.1.33 fold made a part of fifty names run to seventy
+  lines.
+
 ## v0.1.33 — Long name items fold
 - A name item that does not fit a Type B line -- a family of six with a
   ticket number each -- now folds onto continuation lines indented one

@@ -38,3 +38,35 @@ func TestLongNameItemsFoldAndRoundTrip(t *testing.T) {
 		t.Errorf("the name after the folded one was lost: %+v", m.Groups[0].Names)
 	}
 }
+
+// Pagination counts the lines a folded item takes, not the item: a cabin of
+// families with tickets still fits every part inside the Type B envelope.
+func TestPartsCountFoldedLines(t *testing.T) {
+	var names []Name
+	for i := 0; i < 120; i++ {
+		names = append(names, Name{Party: 3, Surname: "FAMILY" + string(rune('A'+i%26)),
+			Givens:   []string{"CHRISTOPHERMR", "ELIZABETHMRS", "ALEXANDERMSTR"},
+			Elements: []string{".L/ABC123", ".R/TKNE HK1 974-2000024435C1", ".R/TKNE HK1 974-2000024436C1", ".R/TKNE HK1 974-2000024437C1"}})
+	}
+	parts, err := BuildParts(KindPNL, "WN0100", "26NOV", "BNA", []Group{{Dest: "MDW", Class: "Y", Names: names}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for i, p := range parts {
+		ls := strings.Split(strings.TrimRight(p, "\n"), "\n")
+		if len(ls) > 60 {
+			t.Errorf("part %d has %d lines", i+1, len(ls))
+		}
+		m, err := Parse(p)
+		if err != nil {
+			t.Fatalf("part %d: %v", i+1, err)
+		}
+		for _, g := range m.Groups {
+			total += len(g.Names)
+		}
+	}
+	if total != 120 || len(parts) < 7 {
+		t.Errorf("%d names across %d parts", total, len(parts))
+	}
+}
