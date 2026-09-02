@@ -159,6 +159,25 @@ func TestRelayNeverReflectsToTheOrigin(t *testing.T) {
 	}
 }
 
+func TestRelayDeliversToTheLinksPrincipalAddressFromAnotherDesk(t *testing.T) {
+	gw, sent := switchNode(t, true)
+	// BA's check-in at Heathrow sends final sales home to BA's reservations
+	// -- the link's principal address -- from a different address on the
+	// same link. The message must come back down the circuit.
+	raw := []byte("QU LHRRMBA\n.LHRKPBA 121430\nPFS\nBA0117/16DEC LHR PART1\n-JFK\nNIL\nENDPFS\n")
+
+	res, err := gw.Ingest(context.Background(), "BA", raw)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if n := sent.count("BA"); n != 1 {
+		t.Errorf("delivered %d copies to BA, want 1", n)
+	}
+	if res.Status != store.StatusApplied {
+		t.Errorf("Status = %q", res.Status)
+	}
+}
+
 func TestRelayDeliversToAnotherAddressOnTheArrivalLink(t *testing.T) {
 	gw, sent := switchNode(t, true)
 	// BA's reservations system tells BA's check-in at Heathrow about a

@@ -687,8 +687,12 @@ func (g *Gateway) relay(ctx context.Context, from *Peer, msg *store.Message, dec
 			continue
 		}
 		if p := g.PeerByAddress(addr); p != nil && p.Name == from.Name {
-			if normaliseAddress(addr) == origin || normaliseAddress(addr) == normaliseAddress(from.TTYAddress) {
+			if normaliseAddress(addr) == origin {
 				// Addressed back to where it came from. Never reflect it.
+				// Only the origin counts: a carrier's check-in writing to
+				// its own reservations address is two desks on one circuit,
+				// not a loop, even though reservations is the link's
+				// principal address.
 				g.trace(msg.ID, "relay", "skipping "+addr+": it is the address this arrived from")
 				reflected++
 				continue
