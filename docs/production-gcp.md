@@ -330,7 +330,11 @@ day this document was written; the rest are open.
 9. **Load test as a release gate.** wholesky at warp 1 against a staging
    instance of the production topology, with the invariant suite (no
    oversell, message conservation, interline convergence) as the pass
-   criterion.
+   criterion. ~~The live half exists:~~ wholesky's `cmd/skycheck` asks a
+   running world for `/invariants.json`, which federates every shard's
+   inventory, and exits non-zero on an oversold cabin or an unreachable
+   shard. Conservation and convergence still run only in-process, because
+   they need the wire quiet. Not yet a staging topology or a pipeline step.
 
 ## 10. Cost, roughly
 
