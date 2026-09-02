@@ -161,19 +161,55 @@ sequenceDiagram
     Note over G,C: ticket control is EDIFACT-only; a teletype carrier<br/>not told is a queued divergence, not a silent gap
 ```
 
-## The ground story (wholesky's use of the name-list and bag packages)
+## Departure control
+
+Reservations knows who booked; departure control knows who flew. The name
+list opens the flight at the airport, check-in fills it, and closing the
+door produces the messages everyone downstream runs on. Every arrow here is
+a real Type B message; the DCS is `pkg/dcs`, plugged into a carrier's node
+through `gateway.Ground`.
 
 ```mermaid
 sequenceDiagram
-    participant C as Carrier
-    participant A as Airport / sortation
+    participant R as Reservations (carrier host)
+    participant D as Departure control (pkg/dcs)
+    participant S as Sortation (bags)
+    participant A as Arrival station
+    participant O as Operations / revenue
 
-    Note over C: T−180 min
-    C->>A: PNL — every booked party, from the carrier's own store
-    Note over C: T−90
-    C->>A: BSM per party with bags (licence-plate tags)
-    Note over C: T−60
-    C->>A: ADL — only the diff since the PNL (silence if none)
-    Note over C: departure
-    C->>A: BPM — what was loaded
+    Note over R,D: T−180 min
+    R->>D: PNL — every booked party (locator, class, SSRs, TKNE)
+    Note over D: flight opened: cabin from the aircraft type
+    loop check-in
+        D->>D: accept — seat, sequence number, bag tags
+        D->>S: BSM per party with bags
+    end
+    R->>D: ADL — DEL / ADD / CHG since the PNL
+    Note over D: a DEL of an accepted passenger is kept as an alert, not obeyed
+    Note over D: T−45 check-in closes; standbys clear into free seats
+    loop boarding
+        D->>D: board
+    end
+    S->>D: BPM — what was loaded (unknown tags raise an alert)
+    Note over D: T−10 door closes: listed → no-show, accepted → offloaded
+    D->>S: BSM DEL for each offloaded passenger's bags
+    D->>R: PFS — NOSHO / GOSHO / NOREC / OFFLD by name
+    D->>A: PTM — connecting passengers and their bags
+    D->>A: PSM — passengers needing assistance, with seats
+    D->>A: LDM — passengers, hold weights, cabin split
+    D->>A: CPM — which ULD sits where (containerised types)
+    D->>O: ETL — boarded passengers and the documents they flew on
+    Note over D: loadsheet: ZFW / TOW / LAW, index and %MAC, underload
+    D->>O: MVT — departure with the boarded count
 ```
+
+What the DCS refuses, and why, is part of the design: a PNL after
+acceptance has begun (`ErrListAfterAccept`), acceptance after check-in has
+closed unless a supervisor forces it, a seat already taken, a go-show when
+every seat is owed to a listed passenger. The refusals are recorded against
+the message in the ledger as `rejected`, bytes intact.
+
+Load control follows the AHM 560 method: passengers weigh by cabin zone,
+bags are split between the holds to bring the take-off centre of gravity
+toward the middle of the envelope, containerised aircraft get ULDs at
+positions, and the loadsheet reports the limits it was checked against.

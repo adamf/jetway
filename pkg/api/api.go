@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/adamf/jetway/pkg/dcs"
 	"github.com/adamf/jetway/pkg/demo"
 	"github.com/adamf/jetway/pkg/gateway"
 	"github.com/adamf/jetway/pkg/metrics"
@@ -62,6 +63,17 @@ type Server struct {
 	// registered, letting an embedder add pages and endpoints to the same
 	// listener. Paths under /api/ and the root are taken; pick a prefix.
 	Extend func(mux *http.ServeMux)
+
+	// Ground is this node's departure control, when it runs one. Nil hides
+	// the departures endpoints and the console's Departures view.
+	Ground *dcs.Station
+	// OnAccept, OnOffload and OnClose let the embedder transmit what an
+	// agent's action produced: the bag messages at acceptance, the bag pull
+	// at offload, the whole message set at close. The API itself only
+	// changes the flight; the gateway owns the wire.
+	OnAccept  func(ctx context.Context, acc *dcs.Acceptance)
+	OnOffload func(ctx context.Context, f *dcs.Flight, p *dcs.Passenger)
+	OnClose   func(ctx context.Context, cl *dcs.Closure) error
 }
 
 // Handler returns the HTTP routes.
@@ -114,6 +126,7 @@ func (s *Server) Handler() http.Handler {
 	// standard message, not part of this console's own interface.
 	mux.HandleFunc("POST /ndc", s.ndcOrder)
 	mux.HandleFunc("GET /api/stream", s.stream)
+	s.dcsRoutes(mux)
 
 	return logRequests(s.Log, mux)
 }

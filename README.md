@@ -189,6 +189,17 @@ partner sends something puzzling:
 go run ./cmd/jetwayctl decode captured.tty
 ```
 
+### Departures
+
+A node that runs departure control gets a fifth view: the flights under
+control, each one's manifest and seat map, and the agent's operations --
+accept, board, offload, close check-in, close the flight. Closing produces
+the final sales, transfer, service, ticket and load messages and the
+loadsheet, right there in the view. The same operations are on
+`/api/dcs/...`, which is what a kiosk or a gate reader would call.
+`pkg/dcs` is the system behind it; `gateway.Ground` is how a node hands it
+the name lists, bag messages and departure output that arrive on the wire.
+
 ## Connecting a partner
 
 Ingress is configuration, not code. Each listener declares how bytes are framed
@@ -383,6 +394,9 @@ where this is wrong, that is the single most useful contribution available.
 | `pkg/ndc` | NDC order messages over HTTP: create, retrieve, cancel, and the order view |
 | `pkg/matip` | MATIP (RFC 2351): packet format and the Type B session handshake |
 | `pkg/mvt` | MVT/MVA/DIV aircraft movement messages: departures, arrivals, delays, diversions |
+| `pkg/pnl` | PNL and ADL passenger name lists: what reservations tells the airport |
+| `pkg/baggage` | BSM and BPM bag messages: tags issued, bags loaded |
+| `pkg/dcs` | Departure control: the manifest, check-in, seating, bag tagging, boarding, close; PFS, PTM, PSM, ETL, LDM, CPM; load control and the loadsheet |
 | `pkg/ingress` | MATIP, HTTPS, TCP and file-drop listeners, and peer identity |
 | `pkg/egress` | Outbound delivery with backoff and restart recovery |
 | `pkg/spool` | Durable write-ahead buffer for inbound messages |
@@ -395,7 +409,7 @@ where this is wrong, that is the single most useful contribution available.
 
 The whole `pkg/...` tree is importable, in two layers. The codec packages
 (`typeb`, `edifact`, `airimp`, `padis`, `avs`, `ssim`, `ndc`, `matip`, `pnr`,
-`rescode`, `avail`) depend on nothing above them and on each other only through
+`rescode`, `avail`, `pnl`, `baggage`, `mvt`, `dcs`) depend on nothing above them and on each other only through
 the canonical model — import one to parse a format and take nothing else. The
 application packages (`gateway`, `store`, `node`, `queue`, `ingress`, `egress`,
 `transport`, `config`, `demo`) are the running system, importable as a library:

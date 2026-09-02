@@ -66,6 +66,11 @@ func TestPeerByAddress(t *testing.T) {
 	if p := gw.PeerByAddress("JFKRMAA"); p != nil {
 		t.Errorf("an unserved address resolved to %s", p.Name)
 	}
+	// An address nobody registered goes to the carrier whose code it
+	// carries: BA's check-in at Heathrow comes down BA's circuit.
+	if p := gw.PeerByAddress("LHRKPBA"); p == nil || p.Name != "BA" {
+		t.Errorf("a carrier's unregistered address did not fall back to its link: %v", p)
+	}
 	if !gw.IsSelf("LONRM1J") || gw.IsSelf("LHRRMBA") {
 		t.Error("IsSelf does not recognise this node's own address")
 	}
@@ -135,18 +140,43 @@ func TestRelayForwardsTransitTraffic(t *testing.T) {
 	}
 }
 
-func TestRelayNeverSendsBackToTheSender(t *testing.T) {
+func TestRelayNeverReflectsToTheOrigin(t *testing.T) {
 	gw, sent := switchNode(t, true)
-	// Addressed to BA's own second address, arriving on BA's link. Forwarding
-	// it would return it to its sender, and on a store-and-forward network
-	// that loop survives restarts.
-	raw := []byte("QU LHRRSBA\n.LHRRMBA 121430\nHELLO\n")
+	// Addressed to the very address it came from. Forwarding it would return
+	// it to its sender, and on a store-and-forward network that loop
+	// survives restarts.
+	raw := []byte("QU LHRRMBA\n.LHRRMBA 121430\nHELLO\n")
 
-	if _, err := gw.Ingest(context.Background(), "BA", raw); err != nil {
+	res, err := gw.Ingest(context.Background(), "BA", raw)
+	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
 	if n := sent.count("BA"); n != 0 {
-		t.Errorf("relayed %d messages back to the sending link, want 0", n)
+		t.Errorf("reflected %d messages to their origin, want 0", n)
+	}
+	if res.Status != store.StatusUndeliverable {
+		t.Errorf("Status = %q, want undeliverable", res.Status)
+	}
+}
+
+func TestRelayDeliversToAnotherAddressOnTheArrivalLink(t *testing.T) {
+	gw, sent := switchNode(t, true)
+	// BA's reservations system tells BA's check-in at Heathrow about a
+	// departure. Both addresses live on BA's one circuit, and the network
+	// delivers down it: that is not a loop, it is the job. Until the DCS
+	// existed the switch refused this as a bounce, and a carrier could not
+	// reach its own airport.
+	raw := []byte("QU LHRKPBA LHRRSBA\n.LHRRMBA 121430\nPNL\nBA0117/16DEC LHR PART1\n-JFK001Y\n1SMITH/JOHNMR .L/ABC123\nENDPNL\n")
+
+	res, err := gw.Ingest(context.Background(), "BA", raw)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if n := sent.count("BA"); n != 2 {
+		t.Errorf("delivered %d copies down BA's link, want one per address", n)
+	}
+	if res.Status != store.StatusApplied {
+		t.Errorf("Status = %q", res.Status)
 	}
 }
 

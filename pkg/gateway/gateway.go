@@ -151,6 +151,12 @@ type Gateway struct {
 	// queues, which is right for a simulated carrier and wrong for a GDS.
 	Queues *queue.Manager
 
+	// Ground receives the airport-side traffic -- name lists, bag messages,
+	// departure control output -- after it is filed. Nil files it and does
+	// nothing, which is right for a distribution system; a carrier's node
+	// points it at a departure control system.
+	Ground Ground
+
 	// ScheduleScanLimit caps how many affected bookings one schedule message
 	// may queue. It is a blast-radius limit, not a search boundary: the
 	// lookup behind it searches every record regardless. Zero uses
@@ -216,10 +222,25 @@ func (g *Gateway) AddPeer(p *Peer) {
 func normaliseAddress(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
 
 // PeerByAddress resolves a Type B address to the link that serves it.
+//
+// An address a link registered explicitly wins. Failing that, the address
+// goes to the link of the carrier whose designator it ends in: on the real
+// network a carrier owns every address carrying its code -- reservations at
+// head office, check-in and load control at each station -- and they all
+// come down its circuit unless a handler has registered one of them as its
+// own. That is what lets a reservations system address its own departure
+// control at an outstation without a switch operator adding a route first.
 func (g *Gateway) PeerByAddress(addr string) *Peer {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.byAddress[normaliseAddress(addr)]
+	a := normaliseAddress(addr)
+	if p := g.byAddress[a]; p != nil {
+		return p
+	}
+	if parsed, err := typeb.ParseAddress(a); err == nil && parsed.Carrier != "" {
+		return g.byCarrier[parsed.Carrier]
+	}
+	return nil
 }
 
 // IsSelf reports whether an address belongs to this node.
@@ -541,21 +562,29 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 		return nil
 	}
 
-	// A name list is for an airport and a bag message is about a bag; neither
+	// A name list is for an airport, a bag message is about a bag, and
+	// departure control output is about a flight that has closed; none
 	// touches a record here. Filing them applied keeps them out of the dead
-	// letter view and on the ledger, which is where a departure control or
-	// sortation system would read them.
+	// letter view and on the ledger; the Ground seam is where a departure
+	// control or sortation system reads them.
+	var origin typeb.Address
+	if dec.TypeB != nil {
+		origin = dec.TypeB.Origin
+	}
 	if dec.NameList != nil {
-		msg.Status = store.StatusApplied
-		res.Status = store.StatusApplied
-		g.trace(msg.ID, "name_list", dec.Kind)
-		return nil
+		return g.toGround(ctx, msg, res, "name_list", func() error {
+			return g.Ground.NameList(ctx, dec.NameList, origin)
+		})
 	}
 	if dec.Baggage != nil {
-		msg.Status = store.StatusApplied
-		res.Status = store.StatusApplied
-		g.trace(msg.ID, "baggage", dec.Kind)
-		return nil
+		return g.toGround(ctx, msg, res, "baggage", func() error {
+			return g.Ground.Baggage(ctx, dec.Baggage, origin)
+		})
+	}
+	if dec.Departure != nil {
+		return g.toGround(ctx, msg, res, "departure", func() error {
+			return g.Ground.Departure(ctx, dec.Departure, origin)
+		})
 	}
 	return g.apply(ctx, peer, msg, dec, res, opts)
 }
@@ -639,12 +668,18 @@ func (g *Gateway) relayEDIFACT(ctx context.Context, from *Peer, msg *store.Messa
 // reports whether the message was pure transit and so needs no further
 // processing here.
 //
-// The address that matters most is the one we skip. Forwarding to the link the
-// message arrived on sends it straight back to its sender, and on a
-// store-and-forward network that is a loop that survives restarts.
+// The address that matters most is the one we skip. Forwarding a message to
+// the address it came from sends it straight back to its sender, and on a
+// store-and-forward network that is a loop that survives restarts. Other
+// addresses served by the arrival link are delivered down it: a carrier's
+// reservations system telling its own check-in at an outstation about a
+// departure sends down the same circuit it arrived on, and that is not a
+// loop, it is the network doing its job.
 func (g *Gateway) relay(ctx context.Context, from *Peer, msg *store.Message, dec *decoded, res *Result) bool {
 	forUs := false
 	var onward []typeb.Address
+	reflected := 0
+	origin := normaliseAddress(dec.TypeB.Origin.String())
 	for _, d := range dec.TypeB.Destinations {
 		addr := d.String()
 		if g.IsSelf(addr) {
@@ -652,13 +687,26 @@ func (g *Gateway) relay(ctx context.Context, from *Peer, msg *store.Message, dec
 			continue
 		}
 		if p := g.PeerByAddress(addr); p != nil && p.Name == from.Name {
-			// Addressed to the sender's own link. Never send it back.
-			g.trace(msg.ID, "relay", "skipping "+addr+": it is the link this arrived on")
-			continue
+			if normaliseAddress(addr) == origin || normaliseAddress(addr) == normaliseAddress(from.TTYAddress) {
+				// Addressed back to where it came from. Never reflect it.
+				g.trace(msg.ID, "relay", "skipping "+addr+": it is the address this arrived from")
+				reflected++
+				continue
+			}
+			g.trace(msg.ID, "relay", addr+" is another address on the arrival link; delivering back down it")
 		}
 		onward = append(onward, d)
 	}
 	if len(onward) == 0 {
+		if !forUs && reflected > 0 {
+			// Every addressee was the sender. There is nobody to give this
+			// to, and treating it as ours would invent a record from a
+			// message that was never for us.
+			msg.Status = store.StatusUndeliverable
+			msg.Error = "addressed only to its own origin"
+			res.Status = store.StatusUndeliverable
+			return true
+		}
 		return false
 	}
 

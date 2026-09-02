@@ -17,6 +17,9 @@ about which layer is which.
 | `pkg/airimp`, `pkg/avs`, `pkg/ssim` | **Inferred.** Profiles, not conformance. AIRIMP and SSIM are paywalled. |
 | `pkg/ndc` | **Specified.** Schemas and real carrier examples are public. |
 | `pkg/mvt` | **Inferred, closely.** AHM 780/781 is paid, but OAG publishes the element tables and verbatim examples this package is built and tested against. |
+| `pkg/dcs` PSM, PTM, LDM, CPM | **Inferred, closely.** RP 1715/1718 and AHM 583/587 are paid, but airports and handlers reproduce the practices' own worked examples; the parsers are tested against those verbatim. |
+| `pkg/dcs` PFS, ETL | **Inferred.** No free reproduction of RP 1719/1719c was found. The layouts follow the PNL family; the category vocabulary is public. |
+| `pkg/dcs` load control | **Method specified, data representative.** The AHM 560/565 index arithmetic is the published method; `DefaultFleet` is rounded type-class data, not any operator's. |
 
 When you implement something in the inferred category, say so in the package
 doc, make it an extensible `Profile`, and keep unrecognised input verbatim.
@@ -122,7 +125,7 @@ host runs this unchanged and a function platform cannot.
 
 Everything importable lives under `pkg/`, in two layers. The codec packages
 (`typeb`, `edifact`, `airimp`, `padis`, `avs`, `ssim`, `ndc`, `matip`, `pnr`,
-`rescode`, `avail`) must not import the application packages (`gateway`,
+`rescode`, `avail`, `pnl`, `baggage`, `mvt`, `dcs`) must not import the application packages (`gateway`,
 `store`, `node`, `queue`, `ingress`, `egress`, `transport`, `config`, `demo`,
 `api`, `metrics`, `telemetry`, `spool`, `ulid`). The application packages were
 promoted out of `internal/` on 2026-08-31 so external consumers -- the world

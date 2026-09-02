@@ -11,6 +11,7 @@ import (
 	"github.com/adamf/jetway/pkg/airimp"
 	"github.com/adamf/jetway/pkg/avs"
 	"github.com/adamf/jetway/pkg/baggage"
+	"github.com/adamf/jetway/pkg/dcs"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/mvt"
 	"github.com/adamf/jetway/pkg/padis"
@@ -61,6 +62,9 @@ type decoded struct {
 	// Baggage is set when the message is a BSM or BPM: about a bag, not a
 	// booking.
 	Baggage *baggage.Message
+	// Departure is set when the message is departure control output -- PFS,
+	// PTM, PSM, ETL, LDM, CPM: about a flight that has closed, not a booking.
+	Departure *dcs.Message
 	// Schedule is set when the message is an SSM or ASM. Like availability, a
 	// schedule change touches no single record and must not create one.
 	Schedule *ssim.Message
@@ -305,6 +309,24 @@ func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 		}
 		d.NameList = nm
 		d.Kind = string(nm.Kind) + "/" + nm.Flight
+		return d, nil
+	}
+
+	// Departure control output is about a closed flight: final sales, the
+	// transfer and service lists, the load. Same rule: classify, file, keep
+	// it away from the booking grammar, and hand it to whoever consumes it.
+	if dcs.IsDepartureControl(tb.Text) {
+		dm, err := dcs.Parse(tb.Text)
+		if err != nil {
+			d.Kind = firstWord(tb.Text)
+			d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+				Layer: "dcs", Severity: "warn", Code: "unreadable_departure_message",
+				Detail: err.Error(),
+			})
+			return d, nil
+		}
+		d.Departure = dm
+		d.Kind = string(dm.Kind) + "/" + dm.Flight
 		return d, nil
 	}
 

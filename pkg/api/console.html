@@ -329,6 +329,42 @@ pre.raw{margin:0;padding:12px;background:var(--panel-2);border:1px solid var(--l
   /* A phone keyboard zooms the page on any input under 16px. */
   input,select,textarea{font-size:16px}
 }
+
+/* ---------------- departures ---------------- */
+.dep{display:flex;flex-direction:column;gap:2px;padding:9px 12px;border-bottom:1px solid var(--line-2);cursor:pointer}
+.dep:hover{background:var(--panel-2)} .dep.on{background:var(--accent-soft)}
+.dep .top{display:flex;align-items:center;gap:8px;font:600 12px/1 var(--mono)}
+.dep .top .st{margin-left:auto;font:600 9px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;
+  padding:3px 6px;border-radius:4px;border:1px solid var(--line);color:var(--ink-3)}
+.dep .top .st.open{color:var(--ok);border-color:var(--ok)} .dep .top .st.checkin_closed{color:var(--warn);border-color:var(--warn)}
+.dep .top .st.closed{color:var(--ink-3)}
+.dep .sub{font:11px/1.4 var(--sans);color:var(--ink-3)}
+.manifest{width:100%;border-collapse:collapse;font:11px/1.5 var(--mono)}
+.manifest th{text-align:left;font:600 10px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);
+  padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
+.manifest td{padding:6px 10px;border-bottom:1px solid var(--line-2);white-space:nowrap}
+.manifest tr.listed td{color:var(--ink-2)} .manifest tr.boarded td{color:var(--ok)}
+.manifest tr.noshow td,.manifest tr.offloaded td,.manifest tr.deleted td{color:var(--ink-3);text-decoration:line-through}
+.manifest tr.standby td{color:var(--wait)}
+.manifest button{font:600 10px/1 var(--sans);padding:3px 7px;border-radius:4px;border:1px solid var(--line);
+  background:var(--panel);color:var(--ink-2);cursor:pointer;margin-right:4px}
+.manifest button:hover{border-color:var(--accent);color:var(--accent)}
+.depbar{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.depbar button{font:600 11px/1 var(--sans);letter-spacing:.04em;padding:6px 10px;border-radius:6px;border:1px solid var(--line);
+  background:var(--panel);color:var(--ink-2);cursor:pointer}
+.depbar button:hover{border-color:var(--accent);color:var(--accent)} .depbar button:disabled{opacity:.4;cursor:default}
+.depbar .counts{margin-left:auto;font:11px/1 var(--mono);color:var(--ink-3)}
+.seatmap{display:flex;flex-direction:column;gap:2px;padding:12px 14px;font:9px/1 var(--mono)}
+.seatmap .srow{display:flex;gap:2px;align-items:center}
+.seatmap .rn{width:20px;text-align:right;color:var(--ink-3);margin-right:4px}
+.seatmap .seat{width:15px;height:15px;border-radius:3px;border:1px solid var(--line);background:var(--panel)}
+.seatmap .seat.taken{background:var(--accent);border-color:var(--accent)}
+.seatmap .seat.C,.seatmap .seat.F{border-radius:5px}
+.seatmap .aisle{width:8px}
+.seatmap .comp{font:600 9px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);margin:6px 0 2px 24px}
+.loadsheet{font:10px/1.45 var(--mono);white-space:pre;padding:12px 14px;color:var(--ink-2);overflow-x:auto;border-top:1px solid var(--line)}
+.alerts{padding:10px 14px;font:11px/1.5 var(--sans);color:var(--warn);border-top:1px solid var(--line)}
+.alerts div+div{margin-top:4px}
 </style>
 </head>
 <body>
@@ -340,6 +376,7 @@ pre.raw{margin:0;padding:12px;background:var(--panel-2);border:1px solid var(--l
     <button class="view" data-view="records">Records</button>
     <button class="view" data-view="queues">Queues <span class="qbadge" id="qtotal" hidden>0</span></button>
     <button class="view" data-view="insights">Insights</button>
+    <button class="view" data-view="departures" id="depview" hidden>Departures</button>
   </nav>
   <div class="links" id="links"></div>
   <a class="repo" href="https://github.com/adamf/jetway" target="_blank" rel="noopener noreferrer"
@@ -514,6 +551,37 @@ pre.raw{margin:0;padding:12px;background:var(--panel-2);border:1px solid var(--l
       <span class="badge" id="qcount">0</span>
     </div>
     <div class="scroll" id="qitems"><div class="empty">Nothing waiting.</div></div>
+  </section>
+</main>
+
+<main id="view-departures" hidden>
+  <section class="col">
+    <div class="tabs"><span class="tab on" style="cursor:default">Departures</span><span class="badge" id="depcount" style="margin-left:auto">0</span></div>
+    <div class="scroll" id="deplist" style="padding:0;gap:0"><div class="empty">No flights under control.</div></div>
+    <div style="padding:12px 14px;border-top:1px solid var(--line);color:var(--ink-3);font:11px/1.6 var(--sans)">
+      Departure control opens a flight when reservations sends its name list, seats
+      the people who turn up, tags their bags, and closes the door &mdash; producing the
+      final sales, transfer, service and load messages the rest of the network runs on.
+    </div>
+  </section>
+  <section class="col">
+    <div class="depbar">
+      <strong id="depname" style="font:600 12px/1 var(--mono)">&mdash;</strong>
+      <button id="depclosecki">Close check-in</button>
+      <button id="depclose">Close flight</button>
+      <span class="counts" id="depcounts"></span>
+    </div>
+    <div class="tablewrap"><table class="manifest"><thead><tr>
+      <th>Seq</th><th>Name</th><th>Locator</th><th>Cls</th><th>Seat</th><th>Status</th><th>Bags</th><th>SSR</th><th></th>
+    </tr></thead><tbody id="manifest"></tbody></table></div>
+  </section>
+  <section class="col">
+    <div class="tabs"><span class="tab on" style="cursor:default">Seat map &amp; load</span></div>
+    <div style="overflow-y:auto;min-height:0">
+      <div class="seatmap" id="seatmap"></div>
+      <div class="alerts" id="depalerts" hidden></div>
+      <div class="loadsheet" id="loadsheet" hidden></div>
+    </div>
   </section>
 </main>
 
@@ -1304,12 +1372,132 @@ document.querySelectorAll("#views .view").forEach(b => b.addEventListener("click
   $("#view-records").hidden = v !== "records";
   $("#view-queues").hidden  = v !== "queues";
   $("#view-insights").hidden = v !== "insights";
+  $("#view-departures").hidden = v !== "departures";
   // refreshPnrs is async: rendering before it resolves shows "no bookings yet"
   // to anyone who opens the console and reaches for Records straight away.
   if (v === "records") refreshPnrs().then(renderRecords);
   if (v === "queues") refreshQueues();
   if (v === "insights") refreshInsights();
+  if (v === "departures") refreshDepartures();
 }));
+
+/* ---------------- departures ---------------- */
+state.dep = null;        // selected {flight, date}
+state.deps = [];
+state.depDetail = null;
+
+async function refreshDepartures(){
+  let d;
+  try {
+    const r = await fetch("api/dcs/flights");
+    if (r.status === 404) { $("#depview").hidden = true; return; }
+    d = await r.json();
+  } catch (e) { return; }
+  $("#depview").hidden = false;
+  state.deps = d.flights || [];
+  $("#depcount").textContent = state.deps.length;
+  const list = $("#deplist"); list.innerHTML = "";
+  if (!state.deps.length){ list.appendChild(el("div", "empty", "No flights under control.")); return; }
+  for (const f of state.deps){
+    const on = state.dep && state.dep.flight === f.flight && state.dep.date === f.date;
+    const row = el("div", "dep" + (on ? " on" : ""));
+    const top = el("div", "top");
+    top.appendChild(el("span", null, `${f.flight}/${f.date}`));
+    top.appendChild(el("span", null, `${f.board}→${f.dest}`)).style.color = "var(--ink-3)";
+    top.appendChild(el("span", "st " + f.state, f.state.replace("_", " ")));
+    row.appendChild(top);
+    const c = f.counts;
+    row.appendChild(el("div", "sub",
+      `${f.equipment} ${f.registration || ""} · ${c.listed} listed · ${c.accepted} acc · ${c.boarded} brd` +
+      (c.noshow ? ` · ${c.noshow} nosho` : "") + (c.standby ? ` · ${c.standby} stby` : "") +
+      ` · ${c.bags} bags` + (f.alerts ? ` · ⚠ ${f.alerts}` : "")));
+    row.addEventListener("click", () => { state.dep = {flight: f.flight, date: f.date}; refreshDepartures(); loadDeparture(); });
+    list.appendChild(row);
+  }
+  if (!state.dep && state.deps.length){ state.dep = {flight: state.deps[0].flight, date: state.deps[0].date}; refreshDepartures(); loadDeparture(); }
+}
+
+async function loadDeparture(){
+  if (!state.dep) return;
+  let f;
+  try { f = await fetch(`api/dcs/flight/${state.dep.flight}/${state.dep.date}`).then(r => r.json()); }
+  catch (e) { return; }
+  state.depDetail = f;
+  $("#depname").textContent = `${f.flight}/${f.date} ${f.board}→${f.dest} · ${f.equipment} ${f.registration || ""} ${f.version}`;
+  const c = f.counts;
+  $("#depcounts").textContent = `${c.accepted + c.boarded}/${c.seats} seats · ${c.boarded} boarded · ${c.bags} bags ${c.bag_kilos}kg`;
+  $("#depclosecki").disabled = f.state !== "open";
+  $("#depclose").disabled = f.state === "closed";
+  const tb = $("#manifest"); tb.innerHTML = "";
+  const pax = (f.passengers || []).slice().sort((a, b) => (a.sequence || 9999) - (b.sequence || 9999) || a.id - b.id);
+  for (const p of pax){
+    const tr = el("tr", p.status);
+    const cells = [p.sequence || "", `${p.surname}/${p.given}`, p.locator || "", `${p.class}/${p.compartment}`,
+      p.seat || "", p.status + (p.category ? ` ${p.category}` : "") + (p.deleted_after_acceptance ? " ⚠ADL" : ""),
+      (p.bags || []).filter(b => !b.offloaded).length || "", (p.ssrs || []).map(x => x.code).join(" ")];
+    for (const c of cells) tr.appendChild(el("td", null, String(c)));
+    const act = el("td");
+    if (f.state !== "closed"){
+      if (p.status === "listed" || p.status === "standby") act.appendChild(depButton("Accept", () => depAction("accept", {passenger_id: p.id, bags: [], force: f.state !== "open"})));
+      if (p.status === "accepted") act.appendChild(depButton("Board", () => depAction("board", {passenger_id: p.id})));
+      if (p.status === "accepted" || p.status === "boarded") act.appendChild(depButton("Offload", () => depAction("offload", {passenger_id: p.id, reason: "agent"})));
+    }
+    tr.appendChild(act);
+    tb.appendChild(tr);
+  }
+  renderSeatMap(f);
+  const al = $("#depalerts");
+  al.hidden = !(f.alerts && f.alerts.length);
+  al.innerHTML = "";
+  for (const a of (f.alerts || [])) al.appendChild(el("div", null, `${a.code}: ${a.detail}`));
+  const ls = $("#loadsheet");
+  ls.hidden = !f.loadsheet; ls.textContent = f.loadsheet || "";
+}
+
+function depButton(label, fn){
+  const b = el("button", null, label);
+  b.addEventListener("click", e => { e.stopPropagation(); fn(); });
+  return b;
+}
+
+async function depAction(op, body){
+  if (!state.dep) return;
+  try {
+    const r = await fetch(`api/dcs/flight/${state.dep.flight}/${state.dep.date}/${op}`,
+      {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+    if (!r.ok) console.warn("dcs", op, await r.text());
+  } catch (e) { console.warn("dcs", op, e); }
+  await refreshDepartures(); await loadDeparture();
+}
+
+$("#depclosecki").addEventListener("click", () => depAction("close-checkin", {}));
+$("#depclose").addEventListener("click", () => depAction("close", {force: true}));
+
+function renderSeatMap(f){
+  const box = $("#seatmap"); box.innerHTML = "";
+  if (!f.rows) return;
+  const holders = f.seat_holders || {};
+  const byId = {}; for (const p of (f.passengers || [])) byId[p.id] = p;
+  let comp = null;
+  for (const r of f.rows){
+    if (r.compartment !== comp){ comp = r.compartment; box.appendChild(el("div", "comp", comp === "C" ? "business" : comp === "F" ? "first" : "economy")); }
+    const row = el("div", "srow");
+    row.appendChild(el("span", "rn", String(r.row)));
+    for (const s of r.seats){
+      if (s === ""){ row.appendChild(el("span", "aisle")); continue; }
+      const id = holders[`${r.row}${s}`];
+      const seat = el("span", "seat " + comp + (id ? " taken" : ""));
+      seat.title = id && byId[id] ? `${r.row}${s} ${byId[id].surname}/${byId[id].given} · ${byId[id].status}` : `${r.row}${s}`;
+      row.appendChild(seat);
+    }
+    box.appendChild(row);
+  }
+}
+
+// The board moves as check-in does; while it is on screen, keep it current.
+setInterval(() => { if (!$("#view-departures").hidden) { refreshDepartures(); loadDeparture(); } }, 5000);
+// Show the tab at all only when this node runs departure control.
+fetch("api/dcs/flights").then(r => { if (r.ok) $("#depview").hidden = false; }).catch(() => {});
 
 /* ---------------- insights ---------------- */
 $("#irefresh").addEventListener("click", refreshInsights);

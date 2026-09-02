@@ -2,7 +2,11 @@
 
 An honest list. Things in the first two sections block a production deployment.
 
-Recently closed: split and divide, with seats apportioned and every
+Recently closed: departure control -- `pkg/dcs` opens a flight from the
+PNL, accepts and seats passengers, tags bags, boards, closes, and builds PFS,
+PTM, PSM, ETL, LDM and CPM with an AHM 560-method loadsheet; the gateway's
+`Ground` seam hands it the airport-side traffic and the switch now routes a
+carrier's unregistered station addresses down its own link; split and divide, with seats apportioned and every
 per-passenger reference remapped; EMD -- associated and standalone documents, reason for
 issuance, association to flight coupons and lifting with them;
 interline ticket control -- TKCREQ and TKCRES, so a ticket
@@ -38,6 +42,9 @@ that difference — the tests would only be checking the same guess twice.
 | **IATA PADIS message directories** | `pkg/padis` segment layouts are inferred: `PAOREQ`, `PAORES`, and the `TKT`/`CPN` segments of `TKCREQ`/`TKCRES`. The *code sets* are public and are used; the message structures are not. |
 | **The EMD System Update message** | Association and disassociation are recorded locally and the carrier advised over ticket control, because the guide names a distinct request without giving its EDIFACT form. |
 | **BATAP** | No acknowledgement contract above MATIP, so a relayed message has no responsibility transfer and a detected sequence gap cannot be turned into a retransmission request. |
+| **IATA RP 1719 (PFS) and RP 1719c (ETL)** | `pkg/dcs` builds and parses both as inferred layouts following the PNL family. The category vocabulary is public; the line layout is the guess. No free reproduction was found where the PSM, PTM, LDM and CPM all had one. |
+| **IATA RP 1715 (PSM), RP 1718 (PTM), AHM 583 (LDM), AHM 587 (CPM)** | Built from the practices' own worked examples as airports and handlers reproduce them, and tested against those verbatim. Close, and still a profile: the element directory behind the examples was not read. |
+| **IATA AHM 560** | The index arithmetic is the published method. The aircraft data in `dcs.DefaultFleet` is representative type-class data, not an operator's; a deployment supplies its own. |
 | **ATPCO Optional Services** | Reason-for-issuance sub-codes are carried as free text rather than validated. The seven top-level groups are public and are enforced. |
 
 Two things follow from this that are worth stating plainly.
@@ -105,7 +112,13 @@ exists, it is used, and it has found real bugs every time.
   cannot yet ask for a CONTRL on a *functional group*, since UCF is built but
   no path produces one, and schedule messages update no schedule of our own --
   they only raise work against records.
-- **`PNL`/`ADL`** passenger lists to departure control are not implemented.
+- **Departure control** handles single-leg flights: one boarding point,
+  one destination per flight. Multi-sector flights (through passengers, per-
+  destination PSMs, SOM seat-occupied messages to the next station) are not
+  modelled. The `Store` seam has only the in-memory implementation; a
+  Postgres one is a table with a key and a jsonb column. UCM (ULD control),
+  PRL (passenger reconcile list) and the EDIFACT check-in pair
+  (`DCQCKI`/`DCRCKI`) are not consumed.
 - **The divide message, on teletype only.** An EDIFACT partner is now advised
   of a division; a teletype partner is not, because the AIRIMP message is in a
   manual this build does not have and both substitutes are wrong -- selling the
@@ -215,6 +228,7 @@ partner's message with something false. Fix those before anything else.
 
 ## Deliberately out of scope
 
-Availability and inventory, fares and pricing, ticketing, departure control.
-Jetway is a messaging gateway and a record store. `gateway.Responder` is the
-seam where an inventory system plugs in.
+Fares and pricing. Jetway is a messaging gateway, a record store, a seat
+inventory and a departure control system; it is not a pricing engine.
+`gateway.Responder` is the seam where an inventory system plugs in and
+`gateway.Ground` where an airport does; neither knows what a seat costs.

@@ -133,6 +133,15 @@ func Build(m *Message) (string, error) {
 	return b.String(), nil
 }
 
+// NameLine renders one name item as the wire carries it, for the other
+// list messages of the family -- final sales, ticket lists -- that share
+// the form.
+func NameLine(n Name) string { return nameLine(n) }
+
+// ParseName reads one name item. It is the same parser the list uses,
+// exported for the messages that borrow the PNL name form.
+func ParseName(t string) (Name, error) { return parseName(strings.TrimSpace(t)) }
+
 func nameLine(n Name) string {
 	party := n.Party
 	if party <= 0 {

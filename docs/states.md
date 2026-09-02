@@ -114,3 +114,47 @@ The queues themselves say what kind of attention a record needs:
 limit approaches; the sweeper cancels on expiry only when asked), and
 `divergence` — the queue for every case where two systems' views of one
 booking are known to disagree.
+
+## Passenger, at departure control
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> listed: PNL / ADL ADD
+    listed --> deleted: ADL DEL
+    deleted --> listed: ADL ADD (reinstated)
+    listed --> accepted: check-in (seat, sequence, bags)
+    [*] --> standby: go-show with no spare seat, staff travel
+    standby --> accepted: seat freed at check-in close
+    accepted --> boarded: gate
+    accepted --> offloaded: agent, or not boarded at close
+    boarded --> offloaded: agent
+    listed --> noshow: flight close
+    note right of accepted
+        an ADL DEL here is kept as
+        an alert; the PFS reports the
+        passenger as GOSHO
+    end note
+```
+
+The PFS categories read straight off this chart: `NOSHO` is `listed →
+noshow`, `OFFLD` is anything that reached `offloaded`, `GOSHO` and `NOREC`
+are go-shows that flew, `IDPAD` is staff that cleared. A passenger who was
+listed, accepted and boarded is not reported at all: the list was right.
+
+## Flight, at departure control
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> open: first PNL part
+    open --> open: PNL parts, ADLs, acceptance
+    open --> checkin_closed: close check-in (standbys clear)
+    checkin_closed --> closed: close flight
+    open --> closed: close flight, forced
+    note right of closed
+        PFS PTM PSM ETL LDM CPM built,
+        loadsheet produced, nothing
+        changes afterwards
+    end note
+```
