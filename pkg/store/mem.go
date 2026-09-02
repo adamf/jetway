@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -558,6 +559,47 @@ func (s *Mem) FindPNRByExternalLocator(ctx context.Context, owner, value string)
 		}
 	}
 	return nil, nil
+}
+
+// SoldSeats implements Store.
+func (s *Mem) SoldSeats(ctx context.Context, carrier, wireDate string) ([]SoldSeats, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	acc := map[SoldSeats]int{}
+	for _, p := range s.pnrs {
+		if p.Status == pnr.StatusCancelled {
+			continue
+		}
+		for _, sg := range p.Segments {
+			if sg.Type != pnr.SegmentAir || sg.Carrier != carrier || sg.Status == "XX" {
+				continue
+			}
+			if wireDate != "" && !strings.EqualFold(sg.WireDate, wireDate) {
+				continue
+			}
+			k := SoldSeats{Carrier: sg.Carrier, FlightNum: strings.TrimLeft(sg.FlightNum, "0"), WireDate: strings.ToUpper(sg.WireDate), Class: sg.Class, Status: sg.Status}
+			acc[k] += sg.Seats
+		}
+	}
+	out := make([]SoldSeats, 0, len(acc))
+	for k, n := range acc {
+		k.Seats = n
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.FlightNum != b.FlightNum {
+			return a.FlightNum < b.FlightNum
+		}
+		if a.WireDate != b.WireDate {
+			return a.WireDate < b.WireDate
+		}
+		if a.Class != b.Class {
+			return a.Class < b.Class
+		}
+		return a.Status < b.Status
+	})
+	return out, nil
 }
 
 // LoadPNRs implements Store.

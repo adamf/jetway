@@ -150,6 +150,17 @@ type Message struct {
 func (m *Message) RawString() string { return string(m.Raw) }
 
 // Event is one applied change to a record.
+// SoldSeats is one line of a carrier's sold-seat count: a flight, date,
+// class and segment status, and the seats records hold at it.
+type SoldSeats struct {
+	Carrier   string
+	FlightNum string
+	WireDate  string
+	Class     string
+	Status    string
+	Seats     int
+}
+
 type Event struct {
 	ID        string          `json:"id"`
 	PNRID     string          `json:"pnr_id"`

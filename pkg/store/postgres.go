@@ -233,6 +233,34 @@ func (s *Postgres) CreatePNR(ctx context.Context, p *pnr.PNR, events []Event) er
 	})
 }
 
+// SoldSeats implements Store with one aggregate over the segments of the
+// node's live records; leading zeros on flight numbers are dropped so the
+// two spellings carriers use count as one flight.
+func (s *Postgres) SoldSeats(ctx context.Context, carrier, wireDate string) ([]SoldSeats, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT ltrim(seg->>'flight_num', '0'), upper(seg->>'wire_date'), coalesce(seg->>'class',''), coalesce(seg->>'status',''),
+		       sum(coalesce((seg->>'seats')::int, 0))::int
+		FROM pnr, jsonb_array_elements(state->'segments') seg
+		WHERE node = $1 AND status <> 'cancelled'
+		  AND seg->>'type' = 'air' AND seg->>'carrier' = $2 AND coalesce(seg->>'status','') <> 'XX'
+		  AND ($3 = '' OR upper(seg->>'wire_date') = upper($3))
+		GROUP BY 1, 2, 3, 4
+		ORDER BY 1, 2, 3, 4`, s.node, carrier, wireDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SoldSeats
+	for rows.Next() {
+		r := SoldSeats{Carrier: carrier}
+		if err := rows.Scan(&r.FlightNum, &r.WireDate, &r.Class, &r.Status, &r.Seats); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // LoadPNRs implements Store with COPY: one stream for the records, one for
 // their events, in one transaction, so a batch lands whole or not at all.
 // Through a transaction-pooling proxy COPY is fine -- it is one statement

@@ -372,6 +372,14 @@ type Responder interface {
 	Decide(ctx context.Context, p *pnr.PNR, peer *Peer) (map[string]string, error)
 }
 
+// Releaser is a Responder that also wants to know when a holding it granted
+// is given back: an inbound cancellation turned a confirmed or waitlisted
+// segment into XX. A seat inventory implements it so a cancelled seat sells
+// again; a Responder that is not one is not told.
+type Releaser interface {
+	Release(ctx context.Context, s pnr.Segment, was string)
+}
+
 // IngestOptions parameterises a single inbound message.
 type IngestOptions struct {
 	// Transport names the ingress that accepted the message, for the audit
@@ -951,6 +959,7 @@ func (g *Gateway) apply(ctx context.Context, peer *Peer, msg *store.Message, dec
 			g.Bus.Publish(EvPNR, g.pnrView(rec))
 			g.trace(msg.ID, "applied", fmt.Sprintf("%s v%d, %d change(s)",
 				rec.RecordLocator, rec.Version, len(changes)))
+			g.releaseCancelled(ctx, rec, before)
 			g.enqueueStatusChanges(ctx, rec, before, msg)
 			g.reCancelAfterLateConfirmation(ctx, peer, rec, changes, msg)
 			return g.respond(ctx, peer, msg, dec, rec, res, opts)
@@ -1341,6 +1350,23 @@ func TrimForLog(raw []byte, n int) string {
 //
 // Keying on the segment rather than its position matters because applying a
 // message can add segments and renumber the rest.
+// releaseCancelled tells a Releaser about every segment this message took
+// from a holding to XX, with the status it held.
+func (g *Gateway) releaseCancelled(ctx context.Context, rec *pnr.PNR, before map[string]string) {
+	r, ok := g.Responder.(Releaser)
+	if !ok {
+		return
+	}
+	for _, s := range rec.Segments {
+		if s.Status != "XX" {
+			continue
+		}
+		if was, had := before[s.Key()]; had && was != "XX" && was != "" {
+			r.Release(ctx, s, was)
+		}
+	}
+}
+
 func segmentStatuses(p *pnr.PNR) map[string]string {
 	out := make(map[string]string, len(p.Segments))
 	for i := range p.Segments {

@@ -54,6 +54,14 @@ func testLoadPNRs(t *testing.T, s Store) {
 	if err != nil || len(events) != 1 || events[0].Type != "loaded" || events[0].Actor != "fill" {
 		t.Errorf("a loaded record should carry one loaded event by the actor: %+v %v", events, err)
 	}
+	// The sold-seat count reads the same records back as an inventory would.
+	sold, err := s.SoldSeats(ctx, "WN", "26NOV")
+	if err != nil || len(sold) != 1 || sold[0].FlightNum != "2554" || sold[0].Class != "Y" || sold[0].Status != "HK" || sold[0].Seats != 25 {
+		t.Errorf("SoldSeats after load: %+v %v", sold, err)
+	}
+	if none, _ := s.SoldSeats(ctx, "WN", "27NOV"); len(none) != 0 {
+		t.Errorf("SoldSeats on a day with no flights: %+v", none)
+	}
 	// A locator already held fails the whole batch and stores nothing.
 	again := loadFixture(3, "LE")
 	again[1].RecordLocator = "LD0007"

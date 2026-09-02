@@ -5,6 +5,19 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.37 — A seat inventory
+- `pkg/inventory`: a carrier's seats per cabin. Capacity comes from the
+  schedule per flight, date and compartment; booking classes draw on their
+  cabin's pool; a full cabin waitlists to a depth, then refuses; a flight the
+  carrier does not fly is UN. It answers as `gateway.Responder`, broadcasts
+  availability with the seats left, and is rebuilt from the book of record:
+  `Seed` counts what a stored segment holds and `Store.SoldSeats` sums a
+  carrier's holdings per flight, date, class and status in one query.
+- `gateway.Releaser`: a Responder that wants to know when an inbound
+  cancellation turned a holding into XX, so the seat sells again. The
+  inventory implements it.
+- `gateway.Inventory` stays as the demo stand-in it always was.
+
 ## v0.1.36 — Links never wait on the peer's window
 - Every link's writes go through `transport.Outbox`: a bounded queue drained
   by one writer goroutine, in `transport.Link`, the TCP ingress session and

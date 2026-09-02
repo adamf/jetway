@@ -39,6 +39,11 @@ type Lookup interface {
 	// that misses half its holdings is worse than useless.
 	FindPNRsByFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error)
 
+	// SoldSeats sums the seats held per flight, date, class and status across
+	// every live record of a carrier, for one wire date or all of them: what
+	// an inventory rebuilds itself from when it starts.
+	SoldSeats(ctx context.Context, carrier, wireDate string) ([]SoldSeats, error)
+
 	// FindPNRsStale returns live records untouched since before the given
 	// time, most overdue first.
 	//
