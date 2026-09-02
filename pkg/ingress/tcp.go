@@ -47,6 +47,9 @@ func sentinelFramer(f config.Framing) (framer, error) {
 // by the network they came from. That is what makes this usable with a real
 // carrier, whose front end will not speak a bespoke hello.
 type TCP struct {
+	rateLimit float64
+	burst     int
+
 	name     string
 	addr     string
 	framer   framer
@@ -67,6 +70,53 @@ type session struct {
 	conn   net.Conn
 	framer framer
 	out    *transport.Outbox
+	limit  *bucket
+}
+
+// bucket is a token bucket: rate tokens a second, burst tokens deep. wait
+// blocks the caller until a token is available, which on a read loop means
+// the peer's writes back up into its own socket -- the flow control a Type
+// B circuit always had, now with a number on it.
+type bucket struct {
+	mu     sync.Mutex
+	rate   float64
+	burst  float64
+	tokens float64
+	last   time.Time
+}
+
+func newBucket(rate float64, burst int) *bucket {
+	if rate <= 0 {
+		return nil
+	}
+	if burst <= 0 {
+		burst = int(rate) + 1
+	}
+	return &bucket{rate: rate, burst: float64(burst), tokens: float64(burst), last: time.Now()}
+}
+
+func (b *bucket) wait(ctx context.Context) {
+	if b == nil {
+		return
+	}
+	for {
+		b.mu.Lock()
+		now := time.Now()
+		b.tokens = min(b.burst, b.tokens+now.Sub(b.last).Seconds()*b.rate)
+		b.last = now
+		if b.tokens >= 1 {
+			b.tokens--
+			b.mu.Unlock()
+			return
+		}
+		need := time.Duration((1 - b.tokens) / b.rate * float64(time.Second))
+		b.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(need):
+		}
+	}
 }
 
 // newSession wires the connection to its outbox: writes go through one
@@ -111,6 +161,7 @@ func NewTCP(c config.Ingress, log *slog.Logger) (*TCP, error) {
 	}
 	return &TCP{
 		name: c.Name, addr: c.Addr, framer: f, tls: tc, resolver: r,
+		rateLimit: c.RateLimit, burst: c.Burst,
 		log: log.With("ingress", c.Name), sessions: map[string]*session{},
 	}, nil
 }
@@ -217,6 +268,7 @@ func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 	}
 
 	sess := newSession(conn, t.framer, t.log, peer)
+	sess.limit = newBucket(t.rateLimit, t.burst)
 	defer sess.out.Close()
 	t.mu.Lock()
 	if prev := t.sessions[peer]; prev != nil {
@@ -246,6 +298,7 @@ func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 		}
 		raw, err := t.framer.ReadFrame(r)
 		if len(raw) > 0 {
+			sess.limit.wait(ctx)
 			t.inflight.Add(1)
 			_, herr := h(ctx, Message{Peer: peer, Transport: t.name, Remote: remote, Raw: raw})
 			t.inflight.Done()

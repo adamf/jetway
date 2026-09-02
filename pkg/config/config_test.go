@@ -106,7 +106,7 @@ func TestValidationCatchesMisconfiguration(t *testing.T) {
 		{"bad tty length", "identity:\n  designator: 1J\n  tty_address: SHORT\n", "seven characters"},
 		{"postgres without dsn", "identity:\n  designator: 1J\nstore:\n  backend: postgres\n", "store.dsn"},
 		{"unknown backend", "identity:\n  designator: 1J\nstore:\n  backend: sqlite\n", "mem or postgres"},
-		{"spool without dir", "identity:\n  designator: 1J\nspool:\n  enabled: true\n", "spool.dir"},
+		{"spool without dir", "identity:\n  designator: 1J\nspool:\n  enabled: true\n  dir: \"\"\n", "spool.dir"},
 		{
 			"ingress with no identity",
 			"identity:\n  designator: 1J\ningress:\n  - name: x\n    type: tcp\n    addr: :9100\n",

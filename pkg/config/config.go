@@ -180,6 +180,13 @@ type Ingress struct {
 	Framing  Framing  `yaml:"framing"`
 	Identify Identify `yaml:"identify"`
 	MATIP    MATIP    `yaml:"matip"`
+	// RateLimit caps what one peer may send on this ingress, in messages a
+	// second, with Burst messages allowed above it before the reader slows
+	// down. The limit is applied by reading more slowly, so the peer's own
+	// link pushes back the way a Type B circuit always has; nothing is
+	// dropped. Zero is no limit.
+	RateLimit float64 `yaml:"rate_limit"`
+	Burst     int     `yaml:"burst"`
 
 	// Synchronous makes an https listener hold the request open and return any
 	// generated reply in the response body, rather than answering 202 and
@@ -290,9 +297,11 @@ func Default() *Config {
 	return &Config{
 		Identity: Identity{Designator: "1J", TTYAddress: "LONRM1J", Name: "jetway"},
 		Store:    Store{Backend: "mem", Migrate: true},
-		Spool:    Spool{Enabled: false, DrainInterval: 5 * time.Second},
-		Lease:    Lease{TTL: 15 * time.Second},
-		HTTP:     HTTP{Addr: "127.0.0.1:8080", Console: true, Metrics: true},
+		// On by default: a store outage becomes a pause, not refused
+		// acknowledgements. A harness that wants memory only turns it off.
+		Spool: Spool{Enabled: true, Dir: "spool", DrainInterval: 5 * time.Second},
+		Lease: Lease{TTL: 15 * time.Second},
+		HTTP:  HTTP{Addr: "127.0.0.1:8080", Console: true, Metrics: true},
 		// One listener per partner. That is how circuits are actually
 		// provisioned, and it is what lets a peer be identified without the
 		// sender asserting who it is.
