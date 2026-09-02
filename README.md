@@ -620,6 +620,7 @@ make fuzz        # fuzz the EDIFACT codec
 - [docs/adding-a-carrier.md](docs/adding-a-carrier.md) — onboarding a link
 - [docs/operations.md](docs/operations.md) — running it, and what to do when a message fails
 - [docs/scaling.md](docs/scaling.md) — measured throughput, what breaks first, and why MATIP resists load balancing
+- [docs/production-gcp.md](docs/production-gcp.md) — running it for real on Google Cloud: topology, one writer per system, capacity, failover, DR, observability, and what the code still needs first
 - [docs/roadmap.md](docs/roadmap.md) — what is missing
 
 ## Licence
