@@ -62,7 +62,11 @@ func Migrations() ([]migration, error) {
 // records it, so a failure part-way leaves the database at a version that
 // actually reflects its contents. Applying is idempotent, which is what makes
 // running it on every start safe and removes a manual deployment step.
-func MigrateSchema(ctx context.Context, s *Postgres) error {
+func MigrateSchema(ctx context.Context, s *Postgres) error { return migrateThrough(ctx, s, 0) }
+
+// migrateThrough applies migrations up to and including a version; zero
+// means all of them. Tests use it to stand a database at an older schema.
+func migrateThrough(ctx context.Context, s *Postgres, through int) error {
 	if _, err := s.pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migration (
 			version    int PRIMARY KEY,
@@ -98,7 +102,23 @@ func MigrateSchema(ctx context.Context, s *Postgres) error {
 		if applied[m.Version] {
 			continue
 		}
+		if through > 0 && m.Version > through {
+			break
+		}
 		err := s.tx(ctx, func(tx pgx.Tx) error {
+			// Two processes booting against one database take turns: the
+			// lock serialises them and the re-check inside it makes the
+			// second one find the work done.
+			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('jetway_schema_migration'))`); err != nil {
+				return err
+			}
+			var done bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migration WHERE version=$1)`, m.Version).Scan(&done); err != nil {
+				return err
+			}
+			if done {
+				return nil
+			}
 			if _, err := tx.Exec(ctx, m.SQL); err != nil {
 				return err
 			}

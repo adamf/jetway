@@ -5,6 +5,20 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.40 — Records retire by partition
+- Records and their events are partitioned by `purge_at`, the day a record
+  may be retired: its last flight plus `Postgres.RetireGrace` (three days
+  by default), or a year after creation with no flight. Daily partitions
+  are created on demand; `Postgres.RetireBefore` drops every day that has
+  passed and clears the queue items left pointing at nothing. Migration
+  0008 converts a populated book in place, inside one transaction.
+- Locators stay unique per system across partitions by an explicit check;
+  the unique index carries the partition key.
+- `Purge` (the per-system delete) now takes events and queue items with
+  the records, since the foreign keys had to go.
+- The migration runner takes an advisory lock and re-checks, so two
+  processes booting against one database take turns.
+
 ## v0.1.39 — IROPS waits for the answer
 - `irops.Engine` treats a seat it asks for as a request until the carrier
   answers. Confirmed: the dead leg and any waitlist this pass took out are

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,11 +24,178 @@ type Postgres struct {
 	// use; read without a lock.
 	Now func() time.Time
 
+	// RetireGrace is how long after its last flight a record may be
+	// retired: it sets purge_at, the partition a record lives in. Set on the
+	// root store before any Node view is taken. Zero means three days.
+	RetireGrace time.Duration
+
 	// node is which system's rows this store sees. The empty string is the
 	// single-tenant deployment; Node returns a view for any other.
 	node string
 	// shared marks a Node view, whose Close must leave the pool alone.
 	shared bool
+	// parts remembers which daily partitions exist, shared by every view.
+	parts *partitionCache
+}
+
+// partitionCache is the set of daily partitions this process has seen or
+// made, so a write does not ask the catalogue every time.
+type partitionCache struct {
+	mu   sync.Mutex
+	have map[string]bool
+}
+
+// purgeAt is the day a record may be retired: the departure of its last air
+// segment plus the grace, or a year from creation when it holds no flight.
+func (s *Postgres) purgeAt(p *pnr.PNR) time.Time {
+	grace := s.RetireGrace
+	if grace <= 0 {
+		grace = 72 * time.Hour
+	}
+	var last time.Time
+	for _, sg := range p.Segments {
+		if sg.Type == pnr.SegmentAir && sg.Depart.After(last) {
+			last = sg.Depart
+		}
+	}
+	if last.IsZero() {
+		base := p.CreatedAt
+		if base.IsZero() {
+			base = s.now()
+		}
+		return base.UTC().AddDate(1, 0, 0).Truncate(24 * time.Hour)
+	}
+	return last.UTC().Add(grace).Truncate(24 * time.Hour)
+}
+
+// locatorHeld reports whether a system already holds a live record under a
+// locator. The unique index carries the partition key, so it alone cannot
+// refuse the same locator on a different retirement day; this can.
+func locatorHeld(ctx context.Context, tx pgx.Tx, node, locator string) (bool, error) {
+	if locator == "" {
+		return false, nil
+	}
+	var held bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pnr WHERE node=$1 AND record_locator=$2)`, node, locator).Scan(&held)
+	return held, err
+}
+
+// ensurePartitions makes sure a daily partition exists for each purge day
+// given, on both partitioned tables. Creation takes an advisory lock so two
+// processes writing the same first record of a day do not race the
+// catalogue.
+func (s *Postgres) ensurePartitions(ctx context.Context, days ...time.Time) error {
+	for _, d := range days {
+		day := d.UTC().Truncate(24 * time.Hour)
+		key := day.Format("20060102")
+		s.parts.mu.Lock()
+		have := s.parts.have[key]
+		s.parts.mu.Unlock()
+		if have {
+			continue
+		}
+		err := s.tx(ctx, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('jetway_pnr_partitions'))`); err != nil {
+				return err
+			}
+			from, to := day.Format("2006-01-02"), day.AddDate(0, 0, 1).Format("2006-01-02")
+			for _, table := range []string{"pnr", "pnr_event"} {
+				q := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s_p_%s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')`,
+					table, key, table, from, to)
+				if _, err := tx.Exec(ctx, q); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("store: partition for %s: %w", key, err)
+		}
+		s.parts.mu.Lock()
+		s.parts.have[key] = true
+		s.parts.mu.Unlock()
+	}
+	return nil
+}
+
+// Retired is what RetireBefore removed.
+type Retired struct {
+	Partitions int // daily partitions dropped, across both tables
+	Records    int // rows deleted from the default partitions
+	QueueItems int // queue items whose record is gone
+}
+
+// RetireBefore retires every record whose purge day has passed: the daily
+// partitions of records and events with an upper bound at or before the
+// cutoff are dropped, rows that landed in the default partitions are
+// deleted, and queue items left pointing at nothing go too. It acts on the
+// whole database, not one system's view: retention is the deployment's
+// policy, and a day is a day for everyone in the book.
+func (s *Postgres) RetireBefore(ctx context.Context, cutoff time.Time) (Retired, error) {
+	var out Retired
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.relname, pg_get_expr(c.relpartbound, c.oid)
+		FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
+		WHERE i.inhparent IN ('pnr'::regclass, 'pnr_event'::regclass)`)
+	if err != nil {
+		return out, fmt.Errorf("store: retire: %w", err)
+	}
+	type part struct{ name string }
+	var drop []string
+	for rows.Next() {
+		var name, bound string
+		if err := rows.Scan(&name, &bound); err != nil {
+			rows.Close()
+			return out, err
+		}
+		upper, ok := partitionUpper(bound)
+		if ok && !upper.After(cutoff) {
+			drop = append(drop, name)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	for _, name := range drop {
+		if _, err := s.pool.Exec(ctx, `DROP TABLE IF EXISTS `+pgx.Identifier{name}.Sanitize()); err != nil {
+			return out, fmt.Errorf("store: retire %s: %w", name, err)
+		}
+		out.Partitions++
+		s.parts.mu.Lock()
+		delete(s.parts.have, strings.TrimPrefix(strings.TrimPrefix(name, "pnr_event_p_"), "pnr_p_"))
+		s.parts.mu.Unlock()
+	}
+	tag, err := s.pool.Exec(ctx, `DELETE FROM pnr_default WHERE purge_at < $1`, cutoff)
+	if err != nil {
+		return out, fmt.Errorf("store: retire default: %w", err)
+	}
+	out.Records = int(tag.RowsAffected())
+	if _, err := s.pool.Exec(ctx, `DELETE FROM pnr_event_default WHERE purge_at < $1`, cutoff); err != nil {
+		return out, fmt.Errorf("store: retire default events: %w", err)
+	}
+	tag, err = s.pool.Exec(ctx, `DELETE FROM queue_item q WHERE NOT EXISTS (SELECT 1 FROM pnr p WHERE p.id = q.pnr_id)`)
+	if err != nil {
+		return out, fmt.Errorf("store: retire queue: %w", err)
+	}
+	out.QueueItems = int(tag.RowsAffected())
+	return out, nil
+}
+
+// partitionUpper reads the upper bound out of a range partition's bound
+// expression: FOR VALUES FROM ('2025-11-26 00:00:00+00') TO ('2025-11-27 00:00:00+00').
+func partitionUpper(bound string) (time.Time, bool) {
+	i := strings.LastIndex(bound, "TO (")
+	if i < 0 {
+		return time.Time{}, false
+	}
+	v := strings.Trim(strings.TrimSuffix(bound[i+4:], ")"), "' ")
+	for _, layout := range []string{"2006-01-02 15:04:05-07", "2006-01-02 15:04:05+00", "2006-01-02 15:04:05", "2006-01-02"} {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // Node returns a view of the same database scoped to one system.
@@ -66,7 +234,7 @@ func OpenPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 		pool.Close()
 		return nil, fmt.Errorf("store: ping: %w", err)
 	}
-	return &Postgres{pool: pool}, nil
+	return &Postgres{pool: pool, parts: &partitionCache{have: map[string]bool{}}}, nil
 }
 
 func (s *Postgres) Close() error {
@@ -217,19 +385,28 @@ func (s *Postgres) CreatePNR(ctx context.Context, p *pnr.PNR, events []Event) er
 	if err != nil {
 		return err
 	}
+	pa := s.purgeAt(p)
+	if err := s.ensurePartitions(ctx, pa); err != nil {
+		return err
+	}
 	return s.tx(ctx, func(tx pgx.Tx) error {
+		if held, err := locatorHeld(ctx, tx, s.node, p.RecordLocator); err != nil {
+			return err
+		} else if held {
+			return ErrDuplicate
+		}
 		_, err := tx.Exec(ctx, `
-			INSERT INTO pnr (id, record_locator, version, status, created_at, updated_at, state, next_deadline, node)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+			INSERT INTO pnr (id, record_locator, version, status, created_at, updated_at, state, next_deadline, node, purge_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 			p.ID, p.RecordLocator, p.Version, p.Status, p.CreatedAt, p.UpdatedAt, state,
-			p.NextDeadline(), s.node)
+			p.NextDeadline(), s.node, pa)
 		if err != nil {
 			if isUniqueViolation(err) {
 				return ErrDuplicate
 			}
 			return err
 		}
-		return insertEvents(ctx, tx, s.node, p.ID, 0, events, s.now)
+		return insertEvents(ctx, tx, s.node, p.ID, 0, events, s.now, pa)
 	})
 }
 
@@ -272,6 +449,7 @@ func (s *Postgres) LoadPNRs(ctx context.Context, recs []*pnr.PNR, actor string) 
 	now := s.now()
 	rows := make([][]any, 0, len(recs))
 	events := make([][]any, 0, len(recs))
+	days := map[time.Time]bool{}
 	for _, p := range recs {
 		if p.ID == "" {
 			p.ID = ulid.New()
@@ -287,12 +465,34 @@ func (s *Postgres) LoadPNRs(ctx context.Context, recs []*pnr.PNR, actor string) 
 		if err != nil {
 			return err
 		}
-		rows = append(rows, []any{p.ID, p.RecordLocator, p.Version, string(p.Status), p.CreatedAt, p.UpdatedAt, state, p.NextDeadline(), s.node})
-		events = append(events, []any{ulid.New(), p.ID, int64(1), "loaded", nil, nil, nil, nullIfEmpty(actor), p.CreatedAt, s.node})
+		pa := s.purgeAt(p)
+		days[pa.UTC().Truncate(24*time.Hour)] = true
+		rows = append(rows, []any{p.ID, p.RecordLocator, p.Version, string(p.Status), p.CreatedAt, p.UpdatedAt, state, p.NextDeadline(), s.node, pa})
+		events = append(events, []any{ulid.New(), p.ID, int64(1), "loaded", nil, nil, nil, nullIfEmpty(actor), p.CreatedAt, s.node, pa})
+	}
+	dayList := make([]time.Time, 0, len(days))
+	for d := range days {
+		dayList = append(dayList, d)
+	}
+	if err := s.ensurePartitions(ctx, dayList...); err != nil {
+		return err
+	}
+	locators := make([]string, 0, len(recs))
+	for _, p := range recs {
+		if p.RecordLocator != "" {
+			locators = append(locators, p.RecordLocator)
+		}
 	}
 	return s.tx(ctx, func(tx pgx.Tx) error {
+		var held bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pnr WHERE node=$1 AND record_locator = ANY($2))`, s.node, locators).Scan(&held); err != nil {
+			return err
+		}
+		if held {
+			return ErrDuplicate
+		}
 		_, err := tx.CopyFrom(ctx, pgx.Identifier{"pnr"},
-			[]string{"id", "record_locator", "version", "status", "created_at", "updated_at", "state", "next_deadline", "node"},
+			[]string{"id", "record_locator", "version", "status", "created_at", "updated_at", "state", "next_deadline", "node", "purge_at"},
 			pgx.CopyFromRows(rows))
 		if err != nil {
 			if isUniqueViolation(err) {
@@ -301,7 +501,7 @@ func (s *Postgres) LoadPNRs(ctx context.Context, recs []*pnr.PNR, actor string) 
 			return err
 		}
 		_, err = tx.CopyFrom(ctx, pgx.Identifier{"pnr_event"},
-			[]string{"id", "pnr_id", "seq", "type", "detail", "payload", "message_id", "actor", "at", "node"},
+			[]string{"id", "pnr_id", "seq", "type", "detail", "payload", "message_id", "actor", "at", "node", "purge_at"},
 			pgx.CopyFromRows(events))
 		return err
 	})
@@ -313,15 +513,20 @@ func (s *Postgres) UpdatePNR(ctx context.Context, p *pnr.PNR, expected int64, ev
 	if err != nil {
 		return err
 	}
+	pa := s.purgeAt(p)
+	if err := s.ensurePartitions(ctx, pa); err != nil {
+		return err
+	}
 	return s.tx(ctx, func(tx pgx.Tx) error {
 		// The version predicate is the whole point: if another writer got here
 		// first, this update affects no rows and the caller must re-read.
+		// A changed purge day moves the row to its new partition.
 		tag, err := tx.Exec(ctx, `
 			UPDATE pnr SET version=$2, status=$3, updated_at=$4, state=$5, record_locator=$6,
-			               next_deadline=$8
+			               next_deadline=$8, purge_at=$10
 			WHERE id=$1 AND version=$7 AND node=$9`,
 			p.ID, p.Version, p.Status, p.UpdatedAt, state, p.RecordLocator, expected,
-			p.NextDeadline(), s.node)
+			p.NextDeadline(), s.node, pa)
 		if err != nil {
 			return err
 		}
@@ -340,7 +545,7 @@ func (s *Postgres) UpdatePNR(ctx context.Context, p *pnr.PNR, expected int64, ev
 			`SELECT coalesce(max(seq),0) FROM pnr_event WHERE pnr_id=$1`, p.ID).Scan(&maxSeq); err != nil {
 			return err
 		}
-		return insertEvents(ctx, tx, s.node, p.ID, maxSeq, events, s.now)
+		return insertEvents(ctx, tx, s.node, p.ID, maxSeq, events, s.now, pa)
 	})
 }
 
@@ -361,16 +566,20 @@ func (s *Postgres) DividePNR(ctx context.Context, parent *pnr.PNR, expected int6
 		return err
 	}
 
+	parentPA, childPA := s.purgeAt(parent), s.purgeAt(child)
+	if err := s.ensurePartitions(ctx, parentPA, childPA); err != nil {
+		return err
+	}
 	return s.tx(ctx, func(tx pgx.Tx) error {
 		// The parent goes first, so a losing writer rolls back before the
 		// child locator is consumed. Creating the child first and failing here
 		// is the torn write this method exists to make impossible.
 		tag, err := tx.Exec(ctx, `
 			UPDATE pnr SET version=$2, status=$3, updated_at=$4, state=$5, record_locator=$6,
-			               next_deadline=$8
+			               next_deadline=$8, purge_at=$10
 			WHERE id=$1 AND version=$7 AND node=$9`,
 			parent.ID, parent.Version, parent.Status, parent.UpdatedAt, parentState,
-			parent.RecordLocator, expected, parent.NextDeadline(), s.node)
+			parent.RecordLocator, expected, parent.NextDeadline(), s.node, parentPA)
 		if err != nil {
 			return err
 		}
@@ -389,25 +598,30 @@ func (s *Postgres) DividePNR(ctx context.Context, parent *pnr.PNR, expected int6
 			`SELECT coalesce(max(seq),0) FROM pnr_event WHERE pnr_id=$1`, parent.ID).Scan(&maxSeq); err != nil {
 			return err
 		}
-		if err := insertEvents(ctx, tx, s.node, parent.ID, maxSeq, parentEvents, s.now); err != nil {
+		if err := insertEvents(ctx, tx, s.node, parent.ID, maxSeq, parentEvents, s.now, parentPA); err != nil {
 			return err
 		}
 
+		if held, err := locatorHeld(ctx, tx, s.node, child.RecordLocator); err != nil {
+			return err
+		} else if held {
+			return ErrDuplicate
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO pnr (id, record_locator, version, status, created_at, updated_at, state, next_deadline, node)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+			INSERT INTO pnr (id, record_locator, version, status, created_at, updated_at, state, next_deadline, node, purge_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 			child.ID, child.RecordLocator, child.Version, child.Status,
-			child.CreatedAt, child.UpdatedAt, childState, child.NextDeadline(), s.node); err != nil {
+			child.CreatedAt, child.UpdatedAt, childState, child.NextDeadline(), s.node, childPA); err != nil {
 			if isUniqueViolation(err) {
 				return ErrDuplicate
 			}
 			return err
 		}
-		return insertEvents(ctx, tx, s.node, child.ID, 0, childEvents, s.now)
+		return insertEvents(ctx, tx, s.node, child.ID, 0, childEvents, s.now, childPA)
 	})
 }
 
-func insertEvents(ctx context.Context, tx pgx.Tx, node, pnrID string, startSeq int64, events []Event, now func() time.Time) error {
+func insertEvents(ctx context.Context, tx pgx.Tx, node, pnrID string, startSeq int64, events []Event, now func() time.Time, purgeAt time.Time) error {
 	for i := range events {
 		e := events[i]
 		if e.ID == "" {
@@ -418,10 +632,10 @@ func insertEvents(ctx context.Context, tx pgx.Tx, node, pnrID string, startSeq i
 		}
 		startSeq++
 		_, err := tx.Exec(ctx, `
-			INSERT INTO pnr_event (id, pnr_id, seq, type, detail, payload, message_id, actor, at, node)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+			INSERT INTO pnr_event (id, pnr_id, seq, type, detail, payload, message_id, actor, at, node, purge_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 			e.ID, pnrID, startSeq, e.Type, nullIfEmpty(e.Detail), jsonOrNil(e.Payload),
-			nullIfEmpty(e.MessageID), nullIfEmpty(e.Actor), e.At, node)
+			nullIfEmpty(e.MessageID), nullIfEmpty(e.Actor), e.At, node, purgeAt)
 		if err != nil {
 			return err
 		}
@@ -450,7 +664,7 @@ func scanPNRRow(row pgx.Row) (*pnr.PNR, error) {
 func (s *Postgres) getPNR(ctx context.Context, where string, arg any) (*pnr.PNR, error) {
 	var state []byte
 	var version int64
-	err := s.pool.QueryRow(ctx, `SELECT state, version FROM pnr WHERE node=$2 AND `+where, arg, s.node).Scan(&state, &version)
+	err := s.pool.QueryRow(ctx, `SELECT state, version FROM pnr WHERE node=$2 AND `+where+` ORDER BY purge_at DESC LIMIT 1`, arg, s.node).Scan(&state, &version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -890,6 +1104,14 @@ func (s *Postgres) Purge(ctx context.Context, before time.Time) (Purged, error) 
 		return out, fmt.Errorf("store: purge records: %w", err)
 	}
 	out.Records = int(tag.RowsAffected())
+	// Events and queue items are no longer tied to their record by a foreign
+	// key -- the record lives in a partition -- so they follow it here.
+	if _, err := s.pool.Exec(ctx, `DELETE FROM pnr_event e WHERE e.node=$1 AND NOT EXISTS (SELECT 1 FROM pnr p WHERE p.id = e.pnr_id)`, s.node); err != nil {
+		return out, fmt.Errorf("store: purge events: %w", err)
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM queue_item q WHERE q.node=$1 AND NOT EXISTS (SELECT 1 FROM pnr p WHERE p.id = q.pnr_id)`, s.node); err != nil {
+		return out, fmt.Errorf("store: purge queue: %w", err)
+	}
 	tag, err = s.pool.Exec(ctx, `DELETE FROM message WHERE node=$1 AND at < $2`, s.node, before)
 	if err != nil {
 		return out, fmt.Errorf("store: purge messages: %w", err)
