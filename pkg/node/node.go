@@ -102,6 +102,7 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Optio
 			st.Close()
 			return nil, err
 		}
+		n.Spool.MaxEntries = cfg.Spool.MaxEntries
 		log.Info("write-ahead spool enabled", "dir", n.Spool.Dir())
 	} else {
 		log.Warn("write-ahead spool disabled",

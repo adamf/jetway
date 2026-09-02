@@ -5,6 +5,11 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.52 — A bounded spool
+- `spool.max_entries` (default 100000) bounds the write-ahead spool; a full
+  spool refuses the message (`spool.ErrFull`) so the partner retransmits,
+  rather than acknowledging what may never be stored.
+
 ## v0.1.51 — The lease is released after the drain
 - A holder that is shutting down keeps the lease until `Drain` (or `Close`)
   has quieted its links, so a standby never binds while the old holder

@@ -47,7 +47,17 @@ type Entry struct {
 }
 
 // Spool is a directory of pending messages.
+// ErrFull is what Put returns when the spool holds MaxEntries already: the
+// store has been away too long for the buffer, and the honest answer to
+// the partner is a refusal it will retransmit, not an acknowledgement of
+// something that may never be written.
+var ErrFull = errors.New("spool: full")
+
 type Spool struct {
+	// MaxEntries bounds the pending entries; zero is unbounded.
+	MaxEntries int
+
+	count   int // pending entries, kept so Put need not read the directory
 	dir     string
 	pending string
 	tmp     string
@@ -76,6 +86,9 @@ func Open(dir string) (*Spool, error) {
 	// the directory from growing after repeated crashes.
 	if err := s.clearTmp(); err != nil {
 		return nil, err
+	}
+	if ids, err := s.List(); err == nil {
+		s.count = len(ids)
 	}
 	return s, nil
 }
@@ -113,6 +126,9 @@ func (s *Spool) Put(e Entry) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.MaxEntries > 0 && s.count >= s.MaxEntries {
+		return ErrFull
+	}
 
 	tmpPath := filepath.Join(s.tmp, e.ID+".json")
 	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
@@ -144,6 +160,7 @@ func (s *Spool) Put(e Entry) error {
 			return fmt.Errorf("spool: fsync dir: %w", err)
 		}
 	}
+	s.count++
 	return nil
 }
 
@@ -196,6 +213,13 @@ func (s *Spool) Get(id string) (Entry, error) {
 // Done removes an entry that has been persisted downstream.
 func (s *Spool) Done(id string) error {
 	err := os.Remove(filepath.Join(s.pending, id+".json"))
+	if err == nil {
+		s.mu.Lock()
+		if s.count > 0 {
+			s.count--
+		}
+		s.mu.Unlock()
+	}
 	if os.IsNotExist(err) {
 		return nil
 	}

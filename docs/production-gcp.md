@@ -307,8 +307,8 @@ day this document was written; the rest are open.
 3. ~~Drain on SIGTERM.~~ `jetwayd` already drains its ingresses and the
    HTTP server on SIGTERM with a timeout. Still to add: releasing the lease
    first and waiting for the outboxes to empty.
-4. ~~Spool on by default.~~ `config.Default` enables it at `spool/`. Still
-   to add: a bound on its size, and the alert on its oldest entry.
+4. ~~Spool on by default,~~ bounded by `spool.max_entries`, with
+   `jetway_spool_depth` and `jetway_spool_oldest_seconds` for the alert.
 5. ~~Retire as an operation.~~ `POST /api/admin/retire` and `jetwayctl
    retire --before`, so retention is a scheduled job. wholesky still runs it
    as an application side effect at the day's wrap, which is right for a
