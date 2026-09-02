@@ -5,6 +5,41 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.23
+- A movement, name list, bag message or departure message that is
+  recognised and then fails to parse goes to the dead letter queue with the
+  parser's reason, instead of falling through to the booking grammar.
+- PSM names may carry digits.
+
+## v0.1.22
+- Relay reflects only a message addressed to its own origin address. A
+  message from one of a link's addresses to the link's principal address --
+  check-in sending final sales home to reservations -- is delivered.
+
+## v0.1.21 — Departure control
+- New `dcs` package: a Station opens flights from the PNL, applies ADLs,
+  accepts and seats passengers, tags bags, boards, offloads, closes; builds
+  PFS, PTM, PSM, ETL, LDM and CPM; load control by the AHM 560 index method
+  with a loadsheet. PSM/PTM/LDM/CPM follow published worked examples; PFS
+  and ETL are inferred and labelled so.
+- `gateway.Ground` is the seam that hands name lists, bag messages and
+  departure output to a consumer; a refusal is recorded against the message
+  as rejected with the bytes kept.
+- `PeerByAddress` falls back to the carrier whose designator an address
+  carries, and relay delivers to other addresses on the arrival link.
+- The console gains a Departures view on `/api/dcs/...`.
+- `pnl.ParseName` and `pnl.NameLine` are exported for the list family.
+
+## v0.1.15 – v0.1.20
+- One shared listener identifies plain-TCP subscribers by their hello
+  frame (`by_hello`), so a switch serves a population on one port.
+- An evicted message's outcome is not an error to log.
+- The switch's bus publishes movements in transit, so an operations display
+  can watch the whole sky from the switch.
+- The late-confirmation resurrection classes: a KK arriving after an XX no
+  longer revives a cancelled booking, and a stray reply matching only an
+  external locator is resolved amend-only and peer-scoped.
+
 ## v0.1.14
 - The `/api/insights` aggregate serves a short-TTL snapshot, so twenty open
   consoles cost one computation instead of twenty.
