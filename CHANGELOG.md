@@ -5,6 +5,14 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.53 — Inventory metrics and a fair ingress
+- `jetway_inventory_decisions_total{carrier,status}` counts sell answers;
+  `Inventory.Publish` adds per-carrier sold, waitlisted and full-cabin
+  gauges read at scrape time.
+- `ingress.total_rate_limit`/`total_burst` cap an ingress across its peers.
+  Each peer is paced to its own `rate_limit` first, so one flooding peer
+  cannot take the others' share.
+
 ## v0.1.52 — A bounded spool
 - `spool.max_entries` (default 100000) bounds the write-ahead spool; a full
   spool refuses the message (`spool.ErrFull`) so the partner retransmits,

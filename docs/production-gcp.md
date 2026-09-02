@@ -316,13 +316,17 @@ day this document was written; the rest are open.
 6. ~~Hot peer reload.~~ SIGHUP re-reads the config and `Node.ReloadPeers`
    adds what is new. Removing a peer is a restart.
 7. ~~Metrics for the outbox~~ (`jetway_outbox_depth{peer}`,
-   `jetway_outbox_congested_total{peer}`). Still to add: the inventory's
-   seats left per cabin at the class boundary, for revenue management to
-   read.
-8. ~~Rate limiting per peer~~ at ingress: `rate_limit` and `burst` per
-   ingress, applied by pacing the reader so the partner's own circuit pushes
-   back. Per-peer rather than per-ingress limits, and fairness across
-   peers on one ingress, are still open.
+   `jetway_outbox_congested_total{peer}`) ~~and the inventory~~
+   (`jetway_inventory_decisions_total{carrier,status}`, and per carrier
+   `jetway_inventory_sold_seats`, `jetway_inventory_waitlisted_seats`,
+   `jetway_inventory_full_cabins`, read at scrape). Seats left per cabin at
+   the class boundary is `Inventory.Snapshot`, for revenue management to
+   read over the API rather than a hundred thousand series.
+8. ~~Rate limiting per peer~~ at ingress: `rate_limit` and `burst` pace
+   each peer's reader so the partner's own circuit pushes back;
+   `total_rate_limit` caps the ingress as a whole. A peer is paced to its
+   own share before it reaches the shared bucket, so a flooding peer cannot
+   take the others' share. Still open: a different share per peer.
 9. **Load test as a release gate.** wholesky at warp 1 against a staging
    instance of the production topology, with the invariant suite (no
    oversell, message conservation, interline convergence) as the pass

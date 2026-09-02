@@ -26,6 +26,7 @@ package inventory
 
 import (
 	"context"
+	"github.com/adamf/jetway/pkg/metrics"
 	"strings"
 	"sync"
 	"time"
@@ -222,7 +223,40 @@ func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer
 			out[s.Key()] = "UC"
 		}
 	}
+	for _, status := range out {
+		metrics.Counter("jetway_inventory_decisions_total", "sell requests answered, by status code",
+			metrics.Labels{"carrier": inv.Carrier, "status": status})
+	}
 	return out, nil
+}
+
+// Publish registers the inventory's aggregate gauges with a registry: seats
+// sold, seats waitlisted and cabins with no seat left, per carrier. They are
+// read at scrape time rather than kept, because a day is a hundred thousand
+// cabins and the operator wants the shape, not each one; the per-cabin
+// figure revenue management works from is Snapshot.
+func (inv *Inventory) Publish(r *metrics.Registry) {
+	r.OnCollect(func() {
+		inv.mu.Lock()
+		defer inv.mu.Unlock()
+		sold, waiting, full := 0, 0, 0
+		for key, n := range inv.sold {
+			sold += n
+			parts := strings.Split(key, "/")
+			if len(parts) == 5 && inv.Capacity != nil {
+				if comps, ok := inv.Capacity(parts[0], parts[1], parts[2], parts[3]); ok && n >= comps[parts[4]] {
+					full++
+				}
+			}
+		}
+		for _, n := range inv.waitlisted {
+			waiting += n
+		}
+		l := metrics.Labels{"carrier": inv.Carrier}
+		r.Gauge("jetway_inventory_sold_seats", "seats sold across the carrier's cabins", l, float64(sold))
+		r.Gauge("jetway_inventory_waitlisted_seats", "seats on waitlists across the carrier's cabins", l, float64(waiting))
+		r.Gauge("jetway_inventory_full_cabins", "cabins with no seat left", l, float64(full))
+	})
 }
 
 func (inv *Inventory) commit(s pnr.Segment, status string) {

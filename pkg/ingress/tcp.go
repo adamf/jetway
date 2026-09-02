@@ -49,6 +49,11 @@ func sentinelFramer(f config.Framing) (framer, error) {
 type TCP struct {
 	rateLimit float64
 	burst     int
+	// shared caps the ingress as a whole. Each peer is paced by its own
+	// bucket first, so a flooding peer exhausts its share and not the
+	// others': the shared bucket only bites when the sum of the shares is
+	// more than the node should take.
+	shared *bucket
 
 	name     string
 	addr     string
@@ -162,7 +167,8 @@ func NewTCP(c config.Ingress, log *slog.Logger) (*TCP, error) {
 	return &TCP{
 		name: c.Name, addr: c.Addr, framer: f, tls: tc, resolver: r,
 		rateLimit: c.RateLimit, burst: c.Burst,
-		log: log.With("ingress", c.Name), sessions: map[string]*session{},
+		shared: newBucket(c.TotalRateLimit, c.TotalBurst),
+		log:    log.With("ingress", c.Name), sessions: map[string]*session{},
 	}, nil
 }
 
@@ -299,6 +305,7 @@ func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 		raw, err := t.framer.ReadFrame(r)
 		if len(raw) > 0 {
 			sess.limit.wait(ctx)
+			t.shared.wait(ctx)
 			t.inflight.Add(1)
 			_, herr := h(ctx, Message{Peer: peer, Transport: t.name, Remote: remote, Raw: raw})
 			t.inflight.Done()

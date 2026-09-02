@@ -190,6 +190,11 @@ type Ingress struct {
 	// dropped. Zero is no limit.
 	RateLimit float64 `yaml:"rate_limit"`
 	Burst     int     `yaml:"burst"`
+	// TotalRateLimit caps the ingress as a whole, across every peer on it.
+	// Peers are paced by their own RateLimit first, so one flooding peer
+	// cannot take the others' share of the total.
+	TotalRateLimit float64 `yaml:"total_rate_limit"`
+	TotalBurst     int     `yaml:"total_burst"`
 
 	// Synchronous makes an https listener hold the request open and return any
 	// generated reply in the response body, rather than answering 202 and
