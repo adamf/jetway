@@ -397,6 +397,7 @@ where this is wrong, that is the single most useful contribution available.
 | `pkg/pnl` | PNL and ADL passenger name lists: what reservations tells the airport |
 | `pkg/baggage` | BSM and BPM bag messages: tags issued, bags loaded |
 | `pkg/dcs` | Departure control: the manifest, check-in, seating, bag tagging, boarding, close; PFS, PTM, PSM, ETL, LDM, CPM; load control and the loadsheet |
+| `pkg/irops` | Irregular operations: the engine that works the schedule-change queue, rebooking a cancelled flight's passengers onto the next seat over the same city pair |
 | `pkg/ingress` | MATIP, HTTPS, TCP and file-drop listeners, and peer identity |
 | `pkg/egress` | Outbound delivery with backoff and restart recovery |
 | `pkg/spool` | Durable write-ahead buffer for inbound messages |

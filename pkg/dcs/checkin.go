@@ -514,3 +514,56 @@ func (s *Station) CloseFlight(ctx context.Context, k Key, opts CloseOptions) (*C
 	cl.Flight = f.snapshot()
 	return cl, nil
 }
+
+// Cancellation is what cancelling a flight under control produces: the
+// passengers who had been accepted or boarded, now offloaded with their
+// bags still attached so the caller can pull them, and the passengers who
+// were still only listed, whom reservations will re-accommodate.
+type Cancellation struct {
+	Flight    *Flight      `json:"flight"`
+	Offloaded []*Passenger `json:"offloaded,omitempty"`
+	Listed    []*Passenger `json:"listed,omitempty"`
+}
+
+// CancelFlight closes a flight that will not fly. Everyone accepted or
+// boarded is offloaded and their bags come off; nobody becomes a no-show,
+// because nobody failed to turn up -- the aircraft did. No load, no
+// messages: a cancelled departure has nothing to report to the arrival
+// station, and reservations already knows from the schedule message.
+func (s *Station) CancelFlight(ctx context.Context, k Key, reason string) (*Cancellation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.flights[k]
+	if !ok {
+		return nil, ErrFlightNotFound
+	}
+	if f.State == StateClosed {
+		return nil, ErrFlightClosed
+	}
+	now := s.now()
+	c := &Cancellation{}
+	for _, p := range f.Passengers {
+		switch p.Status {
+		case StatusAccepted, StatusBoarded:
+			f.offload(p, "flight cancelled: "+reason)
+			c.Offloaded = append(c.Offloaded, p)
+		case StatusListed, StatusStandby:
+			c.Listed = append(c.Listed, p)
+		}
+	}
+	if f.State == StateOpen {
+		f.State = StateCheckInClosed
+		f.CheckInClosedAt = &now
+	}
+	f.State = StateClosed
+	f.ClosedAt = &now
+	f.Cancelled = true
+	f.CancelReason = reason
+	f.alert(now, "flight_cancelled", reason)
+	f.Revision++
+	if err := s.store().SaveFlight(ctx, f); err != nil {
+		return nil, err
+	}
+	c.Flight = f.snapshot()
+	return c, nil
+}

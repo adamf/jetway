@@ -213,3 +213,37 @@ Load control follows the AHM 560 method: passengers weigh by cabin zone,
 bags are split between the holds to bring the take-off centre of gravity
 toward the middle of the envelope, containerised aircraft get ULDs at
 positions, and the loadsheet reports the limits it was checked against.
+
+## Irregular operations
+
+A cancellation queues every booking it touches (see Schedule change). The
+irops engine is the desk that works that queue for the common case.
+
+```mermaid
+sequenceDiagram
+    participant C as Carrier
+    participant G as GDS (gateway + irops.Engine)
+    participant S as Schedule seam
+    participant A as Availability cache
+
+    C->>G: ASM CNL BA0117/16DEC
+    Note over G: every booking on BA0117 queued: schedule-change / schedule_cnl
+    loop each queued booking
+        G->>S: alternatives for LHR-JFK after BA0117
+        S-->>G: BA0175 13:00, BA0179 18:00, next day ...
+        G->>A: decide BA0175 Y ×1
+        A-->>G: closed → not this one
+        G->>A: decide BA0179 Y ×1
+        A-->>G: free sale
+        G->>G: AddSegment BA0179 (HK)
+        G->>C: AIRIMP SS — the new leg only
+        G->>G: Cancel segment BA0117 (XX)
+        G->>C: AIRIMP XX BA0117
+        Note over G: queue item worked: "rebooked BA0117 -> BA0179"
+    end
+```
+
+Nothing open anywhere leaves the item on the queue for a person. With
+`AskCarriers` the engine will instead request a closed or unknown flight and
+leave the passenger holding an HN, which is a different promise and is off
+by default.

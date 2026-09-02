@@ -541,3 +541,42 @@ func TestNameListWithoutEquipmentStillOpensWithAnAlert(t *testing.T) {
 		t.Error("no default cabin")
 	}
 }
+
+func TestCancelFlightOffloadsTheAcceptedAndKeepsTheListed(t *testing.T) {
+	ctx := context.Background()
+	s := station(t, "320")
+	if _, err := s.ApplyNameList(ctx, listOf(t)); err != nil {
+		t.Fatal(err)
+	}
+	acc, err := s.Accept(ctx, testKey, AcceptRequest{Locator: "BBB222", Bags: []int{20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Board(ctx, testKey, acc.Passengers[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.CancelFlight(ctx, testKey, "weather")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Flight.State != StateClosed || !c.Flight.Cancelled || c.Flight.CancelReason != "weather" {
+		t.Errorf("flight after cancellation: %s cancelled=%v", c.Flight.State, c.Flight.Cancelled)
+	}
+	if len(c.Offloaded) != 1 || c.Offloaded[0].Surname != "SMITH" || !c.Offloaded[0].Bags[0].Offloaded {
+		t.Errorf("offloaded %+v", c.Offloaded)
+	}
+	if len(c.Listed) != 4 {
+		t.Errorf("%d still listed, want the four who never checked in", len(c.Listed))
+	}
+	if n := c.Flight.Counts().NoShow; n != 0 {
+		t.Errorf("%d no-shows on a flight that did not fly", n)
+	}
+	if c.Flight.Load != nil || len(BuildPFS(c.Flight)) == 0 {
+		// No load; a PFS would report the offloads, which the caller may
+		// choose to send. The builder still works on the flight.
+		t.Errorf("load %v", c.Flight.Load)
+	}
+	if _, err := s.CancelFlight(ctx, testKey, "again"); !errors.Is(err, ErrFlightClosed) {
+		t.Errorf("cancelling twice: %v", err)
+	}
+}

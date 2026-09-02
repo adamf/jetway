@@ -249,6 +249,10 @@ type Flight struct {
 	// Load and Loadsheet are produced at close.
 	Load      *Load  `json:"load,omitempty"`
 	Loadsheet string `json:"loadsheet,omitempty"`
+	// Cancelled marks a flight that closed because it will not fly, with
+	// the reason the operator gave.
+	Cancelled    bool   `json:"cancelled,omitempty"`
+	CancelReason string `json:"cancel_reason,omitempty"`
 
 	// Version is the optimistic concurrency token, bumped on every change.
 	Revision int64 `json:"revision"`

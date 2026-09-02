@@ -341,6 +341,27 @@ func availKey(s pnr.Segment) avail.Key {
 // RequestFromCarrier sends a sell request for the record's segments operated by
 // carrier, in whatever format that carrier's link speaks.
 func (g *Gateway) RequestFromCarrier(ctx context.Context, rec *pnr.PNR, carrier string) (string, error) {
+	return g.requestSegments(ctx, rec, carrier, nil)
+}
+
+// requestSegments asks a carrier for the record's segments that only
+// admits, or all of the carrier's segments when only is nil. The message is
+// built from a view of the record holding just those segments, so a carrier
+// that already confirmed the rest is not asked to sell them again.
+func (g *Gateway) requestSegments(ctx context.Context, rec *pnr.PNR, carrier string, only func(pnr.Segment) bool) (string, error) {
+	if only != nil {
+		view := *rec
+		view.Segments = nil
+		for _, s := range rec.Segments {
+			if s.Carrier == carrier && only(s) {
+				view.Segments = append(view.Segments, s)
+			}
+		}
+		if len(view.Segments) == 0 {
+			return "", fmt.Errorf("gateway: record has no %s segments to request", carrier)
+		}
+		rec = &view
+	}
 	peer := g.PeerForCarrier(carrier)
 	if peer == nil {
 		return "", fmt.Errorf("gateway: no link configured for carrier %q", carrier)

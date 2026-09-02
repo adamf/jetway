@@ -186,8 +186,10 @@ What is missing:
 - **The sweeper scans.** `Sweeper.Sweep` lists records and filters in Go. That
   is fine at demo volume and wrong at scale, where the due-date predicates want
   to be an indexed query. `Limit` bounds the damage in the meantime.
-- **No queue-driven robots.** Placement notifies an optional `queue.Publisher`;
-  nothing ships that consumes one.
+- **One queue-driven robot.** `irops.Engine` works the schedule-change queue
+  for cancellations, taking only seats the availability cache shows open
+  unless told to ask carriers. Retimings, waitlist clearance and the
+  ticketing queue still wait for a person.
 - **Waitlist clearance and schedule change** are the two producers that would
   make queues earn their keep, and neither exists yet.
 
