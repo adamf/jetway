@@ -405,11 +405,11 @@ func (c *Config) Validate() error {
 			p.EDIFACTID = p.Carrier
 		}
 		switch p.Format {
-		case "typeb", "edifact":
+		case "typeb", "edifact", "aftn":
 		case "":
 			p.Format = "typeb"
 		default:
-			return fmt.Errorf("config: peer %q: format must be typeb or edifact, got %q", p.Name, p.Format)
+			return fmt.Errorf("config: peer %q: format must be typeb, edifact or aftn, got %q", p.Name, p.Format)
 		}
 		if err := p.Egress.validate(p.Name); err != nil {
 			return err
