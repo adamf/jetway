@@ -5,6 +5,11 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.51 — The lease is released after the drain
+- A holder that is shutting down keeps the lease until `Drain` (or `Close`)
+  has quieted its links, so a standby never binds while the old holder
+  still has answers in flight.
+
 ## v0.1.50 — Peers without a restart
 - `Node.ReloadPeers` adds the peers a new config names; `jetwayd` does it
   on SIGHUP. Removing a peer is still a restart: an open link is a promise.

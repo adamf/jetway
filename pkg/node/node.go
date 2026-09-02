@@ -8,6 +8,7 @@
 package node
 
 import (
+	"sync"
 	"context"
 	"fmt"
 	"log/slog"
@@ -51,6 +52,10 @@ type Node struct {
 	// holding is whether this process is the system's writer right now.
 	holding       atomic.Bool
 	standbyLogged atomic.Bool
+	// leaseHolder names this process in the lease while it holds one, so
+	// Drain and Close can give it back once the links are quiet.
+	leaseMu     sync.Mutex
+	leaseHolder string
 	tcp           map[string]*ingress.TCP
 	// matip holds the MATIP listeners so replies can find the session that
 	// carried the request. It is per-node rather than package-level: two nodes
@@ -265,12 +270,17 @@ func (n *Node) runLease(ctx context.Context) {
 		n.Log.Info("holding the system", "system", system, "holder", holder, "ttl", ttl.String())
 		lctx, cancel := context.WithCancel(ctx)
 		n.holding.Store(true)
+		n.leaseMu.Lock()
+		n.leaseHolder = holder
+		n.leaseMu.Unlock()
 		n.bindListeners(lctx)
 		for lctx.Err() == nil {
 			select {
 			case <-ctx.Done():
+				// Shutting down. The lease is given back by Drain or Close,
+				// after the links have gone quiet, so the standby does not
+				// bind while this process still has answers in flight.
 				cancel()
-				leaser.Release(context.Background(), system, holder) //nolint:errcheck
 				return
 			case <-time.After(poll):
 			}
@@ -319,7 +329,29 @@ func (n *Node) Listeners() []ingress.Ingress { return n.listeners }
 
 // Close releases everything Build acquired. It is safe on a partly built node,
 // which is what makes it usable on Build's own error paths.
+// releaseLease gives the system back, once, if this process holds it.
+func (n *Node) releaseLease() {
+	n.leaseMu.Lock()
+	holder := n.leaseHolder
+	n.leaseHolder = ""
+	n.leaseMu.Unlock()
+	if holder == "" {
+		return
+	}
+	if leaser, ok := n.Store.(store.Leaser); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := leaser.Release(ctx, n.Config.Identity.Designator, holder); err != nil {
+			n.Log.Warn("lease release failed", "err", err)
+		} else {
+			n.Log.Info("lease released", "system", n.Config.Identity.Designator, "holder", holder)
+		}
+	}
+	n.holding.Store(false)
+}
+
 func (n *Node) Close() {
+	n.releaseLease()
 	for _, in := range n.listeners {
 		in.Close() //nolint:errcheck
 	}
@@ -343,6 +375,8 @@ func (n *Node) Drain(ctx context.Context, hs *http.Server) {
 	if hs != nil {
 		hs.Shutdown(ctx) //nolint:errcheck
 	}
+	// Quiet now: the standby may have the system.
+	n.releaseLease()
 }
 
 // Serve runs the console until the context is cancelled.

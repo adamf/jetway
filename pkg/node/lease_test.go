@@ -71,8 +71,9 @@ func TestOneWriterPerSystem(t *testing.T) {
 			t.Error("a standby should not report ready")
 		}
 	}
-	// The holder goes away and releases; the standby takes over.
+	// The holder shuts down: it drains, then releases; the standby takes over.
 	cancelA()
+	a.Drain(context.Background(), nil)
 	waitFor("the standby to take the system", b.Holding)
 	if b.API != nil {
 		if err := b.API.Ready(context.Background()); err != nil {

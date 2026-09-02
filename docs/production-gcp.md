@@ -299,9 +299,8 @@ day this document was written; the rest are open.
 1. ~~A system lease.~~ `lease.enabled: true` makes a node bind its links
    only while it holds the system's row in `system_lease`, renewing at a
    third of the term; standbys poll and take over when it lapses or is
-   released, and are not ready meanwhile. Still to add: the drain before
-   release, so a holder that is asked to stop empties its outboxes before
-   the standby binds.
+   released, and are not ready meanwhile. A holder that is asked to stop
+   drains its links first and releases after (v0.1.51).
 2. ~~Readiness.~~ `/readyz` now fails when the store cannot be reached
    (`store.Pinger`), distinct from `/healthz`; a `Ready` hook takes further
    checks. Still to add: the spool's backlog age and the lease.
