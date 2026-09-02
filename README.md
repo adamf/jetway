@@ -198,7 +198,12 @@ the final sales, transfer, service, ticket and load messages and the
 loadsheet, right there in the view. The same operations are on
 `/api/dcs/...`, which is what a kiosk or a gate reader would call.
 `pkg/dcs` is the system behind it; `gateway.Ground` is how a node hands it
-the name lists, bag messages and departure output that arrive on the wire.
+what arrives on the wire for the airport and the operations desk: name
+lists and their amendments, bag messages, the departure output from other
+stations, an aircraft's OOOI reports forwarded by its datalink provider,
+and air traffic services' messages in their AFTN envelopes.
+
+![The departures view: a flight mid-check-in, its manifest and seat map, and the closure's messages](docs/images/departures.jpg)
 
 ## Connecting a partner
 

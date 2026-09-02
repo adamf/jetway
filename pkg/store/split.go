@@ -72,6 +72,9 @@ func (s Split) FindPNRByDocument(ctx context.Context, compactNumber string) (*pn
 func (s Split) FindPNRByExternalLocator(ctx context.Context, owner, value string) (*pnr.PNR, error) {
 	return s.Records.FindPNRByExternalLocator(ctx, owner, value)
 }
+func (s Split) LoadPNRs(ctx context.Context, recs []*pnr.PNR, actor string) error {
+	return s.Records.LoadPNRs(ctx, recs, actor)
+}
 func (s Split) FindPNRsByFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error) {
 	return s.Records.FindPNRsByFlight(ctx, flightKey, wireDate, limit)
 }

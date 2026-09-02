@@ -560,6 +560,23 @@ func (s *Mem) FindPNRByExternalLocator(ctx context.Context, owner, value string)
 	return nil, nil
 }
 
+// LoadPNRs implements Store.
+func (s *Mem) LoadPNRs(ctx context.Context, recs []*pnr.PNR, actor string) error {
+	for _, p := range recs {
+		if p.RecordLocator != "" {
+			if _, err := s.GetPNR(ctx, p.RecordLocator); err == nil {
+				return ErrDuplicate
+			}
+		}
+	}
+	for _, p := range recs {
+		if err := s.CreatePNR(ctx, p, []Event{{Type: "loaded", Actor: actor, At: p.CreatedAt}}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Mem) FindPNRsByFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error) {
 	if flightKey == "" {
 		return nil, nil

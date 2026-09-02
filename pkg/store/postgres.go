@@ -233,6 +233,52 @@ func (s *Postgres) CreatePNR(ctx context.Context, p *pnr.PNR, events []Event) er
 	})
 }
 
+// LoadPNRs implements Store with COPY: one stream for the records, one for
+// their events, in one transaction, so a batch lands whole or not at all.
+// Through a transaction-pooling proxy COPY is fine -- it is one statement
+// inside the transaction the pool already pins to a connection.
+func (s *Postgres) LoadPNRs(ctx context.Context, recs []*pnr.PNR, actor string) error {
+	if len(recs) == 0 {
+		return nil
+	}
+	now := s.now()
+	rows := make([][]any, 0, len(recs))
+	events := make([][]any, 0, len(recs))
+	for _, p := range recs {
+		if p.ID == "" {
+			p.ID = ulid.New()
+		}
+		p.Version = 1
+		if p.CreatedAt.IsZero() {
+			p.CreatedAt = now
+		}
+		if p.UpdatedAt.IsZero() {
+			p.UpdatedAt = p.CreatedAt
+		}
+		state, err := json.Marshal(p)
+		if err != nil {
+			return err
+		}
+		rows = append(rows, []any{p.ID, p.RecordLocator, p.Version, string(p.Status), p.CreatedAt, p.UpdatedAt, state, p.NextDeadline(), s.node})
+		events = append(events, []any{ulid.New(), p.ID, int64(1), "loaded", nil, nil, nil, nullIfEmpty(actor), p.CreatedAt, s.node})
+	}
+	return s.tx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.CopyFrom(ctx, pgx.Identifier{"pnr"},
+			[]string{"id", "record_locator", "version", "status", "created_at", "updated_at", "state", "next_deadline", "node"},
+			pgx.CopyFromRows(rows))
+		if err != nil {
+			if isUniqueViolation(err) {
+				return ErrDuplicate
+			}
+			return err
+		}
+		_, err = tx.CopyFrom(ctx, pgx.Identifier{"pnr_event"},
+			[]string{"id", "pnr_id", "seq", "type", "detail", "payload", "message_id", "actor", "at", "node"},
+			pgx.CopyFromRows(events))
+		return err
+	})
+}
+
 func (s *Postgres) UpdatePNR(ctx context.Context, p *pnr.PNR, expected int64, events []Event) error {
 	p.Version = expected + 1
 	state, err := json.Marshal(p)

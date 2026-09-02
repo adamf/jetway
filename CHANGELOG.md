@@ -5,6 +5,15 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.32 — Loading a book of record
+- `Store.LoadPNRs` stores many new records in one batch, each at version 1
+  with one `loaded` event naming the actor. Postgres streams both tables
+  with `COPY` in one transaction; a locator already held fails the whole
+  batch and stores nothing. For migrations, restores, and a day's bookings
+  seeded before the day runs.
+- `gateway.Ground` documentation names the datalink and ATS traffic it
+  hands over, alongside the name lists, bag messages and departure output.
+
 ## v0.1.24 — Many systems, one database
 - `Postgres.Node` returns a view scoped to one system: rows carry the
   system they belong to and every query sees only its own. Migration 0007

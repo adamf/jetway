@@ -200,6 +200,12 @@ type Store interface {
 	// CreatePNR stores a new record at version 1 along with the events that
 	// created it.
 	CreatePNR(ctx context.Context, p *pnr.PNR, events []Event) error
+	// LoadPNRs stores many new records at once, each at version 1 with one
+	// "loaded" event naming the actor: a migration from another system, a
+	// restore, a day's bookings seeded before the day. A record that already
+	// exists is a failure for the whole batch, not a silent skip; nothing
+	// is stored. Bulk on purpose: a backend that can stream rows does.
+	LoadPNRs(ctx context.Context, recs []*pnr.PNR, actor string) error
 	// UpdatePNR stores a record, failing with ErrConflict unless the stored
 	// version still equals expectedVersion.
 	UpdatePNR(ctx context.Context, p *pnr.PNR, expectedVersion int64, events []Event) error
