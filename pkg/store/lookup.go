@@ -46,6 +46,13 @@ type Lookup interface {
 	// lookup, correctly, no longer shows.
 	FindPNRsEverOnFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error)
 
+	// RevenueByLeg sums what the live priced records paid per leg they hold
+	// -- operating carrier, flight, date and boarding point -- a record's
+	// total shared evenly across its air segments. It is what a revenue
+	// ledger rebuilds itself from when a system starts with a book already
+	// full.
+	RevenueByLeg(ctx context.Context, wireDate string) ([]LegRevenue, error)
+
 	// SoldSeats sums the seats held per flight, date, class and status across
 	// every live record of a carrier, for one wire date or all of them: what
 	// an inventory rebuilds itself from when it starts.

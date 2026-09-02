@@ -54,9 +54,22 @@ func testLoadPNRs(t *testing.T, s Store) {
 	if err != nil || len(events) != 1 || events[0].Type != "loaded" || events[0].Actor != "fill" {
 		t.Errorf("a loaded record should carry one loaded event by the actor: %+v %v", events, err)
 	}
+	// The revenue by leg reads the priced records back the way a ledger
+	// rebuilds itself: two priced records on the flight, one unpriced.
+	priced := loadFixture(2, "PR")
+	for i, p := range priced {
+		p.Pricing = &pnr.Pricing{Currency: "USD", Total: int64(10000 * (i + 1))}
+	}
+	if err := s.LoadPNRs(ctx, priced, "fill"); err != nil {
+		t.Fatal(err)
+	}
+	legs, err := s.RevenueByLeg(ctx, "26NOV")
+	if err != nil || len(legs) != 1 || legs[0].Carrier != "WN" || legs[0].FlightNum != "2554" || legs[0].Board != "BNA" || legs[0].Cents != 30000 {
+		t.Errorf("RevenueByLeg: %+v %v", legs, err)
+	}
 	// The sold-seat count reads the same records back as an inventory would.
 	sold, err := s.SoldSeats(ctx, "WN", "26NOV")
-	if err != nil || len(sold) != 1 || sold[0].FlightNum != "2554" || sold[0].Board != "BNA" || sold[0].Class != "Y" || sold[0].Status != "HK" || sold[0].Seats != 25 {
+	if err != nil || len(sold) != 1 || sold[0].FlightNum != "2554" || sold[0].Board != "BNA" || sold[0].Class != "Y" || sold[0].Status != "HK" || sold[0].Seats != 27 {
 		t.Errorf("SoldSeats after load: %+v %v", sold, err)
 	}
 	if none, _ := s.SoldSeats(ctx, "WN", "27NOV"); len(none) != 0 {
@@ -73,8 +86,8 @@ func testLoadPNRs(t *testing.T, s Store) {
 	}
 	live, _ := s.FindPNRsByFlight(ctx, "WN2554", "26NOV", 100)
 	ever, _ := s.FindPNRsEverOnFlight(ctx, "WN2554", "26NOV", 100)
-	if len(live) != 24 || len(ever) != 25 {
-		t.Errorf("after one cancellation: %d live, %d ever on the flight; want 24 and 25", len(live), len(ever))
+	if len(live) != 26 || len(ever) != 27 {
+		t.Errorf("after one cancellation: %d live, %d ever on the flight; want 26 and 27", len(live), len(ever))
 	}
 	// A locator already held fails the whole batch and stores nothing.
 	again := loadFixture(3, "LE")

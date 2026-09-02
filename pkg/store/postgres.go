@@ -421,6 +421,40 @@ func (s *Postgres) CreatePNR(ctx context.Context, p *pnr.PNR, events []Event) er
 	})
 }
 
+// RevenueByLeg implements Store with one aggregate: each priced record's
+// total shared evenly across its live air segments, summed per leg.
+func (s *Postgres) RevenueByLeg(ctx context.Context, wireDate string) ([]LegRevenue, error) {
+	rows, err := s.pool.Query(ctx, `
+		WITH live AS (
+			SELECT id, (state->'pricing'->>'total')::bigint AS total,
+			       (SELECT count(*) FROM jsonb_array_elements(state->'segments') x
+			         WHERE x->>'type' = 'air' AND coalesce(x->>'status','') <> 'XX') AS legs,
+			       state->'segments' AS segs
+			FROM pnr
+			WHERE node = $1 AND status <> 'cancelled' AND state ? 'pricing'
+		)
+		SELECT upper(coalesce(nullif(seg->>'operating_carrier',''), seg->>'carrier')), ltrim(seg->>'flight_num','0'),
+		       upper(seg->>'wire_date'), upper(coalesce(seg->>'board','')), sum(total / legs)::bigint
+		FROM live, jsonb_array_elements(segs) seg
+		WHERE legs > 0 AND seg->>'type' = 'air' AND coalesce(seg->>'status','') <> 'XX'
+		  AND ($2 = '' OR upper(seg->>'wire_date') = upper($2))
+		GROUP BY 1, 2, 3, 4
+		ORDER BY 1, 2, 4`, s.node, wireDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LegRevenue
+	for rows.Next() {
+		var r LegRevenue
+		if err := rows.Scan(&r.Carrier, &r.FlightNum, &r.WireDate, &r.Board, &r.Cents); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // SoldSeats implements Store with one aggregate over the segments of the
 // node's live records; leading zeros on flight numbers are dropped so the
 // two spellings carriers use count as one flight.

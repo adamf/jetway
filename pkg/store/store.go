@@ -162,6 +162,16 @@ type SoldSeats struct {
 	Seats     int
 }
 
+// LegRevenue is one leg's share of the priced records that hold it, in the
+// minor units of the records' currency.
+type LegRevenue struct {
+	Carrier   string // the operating carrier when the segment names one
+	FlightNum string
+	WireDate  string
+	Board     string
+	Cents     int64
+}
+
 type Event struct {
 	ID        string          `json:"id"`
 	PNRID     string          `json:"pnr_id"`

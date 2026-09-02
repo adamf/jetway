@@ -561,6 +561,55 @@ func (s *Mem) FindPNRByExternalLocator(ctx context.Context, owner, value string)
 	return nil, nil
 }
 
+// RevenueByLeg implements Store.
+func (s *Mem) RevenueByLeg(ctx context.Context, wireDate string) ([]LegRevenue, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	acc := map[LegRevenue]int64{}
+	for _, p := range s.pnrs {
+		if p.Status == pnr.StatusCancelled || p.Pricing == nil || p.Pricing.Total == 0 {
+			continue
+		}
+		var air []pnr.Segment
+		for _, sg := range p.Segments {
+			if sg.Type == pnr.SegmentAir && sg.Status != "XX" {
+				air = append(air, sg)
+			}
+		}
+		if len(air) == 0 {
+			continue
+		}
+		share := p.Pricing.Total / int64(len(air))
+		for _, sg := range air {
+			if wireDate != "" && !strings.EqualFold(sg.WireDate, wireDate) {
+				continue
+			}
+			carrier := sg.Carrier
+			if sg.OperatingCarrier != "" {
+				carrier = sg.OperatingCarrier
+			}
+			k := LegRevenue{Carrier: strings.ToUpper(carrier), FlightNum: strings.TrimLeft(sg.FlightNum, "0"), WireDate: strings.ToUpper(sg.WireDate), Board: strings.ToUpper(sg.Board)}
+			acc[k] += share
+		}
+	}
+	out := make([]LegRevenue, 0, len(acc))
+	for k, c := range acc {
+		k.Cents = c
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Carrier != b.Carrier {
+			return a.Carrier < b.Carrier
+		}
+		if a.FlightNum != b.FlightNum {
+			return a.FlightNum < b.FlightNum
+		}
+		return a.Board < b.Board
+	})
+	return out, nil
+}
+
 // SoldSeats implements Store.
 func (s *Mem) SoldSeats(ctx context.Context, carrier, wireDate string) ([]SoldSeats, error) {
 	s.mu.Lock()

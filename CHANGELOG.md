@@ -5,6 +5,12 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.46 — Revenue by leg
+- `Store.RevenueByLeg`: what the live priced records paid per leg,
+  operating carrier, flight, date and boarding point, a record's total
+  shared evenly across its air segments. A revenue ledger rebuilds from it
+  when a system starts with a book already full.
+
 ## v0.1.45 — v0.1.44, with its test right
 - v0.1.44 shipped with a test that wanted the coupon reference stripped
   from the ticket; departure control keeps it, as the ETL needs it. Use
