@@ -212,6 +212,12 @@ func BuildParts(kind Kind, flight, date, board string, groups []Group) ([]string
 			pending := g.Names
 			for len(pending) > 0 {
 				room := linesPerPart - lines - 1 // group heading
+				if room < 1 {
+					if err := flush(false); err != nil {
+						return nil, err
+					}
+					continue
+				}
 				// Take names while their lines fit: a folded item is
 				// more than one line, so the room is counted in lines
 				// rendered, not in names.
