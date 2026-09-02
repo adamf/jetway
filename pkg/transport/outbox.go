@@ -2,6 +2,8 @@ package transport
 
 import (
 	"errors"
+
+	"github.com/adamf/jetway/pkg/metrics"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,6 +42,9 @@ var (
 // that the peer has stopped, and it learns it as an error rather than a
 // stall.
 type Outbox struct {
+	// Peer labels the link's metrics: queue depth and congestion per peer.
+	Peer string
+
 	write func(raw []byte) error
 	q     chan []byte
 	stop  chan struct{}
@@ -78,6 +83,8 @@ func NewOutbox(depth int, write func(raw []byte) error, onFail func(err error)) 
 				if o.congested.Load() && len(o.q) <= cap(o.q)/2 {
 					o.congested.Store(false)
 				}
+				metrics.Gauge("jetway_outbox_depth", "frames waiting to be written on a link",
+					metrics.Labels{"peer": o.Peer}, float64(len(o.q)))
 			}
 		}
 	}()
@@ -117,6 +124,8 @@ func (o *Outbox) Send(raw []byte) error {
 		return o.closedErr()
 	case <-timer.C:
 		o.congested.Store(true)
+		metrics.Counter("jetway_outbox_congested_total", "sends refused because the peer stopped reading",
+			metrics.Labels{"peer": o.Peer})
 		return ErrCongested
 	}
 }

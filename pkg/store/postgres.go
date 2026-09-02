@@ -421,6 +421,9 @@ func (s *Postgres) CreatePNR(ctx context.Context, p *pnr.PNR, events []Event) er
 	})
 }
 
+// Ping implements Pinger.
+func (s *Postgres) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+
 // RevenueByLeg implements Store with one aggregate: each priced record's
 // total shared evenly across its live air segments, summed per leg.
 func (s *Postgres) RevenueByLeg(ctx context.Context, wireDate string) ([]LegRevenue, error) {

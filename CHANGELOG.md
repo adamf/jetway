@@ -5,6 +5,13 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.47 — Readiness, retirement, and outbox metrics
+- `/readyz` fails when the store cannot be reached; `store.Pinger` on every
+  backend.
+- `POST /api/admin/retire` and `jetwayctl retire --before` run retention as
+  an operation; `store.Retirer` names the stores that retire by day.
+- `jetway_outbox_depth{peer}` and `jetway_outbox_congested_total{peer}`.
+
 ## v0.1.46 — Revenue by leg
 - `Store.RevenueByLeg`: what the live priced records paid per leg,
   operating carrier, flight, date and boarding point, a record's total

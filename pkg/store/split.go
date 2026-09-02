@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/adamf/jetway/pkg/pnr"
@@ -75,6 +76,23 @@ func (s Split) FindPNRByExternalLocator(ctx context.Context, owner, value string
 func (s Split) RevenueByLeg(ctx context.Context, wireDate string) ([]LegRevenue, error) {
 	return s.Records.RevenueByLeg(ctx, wireDate)
 }
+
+// Ping implements Pinger against the records store, the one that matters.
+func (s Split) Ping(ctx context.Context) error {
+	if p, ok := s.Records.(Pinger); ok {
+		return p.Ping(ctx)
+	}
+	return nil
+}
+
+// RetireBefore implements Retirer when the records store does.
+func (s Split) RetireBefore(ctx context.Context, cutoff time.Time) (Retired, error) {
+	if r, ok := s.Records.(Retirer); ok {
+		return r.RetireBefore(ctx, cutoff)
+	}
+	return Retired{}, fmt.Errorf("store: records store cannot retire by day")
+}
+
 func (s Split) SoldSeats(ctx context.Context, carrier, wireDate string) ([]SoldSeats, error) {
 	return s.Records.SoldSeats(ctx, carrier, wireDate)
 }

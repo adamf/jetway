@@ -293,27 +293,30 @@ zero acknowledged-and-lost messages (measured by the reconciliation in
 
 ## 9. What jetway needs before any of this is true
 
-In the order a team would build it:
+In the order a team would build it. Items struck through were done the
+day this document was written; the rest are open.
 
 1. **A system lease.** Leader election per system so N+1 standbys can hold
    the address (section 3). Today two processes for one system are two
    writers.
-2. **Readiness.** `/readyz` that fails when the spool cannot flush, the
-   database is unreachable, or the lease is not held; distinct from
-   `/healthz`.
-3. **Drain on SIGTERM.** Release leases, stop accepting, flush the outboxes
-   and spool, then exit. The ingress has `Drain`; the process does not
-   wire it to signals yet.
+2. ~~Readiness.~~ `/readyz` now fails when the store cannot be reached
+   (`store.Pinger`), distinct from `/healthz`; a `Ready` hook takes further
+   checks. Still to add: the spool's backlog age and the lease.
+3. ~~Drain on SIGTERM.~~ `jetwayd` already drains its ingresses and the
+   HTTP server on SIGTERM with a timeout. Still to add: releasing the lease
+   first and waiting for the outboxes to empty.
 4. **Spool on by default** in the production config, with a bounded size
    and an alert, and a documented replay on start.
-5. **Retire as an operation.** `jetwayctl retire --before` and an admin
-   endpoint, so retention is a scheduled job and not an application
-   startup side effect the way wholesky runs it.
+5. ~~Retire as an operation.~~ `POST /api/admin/retire` and `jetwayctl
+   retire --before`, so retention is a scheduled job. wholesky still runs it
+   as an application side effect at the day's wrap, which is right for a
+   simulation and wrong for a carrier.
 6. **Hot peer reload.** Adding a partner without a restart; a SIGHUP or a
    config watch.
-7. **Metrics for the outbox** (depth, congested, per peer) and the
-   inventory (seats left per cabin at the class boundary, so revenue
-   management has something to read).
+7. ~~Metrics for the outbox~~ (`jetway_outbox_depth{peer}`,
+   `jetway_outbox_congested_total{peer}`). Still to add: the inventory's
+   seats left per cabin at the class boundary, for revenue management to
+   read.
 8. **Rate limiting per peer** at ingress, so one partner's burst cannot
    starve another's replies; today fairness is whatever the scheduler
    gives the goroutines.

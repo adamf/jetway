@@ -96,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 		fmt.Fprintln(w, "ok") //nolint:errcheck
 	})
 	mux.HandleFunc("GET /readyz", s.readyz)
+	mux.HandleFunc("POST /api/admin/retire", s.retire)
 	if s.Metrics {
 		mux.HandleFunc("GET /metrics", s.metrics)
 	}
@@ -157,9 +158,18 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 }
 
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	// The store is the dependency every answer needs: a node that cannot
+	// write a record cannot acknowledge a message, and must not be sent one.
+	if p, ok := s.Store.(store.Pinger); ok && s.Store != nil {
+		if err := p.Ping(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintf(w, "not ready: store: %v\n", err) //nolint:errcheck
+			return
+		}
+	}
 	if s.Ready != nil {
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-		defer cancel()
 		if err := s.Ready(ctx); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprintf(w, "not ready: %v\n", err) //nolint:errcheck
@@ -168,6 +178,34 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintln(w, "ready") //nolint:errcheck
+}
+
+// retire is the operator's retention run: POST {"before": "2025-11-27T00:00:00Z"}
+// retires every record whose day is before the cutoff, as partitions where
+// the store keeps them. A store that cannot retire by day says so.
+func (s *Server) retire(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Before time.Time `json:"before"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.Before.IsZero() {
+		http.Error(w, `{"error":"body wants {\"before\": RFC3339}"}`, http.StatusBadRequest)
+		return
+	}
+	rt, ok := s.Store.(store.Retirer)
+	if !ok {
+		http.Error(w, `{"error":"this node's store does not retire by day"}`, http.StatusNotImplemented)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	got, err := rt.RetireBefore(ctx, req.Before)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	s.Log.Info("records retired", "before", req.Before.Format(time.RFC3339), "partitions", got.Partitions, "records", got.Records, "queue_items", got.QueueItems)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(got) //nolint:errcheck
 }
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {

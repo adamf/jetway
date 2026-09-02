@@ -162,6 +162,19 @@ type SoldSeats struct {
 	Seats     int
 }
 
+// Pinger is a store that can say whether its backend is reachable, for a
+// readiness check. Memory is always reachable.
+type Pinger interface {
+	Ping(ctx context.Context) error
+}
+
+// Retirer is a store that retires records by day: every record whose
+// retirement day is before the cutoff leaves, as partitions where the
+// backend has them. Postgres implements it; memory purges instead.
+type Retirer interface {
+	RetireBefore(ctx context.Context, cutoff time.Time) (Retired, error)
+}
+
 // LegRevenue is one leg's share of the priced records that hold it, in the
 // minor units of the records' currency.
 type LegRevenue struct {

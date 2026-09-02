@@ -84,6 +84,7 @@ func newSession(conn net.Conn, f framer, log *slog.Logger, peer string) *session
 		log.Warn("link write failed; closing", "peer", peer, "err", err)
 		conn.Close()
 	})
+	s.out.Peer = peer
 	return s
 }
 

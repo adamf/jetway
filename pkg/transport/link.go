@@ -61,6 +61,7 @@ func newLink(peer, format string, conn net.Conn, framer Framer, log *slog.Logger
 		log.Warn("link write failed; closing", "peer", peer, "err", err)
 		l.Close()
 	})
+	l.out.Peer = peer
 	return l
 }
 

@@ -9,6 +9,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,6 +62,8 @@ func main() {
 		err = cmdShow(os.Args[2:])
 	case "replay":
 		err = cmdReplay(os.Args[2:])
+	case "retire":
+		err = cmdRetire(os.Args[2:])
 	case "status":
 		err = cmdStatus()
 	case "schema":
@@ -402,4 +405,35 @@ func cmdStatus() error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", p.Name, p.FullName, p.Format, p.TTY, state)
 	}
 	return tw.Flush()
+}
+
+// cmdRetire runs the node's retention: jetwayctl retire --before 2025-11-27
+// retires every record whose day is before the cutoff.
+func cmdRetire(args []string) error {
+	fs := flag.NewFlagSet("retire", flag.ContinueOnError)
+	before := fs.String("before", "", "cutoff, RFC3339 or YYYY-MM-DD: records retiring before it leave")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *before == "" {
+		return fmt.Errorf("retire: --before is required")
+	}
+	t, err := time.Parse(time.RFC3339, *before)
+	if err != nil {
+		t, err = time.Parse("2006-01-02", *before)
+		if err != nil {
+			return fmt.Errorf("retire: --before %q is neither RFC3339 nor YYYY-MM-DD", *before)
+		}
+	}
+	var out struct {
+		Partitions int `json:"Partitions"`
+		Records    int `json:"Records"`
+		QueueItems int `json:"QueueItems"`
+	}
+	if err := post("/api/admin/retire", map[string]any{"before": t.UTC()}, &out); err != nil {
+		return err
+	}
+	fmt.Printf("retired before %s: %d partitions dropped, %d records deleted, %d queue items cleared\n",
+		t.UTC().Format(time.RFC3339), out.Partitions, out.Records, out.QueueItems)
+	return nil
 }

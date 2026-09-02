@@ -610,6 +610,9 @@ func (s *Mem) RevenueByLeg(ctx context.Context, wireDate string) ([]LegRevenue, 
 	return out, nil
 }
 
+// Ping implements Pinger: memory is always here.
+func (s *Mem) Ping(ctx context.Context) error { return nil }
+
 // SoldSeats implements Store.
 func (s *Mem) SoldSeats(ctx context.Context, carrier, wireDate string) ([]SoldSeats, error) {
 	s.mu.Lock()
