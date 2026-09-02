@@ -29,6 +29,7 @@ import (
 	"github.com/adamf/jetway/pkg/gateway"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/queue"
+	"github.com/adamf/jetway/pkg/rescode"
 	"github.com/adamf/jetway/pkg/store"
 )
 
@@ -73,11 +74,20 @@ type Outcome struct {
 	To      string `json:"to"`   // the new one
 	Class   string `json:"class"`
 	Tried   int    `json:"tried"` // candidates asked before one had a seat
+	// Waitlisted names the alternatives the passenger now holds a waitlist
+	// on, when no seat could be confirmed: the item stays for a person, but
+	// the passenger is in the queue for the seats that may free up.
+	Waitlisted []string `json:"waitlisted,omitempty"`
 }
 
 // ErrNoAlternative is returned when nothing could carry the passenger. The
 // queue item stays where it is.
 var ErrNoAlternative = errors.New("irops: no alternative with a seat")
+
+// ErrWaitlisted is what Rebook returns when nothing confirmed but the
+// passenger was waitlisted on one or more alternatives: not solved, not
+// hopeless, and a person should know which.
+var ErrWaitlisted = errors.New("irops: waitlisted, no seat confirmed")
 
 // Engine works the schedule-change queue.
 type Engine struct {
@@ -103,6 +113,12 @@ type Engine struct {
 	AskCarriers bool
 	// OnRebooked, when set, is told about each success.
 	OnRebooked func(ctx context.Context, item *store.QueueItem, out Outcome)
+	// ReplyTimeout is how long the engine waits for a carrier to answer a
+	// seat it asked for before it gives that alternative up and tries the
+	// next. A sell the engine makes is a request until the carrier says
+	// otherwise, and dropping the dead leg on the strength of a request is
+	// how a passenger ends up holding nothing. Zero means ten seconds.
+	ReplyTimeout time.Duration
 	// RetryAfter is how long an item nothing could be found for is left
 	// before it is looked at again. Zero means ten minutes.
 	RetryAfter time.Duration
@@ -154,6 +170,9 @@ func (e *Engine) Work(ctx context.Context) (int, error) {
 			if e.OnRebooked != nil {
 				e.OnRebooked(ctx, it, *out)
 			}
+		case errors.Is(err, ErrWaitlisted):
+			e.markTried(it.ID)
+			e.log().Info("irops: waitlisted, no seat confirmed; left for a person", "locator", it.Locator, "waitlisted", out.Waitlisted)
 		case errors.Is(err, ErrNoAlternative):
 			e.markTried(it.ID)
 			e.log().Info("irops: nothing to rebook onto; left for a person", "locator", it.Locator, "reason", it.Reason)
@@ -215,14 +234,23 @@ func (e *Engine) Rebook(ctx context.Context, it *store.QueueItem) (*Outcome, err
 		return nil, err
 	}
 	deadKey := dead.Key()
-	// What a desk does first: look for a seat that is open now. A flight the
-	// carrier has reported closed, or one nobody holds availability for,
-	// could still be requested -- and the carrier might say yes -- but a
-	// rebooking that ends in "awaiting reply" is not a rebooking the
-	// passenger can be told about. Those stay for a person unless the
-	// engine is told to ask anyway.
 	tried := 0
-	try := func(c Candidate, class string) (*Outcome, bool) {
+	// What this pass has put on the record and not confirmed: waitlists to
+	// keep if nothing confirms, and to drop if something does.
+	var waitlistRefs []int
+	var waitlisted []string
+	cancelRefs := func(refs []int, reason string) {
+		if len(refs) == 0 {
+			return
+		}
+		if _, err := e.Gateway.Cancel(ctx, rec.RecordLocator, gateway.CancelOptions{Segments: refs, By: e.By, Reason: reason}); err != nil && !errors.Is(err, gateway.ErrNothingToCancel) {
+			e.log().Warn("irops: could not cancel", "locator", rec.RecordLocator, "refs", refs, "err", err)
+		}
+	}
+	// try asks for one alternative and waits for the answer. confirmed is
+	// the passenger seated; otherwise the segment was waitlisted, refused
+	// or unanswered and the search goes on.
+	try := func(c Candidate, class string) (out *Outcome, confirmed bool) {
 		wire := pnr.FormatDate(c.Depart)
 		probe := pnr.Segment{Carrier: c.Carrier, FlightNum: c.FlightNum, Class: class, WireDate: wire, Board: c.Board, Off: c.Off}
 		if probe.Key() == deadKey {
@@ -240,26 +268,44 @@ func (e *Engine) Rebook(ctx context.Context, it *store.QueueItem) (*Outcome, err
 			e.log().Debug("irops: alternative refused", "locator", rec.RecordLocator, "candidate", c.Describe(), "err", err)
 			return nil, false
 		}
-		// The dead leg goes, and the carrier who cancelled it is told the
-		// booking is off it: releasing a seat on a flight that will not fly
-		// is still what keeps two systems' pictures the same.
-		if _, err := e.Gateway.Cancel(ctx, rec.RecordLocator, gateway.CancelOptions{
-			Segments: []int{it.SegmentRef}, By: e.By, Reason: "flight cancelled; rebooked onto " + c.Describe(),
-		}); err != nil && !errors.Is(err, gateway.ErrNothingToCancel) {
-			e.log().Warn("irops: could not drop the dead segment", "locator", rec.RecordLocator, "err", err)
-		}
-		var newSeg string
+		ref := 0
 		for _, s := range updated.Segments {
 			if s.Carrier == c.Carrier && s.FlightNum == c.FlightNum && s.Board == c.Board && s.Off == c.Off && s.Status != "XX" {
-				newSeg = s.Describe()
+				ref = s.Ref
 			}
 		}
-		note := fmt.Sprintf("rebooked %s -> %s", dead.Describe(), newSeg)
-		if err := e.Queues.Work(ctx, it.ID, e.By, note); err != nil {
-			e.log().Warn("irops: rebooked but could not work the queue item", "locator", rec.RecordLocator, "err", err)
+		if ref == 0 {
+			return nil, false
 		}
-		e.log().Info("irops: rebooked", "locator", rec.RecordLocator, "from", dead.Describe(), "to", newSeg, "tried", tried)
-		return &Outcome{Locator: rec.RecordLocator, From: dead.Describe(), To: newSeg, Class: class, Tried: tried}, true
+		status, describe := e.awaitAnswer(ctx, rec.RecordLocator, ref)
+		code := rescode.ActionCode(status)
+		switch {
+		case code.Confirmed():
+			// The dead leg goes, and so does any waitlist this pass took
+			// out on the way here.
+			cancelRefs(append([]int{it.SegmentRef}, waitlistRefs...), "flight cancelled; rebooked onto "+c.Describe())
+			note := fmt.Sprintf("rebooked %s -> %s", dead.Describe(), describe)
+			if err := e.Queues.Work(ctx, it.ID, e.By, note); err != nil {
+				e.log().Warn("irops: rebooked but could not work the queue item", "locator", rec.RecordLocator, "err", err)
+			}
+			e.log().Info("irops: rebooked", "locator", rec.RecordLocator, "from", dead.Describe(), "to", describe, "tried", tried)
+			return &Outcome{Locator: rec.RecordLocator, From: dead.Describe(), To: describe, Class: class, Tried: tried}, true
+		case code.Waitlisted():
+			waitlistRefs = append(waitlistRefs, ref)
+			waitlisted = append(waitlisted, describe)
+			e.log().Info("irops: waitlisted", "locator", rec.RecordLocator, "on", describe)
+			return nil, false
+		default:
+			// Refused, or no answer in time: the request comes off the
+			// record. A late confirmation is re-cancelled by the gateway.
+			why := "refused " + status
+			if status == "" || code.NeedsReply() {
+				why = "no answer from the carrier"
+			}
+			e.log().Debug("irops: alternative not held", "locator", rec.RecordLocator, "candidate", c.Describe(), "status", status)
+			cancelRefs([]int{ref}, why)
+			return nil, false
+		}
 	}
 	decide := func(c Candidate, class string) avail.Decision {
 		if e.Gateway.Avail == nil {
@@ -296,7 +342,40 @@ func (e *Engine) Rebook(ctx context.Context, it *store.QueueItem) (*Outcome, err
 			}
 		}
 	}
+	if len(waitlisted) > 0 {
+		return &Outcome{Locator: rec.RecordLocator, From: dead.Describe(), Tried: tried, Waitlisted: waitlisted}, ErrWaitlisted
+	}
 	return nil, ErrNoAlternative
+}
+
+// awaitAnswer waits for the carrier's answer to a segment the engine
+// requested: the status once it is no longer a request, or the request
+// status itself when ReplyTimeout passes first.
+func (e *Engine) awaitAnswer(ctx context.Context, locator string, ref int) (status, describe string) {
+	timeout := e.ReplyTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		rec, err := e.Store.GetPNR(ctx, locator)
+		if err == nil {
+			if s := rec.SegmentByRef(ref); s != nil {
+				status, describe = s.Status, s.Describe()
+				if !rescode.ActionCode(s.Status).NeedsReply() && s.Status != "HN" && s.Status != "PN" {
+					return status, describe
+				}
+			}
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return status, describe
+		}
+		select {
+		case <-ctx.Done():
+			return status, describe
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // classesFor is the order of classes to try: the passenger's own, then the

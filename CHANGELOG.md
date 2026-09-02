@@ -5,6 +5,16 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.39 — IROPS waits for the answer
+- `irops.Engine` treats a seat it asks for as a request until the carrier
+  answers. Confirmed: the dead leg and any waitlist this pass took out are
+  cancelled and the item is worked. Waitlisted: kept, and the search goes
+  on; if nothing confirms, `Rebook` returns `ErrWaitlisted` with the
+  waitlists named and the item stays for a person. Refused or unanswered
+  within `ReplyTimeout`: the request comes off the record. Before this the
+  engine dropped the dead leg on the strength of a request, which, against
+  a real inventory, left a passenger holding nothing.
+
 ## v0.1.38 — Inventory pools by leg
 - The inventory keys a cabin by flight, date and boarding point, and
   `Store.SoldSeats` groups by board: a carrier flies one number over
