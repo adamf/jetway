@@ -90,8 +90,14 @@ func TestPartitioningSkipsAPopulatedLog(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Written the way a pre-0007 deployment wrote it: no node column yet.
+	// Going through AppendMessage would assume today's schema, and the
+	// point is that yesterday's evidence survives today's migration.
 	msg := newMsg("BA", []byte("ZCZC EVIDENCE NNNN"))
-	if err := pg.AppendMessage(ctx, msg); err != nil {
+	if _, err := pg.pool.Exec(ctx, `
+		INSERT INTO message (id, direction, at, transport, peer, format, raw, sha256, size_bytes, status, diagnostics)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'[]'::jsonb)`,
+		msg.ID, msg.Direction, msg.At, msg.Transport, msg.Peer, msg.Format, msg.Raw, msg.SHA256, msg.Size, msg.Status); err != nil {
 		t.Fatal(err)
 	}
 

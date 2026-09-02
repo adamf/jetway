@@ -115,6 +115,43 @@ func (s *Mem) AppendMessage(ctx context.Context, m *Message) error {
 	return nil
 }
 
+// Purge implements Store.
+func (s *Mem) Purge(ctx context.Context, before time.Time) (Purged, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out Purged
+	keep := s.messageIDs[:0]
+	for _, id := range s.messageIDs {
+		m := s.messages[id]
+		if m != nil && m.At.Before(before) {
+			if m.DedupKey != "" {
+				k := dedupKey(m.Direction, m.Peer, m.DedupKey)
+				if s.dedup[k] == id {
+					delete(s.dedup, k)
+				}
+			}
+			delete(s.messages, id)
+			out.Messages++
+			continue
+		}
+		keep = append(keep, id)
+	}
+	s.messageIDs = append([]string(nil), keep...)
+	for id, p := range s.pnrs {
+		if !p.UpdatedAt.Before(before) {
+			continue
+		}
+		delete(s.byLocator, p.RecordLocator)
+		delete(s.pnrs, id)
+		delete(s.events, id)
+		queued := len(s.queueIDs)
+		s.dropQueueForRecordLocked(id)
+		out.QueueItems += queued - len(s.queueIDs)
+		out.Records++
+	}
+	return out, nil
+}
+
 // trimMessagesLocked discards the oldest messages once the bound is exceeded.
 func (s *Mem) trimMessagesLocked() {
 	if s.MaxMessages <= 0 || len(s.messageIDs) <= s.MaxMessages {

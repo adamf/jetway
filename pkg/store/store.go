@@ -228,5 +228,18 @@ type Store interface {
 	// QueueStore holds the work queues records are placed on.
 	QueueStore
 
+	// Purge discards history: messages received or sent before the moment,
+	// and records last touched before it, with their events and queue items.
+	// Retention is a deployment decision -- a regulator's minimum, a
+	// simulation's day -- and this is the tool it is made with.
+	Purge(ctx context.Context, before time.Time) (Purged, error)
+
 	Close() error
+}
+
+// Purged reports what a purge removed.
+type Purged struct {
+	Messages   int `json:"messages"`
+	Records    int `json:"records"`
+	QueueItems int `json:"queue_items"`
 }

@@ -22,6 +22,27 @@ type Postgres struct {
 	// Now, when set, stamps defaults instead of the wall clock. Set before
 	// use; read without a lock.
 	Now func() time.Time
+
+	// node is which system's rows this store sees. The empty string is the
+	// single-tenant deployment; Node returns a view for any other.
+	node string
+	// shared marks a Node view, whose Close must leave the pool alone.
+	shared bool
+}
+
+// Node returns a view of the same database scoped to one system.
+//
+// A hosted platform runs many carriers' reservations systems on one book of
+// record. Each gets a Node view: its rows are written with its name and its
+// queries see only those, so a locator, a flight lookup or a queue listing
+// on one carrier's system never surfaces another's booking. The pool is
+// shared; closing a view is a no-op, and the root store's Close is the one
+// that releases it.
+func (s *Postgres) Node(name string) *Postgres {
+	c := *s
+	c.node = name
+	c.shared = true
+	return &c
 }
 
 func (s *Postgres) now() time.Time {
@@ -48,7 +69,13 @@ func OpenPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 	return &Postgres{pool: pool}, nil
 }
 
-func (s *Postgres) Close() error { s.pool.Close(); return nil }
+func (s *Postgres) Close() error {
+	if s.shared {
+		return nil
+	}
+	s.pool.Close()
+	return nil
+}
 
 func (s *Postgres) AppendMessage(ctx context.Context, m *Message) error {
 	if m.ID == "" {
@@ -62,12 +89,12 @@ func (s *Postgres) AppendMessage(ctx context.Context, m *Message) error {
 		INSERT INTO message (id, direction, at, transport, peer, format, kind,
 		                     raw, sha256, size_bytes, status, error, dedup_key,
 		                     pnr_id, correlation_id, diagnostics, possible_duplicate,
-		                     trace_id, span_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+		                     trace_id, span_id, node)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
 		m.ID, m.Direction, m.At, m.Transport, m.Peer, m.Format, nullIfEmpty(m.Kind),
 		m.Raw, m.SHA256, m.Size, m.Status, nullIfEmpty(m.Error), nullIfEmpty(m.DedupKey),
 		nullIfEmpty(m.PNRID), nullIfEmpty(m.CorrelationID), diags, m.PossibleDuplicate,
-		nullIfEmpty(m.TraceID), nullIfEmpty(m.SpanID))
+		nullIfEmpty(m.TraceID), nullIfEmpty(m.SpanID), s.node)
 	if err != nil {
 		return fmt.Errorf("store: append message: %w", err)
 	}
@@ -83,10 +110,10 @@ func (s *Postgres) UpdateMessage(ctx context.Context, m *Message) error {
 		UPDATE message SET status=$2, error=$3, kind=$4, format=$5,
 		                   pnr_id=$6, correlation_id=$7, dedup_key=$8, diagnostics=$9,
 		                   possible_duplicate=$10
-		WHERE id=$1`,
+		WHERE id=$1 AND node=$11`,
 		m.ID, m.Status, nullIfEmpty(m.Error), nullIfEmpty(m.Kind), m.Format,
 		nullIfEmpty(m.PNRID), nullIfEmpty(m.CorrelationID), nullIfEmpty(m.DedupKey), diags,
-		m.PossibleDuplicate)
+		m.PossibleDuplicate, s.node)
 	if err != nil {
 		return fmt.Errorf("store: update message: %w", err)
 	}
@@ -118,7 +145,7 @@ func scanMessage(row pgx.Row) (*Message, error) {
 }
 
 func (s *Postgres) GetMessage(ctx context.Context, id string) (*Message, error) {
-	m, err := scanMessage(s.pool.QueryRow(ctx, `SELECT `+messageColumns+` FROM message WHERE id=$1`, id))
+	m, err := scanMessage(s.pool.QueryRow(ctx, `SELECT `+messageColumns+` FROM message WHERE id=$1 AND node=$2`, id, s.node))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -136,8 +163,9 @@ func (s *Postgres) ListMessages(ctx context.Context, f MessageFilter) ([]*Messag
 		  AND ($2='' OR pnr_id=$2)
 		  AND ($3='' OR status=$3)
 		  AND ($4='' OR id>$4)
+		  AND node=$6
 		ORDER BY id DESC LIMIT $5`,
-		f.Peer, f.PNRID, string(f.Status), f.SinceID, limit)
+		f.Peer, f.PNRID, string(f.Status), f.SinceID, limit, s.node)
 	if err != nil {
 		return nil, err
 	}
@@ -172,8 +200,8 @@ func (s *Postgres) findKey(ctx context.Context, dir Direction, peer, key string)
 	var id string
 	err := s.pool.QueryRow(ctx, `
 		SELECT id FROM message
-		WHERE peer=$1 AND dedup_key=$2 AND direction=$3
-		ORDER BY id ASC LIMIT 1`, peer, key, string(dir)).Scan(&id)
+		WHERE peer=$1 AND dedup_key=$2 AND direction=$3 AND node=$4
+		ORDER BY id ASC LIMIT 1`, peer, key, string(dir), s.node).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}
@@ -191,17 +219,17 @@ func (s *Postgres) CreatePNR(ctx context.Context, p *pnr.PNR, events []Event) er
 	}
 	return s.tx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO pnr (id, record_locator, version, status, created_at, updated_at, state, next_deadline)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			INSERT INTO pnr (id, record_locator, version, status, created_at, updated_at, state, next_deadline, node)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 			p.ID, p.RecordLocator, p.Version, p.Status, p.CreatedAt, p.UpdatedAt, state,
-			p.NextDeadline())
+			p.NextDeadline(), s.node)
 		if err != nil {
 			if isUniqueViolation(err) {
 				return ErrDuplicate
 			}
 			return err
 		}
-		return insertEvents(ctx, tx, p.ID, 0, events, s.now)
+		return insertEvents(ctx, tx, s.node, p.ID, 0, events, s.now)
 	})
 }
 
@@ -217,15 +245,15 @@ func (s *Postgres) UpdatePNR(ctx context.Context, p *pnr.PNR, expected int64, ev
 		tag, err := tx.Exec(ctx, `
 			UPDATE pnr SET version=$2, status=$3, updated_at=$4, state=$5, record_locator=$6,
 			               next_deadline=$8
-			WHERE id=$1 AND version=$7`,
+			WHERE id=$1 AND version=$7 AND node=$9`,
 			p.ID, p.Version, p.Status, p.UpdatedAt, state, p.RecordLocator, expected,
-			p.NextDeadline())
+			p.NextDeadline(), s.node)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
 			var exists bool
-			if err := tx.QueryRow(ctx, `SELECT true FROM pnr WHERE id=$1`, p.ID).Scan(&exists); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT true FROM pnr WHERE id=$1 AND node=$2`, p.ID, s.node).Scan(&exists); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return ErrNotFound
 				}
@@ -238,7 +266,7 @@ func (s *Postgres) UpdatePNR(ctx context.Context, p *pnr.PNR, expected int64, ev
 			`SELECT coalesce(max(seq),0) FROM pnr_event WHERE pnr_id=$1`, p.ID).Scan(&maxSeq); err != nil {
 			return err
 		}
-		return insertEvents(ctx, tx, p.ID, maxSeq, events, s.now)
+		return insertEvents(ctx, tx, s.node, p.ID, maxSeq, events, s.now)
 	})
 }
 
@@ -266,15 +294,15 @@ func (s *Postgres) DividePNR(ctx context.Context, parent *pnr.PNR, expected int6
 		tag, err := tx.Exec(ctx, `
 			UPDATE pnr SET version=$2, status=$3, updated_at=$4, state=$5, record_locator=$6,
 			               next_deadline=$8
-			WHERE id=$1 AND version=$7`,
+			WHERE id=$1 AND version=$7 AND node=$9`,
 			parent.ID, parent.Version, parent.Status, parent.UpdatedAt, parentState,
-			parent.RecordLocator, expected, parent.NextDeadline())
+			parent.RecordLocator, expected, parent.NextDeadline(), s.node)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
 			var exists bool
-			if err := tx.QueryRow(ctx, `SELECT true FROM pnr WHERE id=$1`, parent.ID).Scan(&exists); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT true FROM pnr WHERE id=$1 AND node=$2`, parent.ID, s.node).Scan(&exists); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return ErrNotFound
 				}
@@ -287,25 +315,25 @@ func (s *Postgres) DividePNR(ctx context.Context, parent *pnr.PNR, expected int6
 			`SELECT coalesce(max(seq),0) FROM pnr_event WHERE pnr_id=$1`, parent.ID).Scan(&maxSeq); err != nil {
 			return err
 		}
-		if err := insertEvents(ctx, tx, parent.ID, maxSeq, parentEvents, s.now); err != nil {
+		if err := insertEvents(ctx, tx, s.node, parent.ID, maxSeq, parentEvents, s.now); err != nil {
 			return err
 		}
 
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO pnr (id, record_locator, version, status, created_at, updated_at, state, next_deadline)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			INSERT INTO pnr (id, record_locator, version, status, created_at, updated_at, state, next_deadline, node)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 			child.ID, child.RecordLocator, child.Version, child.Status,
-			child.CreatedAt, child.UpdatedAt, childState, child.NextDeadline()); err != nil {
+			child.CreatedAt, child.UpdatedAt, childState, child.NextDeadline(), s.node); err != nil {
 			if isUniqueViolation(err) {
 				return ErrDuplicate
 			}
 			return err
 		}
-		return insertEvents(ctx, tx, child.ID, 0, childEvents, s.now)
+		return insertEvents(ctx, tx, s.node, child.ID, 0, childEvents, s.now)
 	})
 }
 
-func insertEvents(ctx context.Context, tx pgx.Tx, pnrID string, startSeq int64, events []Event, now func() time.Time) error {
+func insertEvents(ctx context.Context, tx pgx.Tx, node, pnrID string, startSeq int64, events []Event, now func() time.Time) error {
 	for i := range events {
 		e := events[i]
 		if e.ID == "" {
@@ -316,10 +344,10 @@ func insertEvents(ctx context.Context, tx pgx.Tx, pnrID string, startSeq int64, 
 		}
 		startSeq++
 		_, err := tx.Exec(ctx, `
-			INSERT INTO pnr_event (id, pnr_id, seq, type, detail, payload, message_id, actor, at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+			INSERT INTO pnr_event (id, pnr_id, seq, type, detail, payload, message_id, actor, at, node)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 			e.ID, pnrID, startSeq, e.Type, nullIfEmpty(e.Detail), jsonOrNil(e.Payload),
-			nullIfEmpty(e.MessageID), nullIfEmpty(e.Actor), e.At)
+			nullIfEmpty(e.MessageID), nullIfEmpty(e.Actor), e.At, node)
 		if err != nil {
 			return err
 		}
@@ -348,7 +376,7 @@ func scanPNRRow(row pgx.Row) (*pnr.PNR, error) {
 func (s *Postgres) getPNR(ctx context.Context, where string, arg any) (*pnr.PNR, error) {
 	var state []byte
 	var version int64
-	err := s.pool.QueryRow(ctx, `SELECT state, version FROM pnr WHERE `+where, arg).Scan(&state, &version)
+	err := s.pool.QueryRow(ctx, `SELECT state, version FROM pnr WHERE node=$2 AND `+where, arg, s.node).Scan(&state, &version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -378,7 +406,7 @@ func (s *Postgres) ListPNRs(ctx context.Context, limit int) ([]*pnr.PNR, error) 
 		limit = 100
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT state, version FROM pnr ORDER BY updated_at DESC LIMIT $1`, limit)
+		`SELECT state, version FROM pnr WHERE node=$2 ORDER BY updated_at DESC LIMIT $1`, limit, s.node)
 	if err != nil {
 		return nil, err
 	}
@@ -494,10 +522,10 @@ func (s *Postgres) Enqueue(ctx context.Context, item *QueueItem) error {
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO queue_item (id, queue, pnr_id, locator, code, reason,
-		                        message_id, segment_ref, placed_at, placed_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		                        message_id, segment_ref, placed_at, placed_by, node)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 		item.ID, item.Queue, item.PNRID, nullIfEmpty(item.Locator), item.Code, item.Reason,
-		nullIfEmpty(item.MessageID), item.SegmentRef, item.PlacedAt, item.PlacedBy)
+		nullIfEmpty(item.MessageID), item.SegmentRef, item.PlacedAt, item.PlacedBy, s.node)
 	if err != nil {
 		// The partial unique index fires when this record is already pending on
 		// this queue for this reason, which is the sweeper running again rather
@@ -513,7 +541,7 @@ func (s *Postgres) Enqueue(ctx context.Context, item *QueueItem) error {
 func (s *Postgres) WorkQueueItem(ctx context.Context, id, by, note string) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE queue_item SET worked_at=now(), worked_by=$2, note=$3
-		WHERE id=$1 AND worked_at IS NULL`, id, by, nullIfEmpty(note))
+		WHERE id=$1 AND worked_at IS NULL AND node=$4`, id, by, nullIfEmpty(note), s.node)
 	if err != nil {
 		return fmt.Errorf("store: work queue item: %w", err)
 	}
@@ -524,7 +552,7 @@ func (s *Postgres) WorkQueueItem(ctx context.Context, id, by, note string) error
 	// worked it. Those are different answers to the caller.
 	var exists bool
 	if err := s.pool.QueryRow(ctx,
-		`SELECT true FROM queue_item WHERE id=$1`, id).Scan(&exists); err != nil {
+		`SELECT true FROM queue_item WHERE id=$1 AND node=$2`, id, s.node).Scan(&exists); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -543,8 +571,9 @@ func (s *Postgres) ListQueue(ctx context.Context, f QueueFilter) ([]*QueueItem, 
 		WHERE ($1='' OR queue=$1)
 		  AND ($2='' OR pnr_id=$2)
 		  AND ($3 OR worked_at IS NULL)
+		  AND node=$5
 		ORDER BY id DESC LIMIT $4`,
-		f.Queue, f.PNRID, f.IncludeWorked, limit)
+		f.Queue, f.PNRID, f.IncludeWorked, limit, s.node)
 	if err != nil {
 		return nil, err
 	}
@@ -562,7 +591,7 @@ func (s *Postgres) ListQueue(ctx context.Context, f QueueFilter) ([]*QueueItem, 
 
 func (s *Postgres) QueueCounts(ctx context.Context) (map[string]int, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT queue, count(*) FROM queue_item WHERE worked_at IS NULL GROUP BY queue`)
+		SELECT queue, count(*) FROM queue_item WHERE worked_at IS NULL AND node=$1 GROUP BY queue`, s.node)
 	if err != nil {
 		return nil, err
 	}
@@ -586,8 +615,8 @@ func (s *Postgres) QueueCounts(ctx context.Context) (map[string]int, error) {
 // replace.
 func (s *Postgres) findOnePNR(ctx context.Context, contains string) (*pnr.PNR, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT state, version FROM pnr WHERE state @> $1::jsonb ORDER BY updated_at DESC LIMIT 1`,
-		contains)
+		`SELECT state, version FROM pnr WHERE node=$2 AND state @> $1::jsonb ORDER BY updated_at DESC LIMIT 1`,
+		contains, s.node)
 	if err != nil {
 		return nil, err
 	}
@@ -674,15 +703,15 @@ func (s *Postgres) FindPNRsByFlight(ctx context.Context, flightKey, wireDate str
 	// a flight than are really on it -- which is the class of quiet wrong
 	// answer these lookups exist to remove. Page until the rows run out.
 	sql := fmt.Sprintf(
-		`SELECT state, version FROM pnr WHERE (%s) AND status <> $%d
+		`SELECT state, version FROM pnr WHERE (%s) AND status <> $%d AND node=$%d
 		 ORDER BY updated_at DESC, id DESC LIMIT $%d OFFSET $%d`,
-		where.String(), np+1, np+2, np+3)
+		where.String(), np+1, np+2, np+3, np+4)
 
 	const page = 500
 	var out []*pnr.PNR
 	for offset := 0; len(out) < limit; offset += page {
 		rows, err := s.pool.Query(ctx, sql, append(append([]any{}, args...),
-			string(pnr.StatusCancelled), page, offset)...)
+			string(pnr.StatusCancelled), s.node, page, offset)...)
 		if err != nil {
 			return nil, err
 		}
@@ -753,9 +782,9 @@ func (s *Postgres) FindPNRsStale(ctx context.Context, before time.Time, limit in
 	// records.
 	return s.queryPNRs(ctx,
 		`SELECT state, version FROM pnr
-		 WHERE status <> $1 AND updated_at < $2
+		 WHERE status <> $1 AND updated_at < $2 AND node=$4
 		 ORDER BY updated_at ASC LIMIT $3`,
-		string(pnr.StatusCancelled), before, limit)
+		string(pnr.StatusCancelled), before, limit, s.node)
 }
 
 func (s *Postgres) FindPNRsDueBy(ctx context.Context, deadline time.Time, limit int) ([]*pnr.PNR, error) {
@@ -766,9 +795,33 @@ func (s *Postgres) FindPNRsDueBy(ctx context.Context, deadline time.Time, limit 
 	// JSONB state cannot be range-scanned. Served by pnr_deadline_idx.
 	return s.queryPNRs(ctx,
 		`SELECT state, version FROM pnr
-		 WHERE status <> $1 AND next_deadline IS NOT NULL AND next_deadline < $2
+		 WHERE status <> $1 AND next_deadline IS NOT NULL AND next_deadline < $2 AND node=$4
 		 ORDER BY next_deadline ASC LIMIT $3`,
-		string(pnr.StatusCancelled), deadline, limit)
+		string(pnr.StatusCancelled), deadline, limit, s.node)
+}
+
+// Purge implements Store. Events and queue items go with their records
+// through the foreign keys; what this deletes directly is bounded by node,
+// so one system's retention never touches another's history.
+func (s *Postgres) Purge(ctx context.Context, before time.Time) (Purged, error) {
+	var out Purged
+	// Queue items are counted before the cascade removes them.
+	if err := s.pool.QueryRow(ctx, `
+		SELECT count(*) FROM queue_item q JOIN pnr p ON p.id = q.pnr_id
+		WHERE p.node=$1 AND p.updated_at < $2`, s.node, before).Scan(&out.QueueItems); err != nil {
+		return out, fmt.Errorf("store: purge: %w", err)
+	}
+	tag, err := s.pool.Exec(ctx, `DELETE FROM pnr WHERE node=$1 AND updated_at < $2`, s.node, before)
+	if err != nil {
+		return out, fmt.Errorf("store: purge records: %w", err)
+	}
+	out.Records = int(tag.RowsAffected())
+	tag, err = s.pool.Exec(ctx, `DELETE FROM message WHERE node=$1 AND at < $2`, s.node, before)
+	if err != nil {
+		return out, fmt.Errorf("store: purge messages: %w", err)
+	}
+	out.Messages = int(tag.RowsAffected())
+	return out, nil
 }
 
 // queryPNRs runs a query returning (state, version) rows.

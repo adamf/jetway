@@ -83,9 +83,10 @@ exists, it is used, and it has found real bugs every time.
 - **Field-level encryption at rest.** `DOCS`, `DOCA`, `DOCO` and `FOID` are
   flagged `Sensitive` and redacted from logs and the console, but they are
   stored in plaintext. There is no key management.
-- **Retention and erasure.** No expiry, no purge, no erasure workflow. The
-  message log keeps raw bytes indefinitely, and those bytes contain personal
-  data regardless of what the projection redacts.
+- **Retention and erasure.** `Store.Purge` discards everything older than a
+  moment, per node, on both backends -- the tool a retention policy is made
+  with. There is still no policy running it in `jetwayd`, and no erasure of
+  one person's data on request.
 - **Access control.** The API and console are unauthenticated. There is no
   notion of who may read a record.
 
@@ -207,6 +208,11 @@ partner's message with something false. Fix those before anything else.
   else; it should read counters.
 - **The availability cache is per process**, so two processes disagree about
   what is sellable. That is the real obstacle to running more than one.
+- **Many systems, one database** is supported by `Postgres.Node`: rows carry
+  the system they belong to and a view sees only its own. `store.Split`
+  keeps the message log elsewhere -- bounded memory, in wholesky -- while
+  the records live in Postgres, because five hundred systems' wire bytes
+  are not a row-per-message workload.
 - **Channel sequence baselines are per process** and are lost on restart, so a
   failover reports a gap that is not there.
 - **The message log is not partitioned.** It is append-only with a time-ordered
