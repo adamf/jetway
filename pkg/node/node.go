@@ -8,12 +8,12 @@
 package node
 
 import (
-	"sync"
 	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -56,7 +56,7 @@ type Node struct {
 	// Drain and Close can give it back once the links are quiet.
 	leaseMu     sync.Mutex
 	leaseHolder string
-	tcp           map[string]*ingress.TCP
+	tcp         map[string]*ingress.TCP
 	// matip holds the MATIP listeners so replies can find the session that
 	// carried the request. It is per-node rather than package-level: two nodes
 	// in one process -- which is what the load harness builds -- must not share
