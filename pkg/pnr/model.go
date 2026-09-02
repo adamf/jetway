@@ -115,6 +115,8 @@ type Segment struct {
 
 	Board string `json:"board,omitempty"`
 	Off   string `json:"off,omitempty"`
+	// FareBasis is the fare the segment was priced under, when it was.
+	FareBasis string `json:"fare_basis,omitempty"`
 
 	// Status is the current holding status: HK, HL, HN and so on. A segment we
 	// have requested but not heard back on sits at HN.
@@ -190,6 +192,30 @@ type Remark struct {
 	Text string `json:"text"`
 }
 
+// Pricing is the priced itinerary as the record carries it. Amounts are in
+// minor units of Currency; the fare package computes them, this holds them.
+type Pricing struct {
+	Currency   string             `json:"currency"`
+	Base       int64              `json:"base"`
+	Taxes      int64              `json:"taxes"`
+	Total      int64              `json:"total"`
+	PricedAt   time.Time          `json:"priced_at"`
+	Passengers []PassengerPricing `json:"passengers,omitempty"`
+}
+
+// PassengerPricing is one passenger's share: the fare basis per segment in
+// itinerary order, and the money.
+type PassengerPricing struct {
+	Ref   int      `json:"ref"`
+	Type  string   `json:"type"` // ADT, CHD, INF
+	Bases []string `json:"bases"`
+	// Segments holds each segment's base amount, in itinerary order.
+	Segments []int64 `json:"segments"`
+	Base     int64   `json:"base"`
+	Taxes    int64   `json:"taxes"`
+	Total    int64   `json:"total"`
+}
+
 // ExternalLocator is another system's record locator for this booking.
 type ExternalLocator struct {
 	// Owner is the carrier or system designator, e.g. "BA" or "1A".
@@ -236,6 +262,9 @@ type PNR struct {
 	Ticketing  []Ticketing       `json:"ticketing,omitempty"`
 	Remarks    []Remark          `json:"remarks,omitempty"`
 	Locators   []ExternalLocator `json:"locators,omitempty"`
+	// Pricing is what the itinerary was priced at, when a tariff priced it:
+	// per passenger, base and taxes, in minor units of the currency.
+	Pricing *Pricing `json:"pricing,omitempty"`
 	// Tickets are the documents issued against this record. A booking with no
 	// ticket is a booking that will be cancelled when its time limit passes.
 	Tickets []Ticket `json:"tickets,omitempty"`

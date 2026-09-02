@@ -5,6 +5,23 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.42 — Fares, pricing, and the class ladder
+- `pkg/fare`: a filing of fares per market and class with basis codes,
+  amounts and rules (advance purchase, stay, season, refundability, change
+  fee), taxes by kind (percent of base, per segment, per ticket, per
+  enplanement), passenger-type discounts, and `Price`, which sells each
+  segment under the cheapest fare in its class whose rules the trip meets
+  and refuses with the rule named when none does. Carries no fare of its
+  own: the filing is the deployment's.
+- `Gateway.Tariff` prices every booking the node makes: fare basis on the
+  segment, `pnr.Pricing` on the record, the value on each ticket coupon.
+  A class with no sellable fare refuses the booking; the wrapped error is a
+  `*fare.ErrNoFare`.
+- `inventory.Levels`: nested booking-class authorisations per cabin, the
+  ladder a revenue management system publishes. A class closes when its
+  authorisation is used by it and the classes beneath it, while the cabin
+  still sells higher classes; availability reports the class's seats.
+
 ## v0.1.41 — The cancelled flight's passenger list
 - `Store.FindPNRsEverOnFlight`: every record that ever held a segment on a
   flight, cancelled segments and cancelled records included. The live

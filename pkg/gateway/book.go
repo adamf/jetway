@@ -9,6 +9,7 @@ import (
 	"github.com/adamf/jetway/pkg/airimp"
 	"github.com/adamf/jetway/pkg/avail"
 	"github.com/adamf/jetway/pkg/edifact"
+	"github.com/adamf/jetway/pkg/fare"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/rescode"
@@ -222,6 +223,9 @@ func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, e
 	}
 	if req.Contact != "" {
 		rec.Contacts = append(rec.Contacts, pnr.Contact{Type: "phone", Text: req.Contact})
+	}
+	if err := g.price(rec, now); err != nil {
+		return nil, err
 	}
 	rec.Recompute()
 
@@ -444,4 +448,94 @@ func sensitiveSSR(code string) bool {
 		return true
 	}
 	return false
+}
+
+// price prices a new record against the node's tariff, when it has one.
+// The fare basis lands on each air segment and the money on the record. A
+// segment with no fare that may be sold in its class for this trip refuses
+// the booking: the wrapped error is a *fare.ErrNoFare naming the rule, so a
+// caller can offer another class.
+func (g *Gateway) price(rec *pnr.PNR, now time.Time) error {
+	if g.Tariff == nil {
+		return nil
+	}
+	req := fare.Request{Purchased: now}
+	var air []int
+	for i, s := range rec.Segments {
+		if s.Type != pnr.SegmentAir {
+			continue
+		}
+		req.Segments = append(req.Segments, fare.Segment{Carrier: s.Carrier, Origin: s.Board, Destination: s.Off, Class: s.Class, Depart: s.Depart})
+		air = append(air, i)
+	}
+	if len(req.Segments) == 0 {
+		return nil
+	}
+	for _, p := range rec.Passengers {
+		switch {
+		case p.Infant || p.Type == pnr.PaxInfant:
+			req.Passengers = append(req.Passengers, fare.Infant)
+		case p.Type == pnr.PaxChild:
+			req.Passengers = append(req.Passengers, fare.Child)
+		default:
+			req.Passengers = append(req.Passengers, fare.Adult)
+		}
+	}
+	q, err := fare.Price(g.Tariff, req)
+	if err != nil {
+		return fmt.Errorf("gateway: pricing: %w", err)
+	}
+	pr := &pnr.Pricing{Currency: q.Currency, Base: q.Base.Amount, Taxes: q.Taxes.Amount, Total: q.Total.Amount, PricedAt: now}
+	for i, pq := range q.Passengers {
+		pp := pnr.PassengerPricing{Ref: i + 1, Type: string(pq.Type), Base: pq.Base.Amount, Total: pq.Total.Amount}
+		for _, tl := range pq.Taxes {
+			pp.Taxes += tl.Amount.Amount
+		}
+		for _, sf := range pq.Segments {
+			pp.Bases = append(pp.Bases, sf.Basis)
+			pp.Segments = append(pp.Segments, sf.Base.Amount)
+		}
+		pr.Passengers = append(pr.Passengers, pp)
+	}
+	for k, i := range air {
+		if len(q.Passengers) > 0 && k < len(q.Passengers[0].Segments) {
+			rec.Segments[i].FareBasis = q.Passengers[0].Segments[k].Basis
+		}
+	}
+	rec.Pricing = pr
+	return nil
+}
+
+// couponValue is what a passenger's coupon on a segment is worth, from the
+// record's pricing: the segment's base fare share, with the passenger's
+// taxes spread across their coupons.
+func couponValue(rec *pnr.PNR, paxRef, segRef int) (amount, currency string) {
+	if rec.Pricing == nil {
+		return "", ""
+	}
+	airIndex := -1
+	k := 0
+	for _, s := range rec.Segments {
+		if s.Type != pnr.SegmentAir {
+			continue
+		}
+		if s.Ref == segRef {
+			airIndex = k
+		}
+		k++
+	}
+	if airIndex < 0 {
+		return "", ""
+	}
+	for _, pp := range rec.Pricing.Passengers {
+		if pp.Ref != paxRef || airIndex >= len(pp.Segments) {
+			continue
+		}
+		v := pp.Segments[airIndex]
+		if n := len(pp.Segments); n > 0 {
+			v += pp.Taxes / int64(n)
+		}
+		return fmt.Sprintf("%d.%02d", v/100, v%100), rec.Pricing.Currency
+	}
+	return "", ""
 }

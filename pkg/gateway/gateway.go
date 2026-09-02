@@ -24,6 +24,7 @@ import (
 	"github.com/adamf/jetway/pkg/avail"
 	"github.com/adamf/jetway/pkg/avs"
 	"github.com/adamf/jetway/pkg/edifact"
+	"github.com/adamf/jetway/pkg/fare"
 	"github.com/adamf/jetway/pkg/metrics"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
@@ -147,6 +148,12 @@ type Gateway struct {
 	Bus      *Bus
 	Log      *slog.Logger
 	Sender   Sender
+
+	// Tariff, when set, prices every booking this node makes before it
+	// sells: the fare basis goes on each segment, the amounts on the record
+	// and later on the ticket coupons, and a class with no fare that may be
+	// sold for the trip refuses the booking with the rule named.
+	Tariff fare.Tariff
 
 	// Responder decides how to answer an inbound request. Nil means this node
 	// does not answer requests, which is the right behaviour for a distribution

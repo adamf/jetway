@@ -75,7 +75,7 @@ func (g *Gateway) IssueTickets(ctx context.Context, locator string, opts IssueOp
 			if _, done := rec.TicketFor(pax.Ref); done {
 				continue
 			}
-			tickets, err := g.issueFor(ctx, pax, segs, opts, now)
+			tickets, err := g.issueFor(ctx, rec, pax, segs, opts, now)
 			if err != nil {
 				return nil, err
 			}
@@ -152,7 +152,7 @@ func ticketableSegments(rec *pnr.PNR) []*pnr.Segment {
 // A ticket carries four flight coupons. An itinerary longer than that spills
 // onto conjunction documents, and each of them names the others so a partner
 // holding one can find the rest.
-func (g *Gateway) issueFor(ctx context.Context, pax pnr.Passenger, segs []*pnr.Segment,
+func (g *Gateway) issueFor(ctx context.Context, rec *pnr.PNR, pax pnr.Passenger, segs []*pnr.Segment,
 	opts IssueOptions, now time.Time) ([]pnr.Ticket, error) {
 	// Four documents of four coupons is the published ceiling for one
 	// conjunction set. Beyond it the itinerary needs more than one set, which
@@ -184,8 +184,10 @@ func (g *Gateway) issueFor(ctx context.Context, pax pnr.Passenger, segs []*pnr.S
 			IssuedAt: now, IssuedBy: opts.IssuedBy,
 		}
 		for j, s := range chunk {
+			amount, currency := couponValue(rec, pax.Ref, s.Ref)
 			t.Coupons = append(t.Coupons, pnr.Coupon{
 				Number: j + 1, SegmentRef: s.Ref, Status: pnr.CouponOpen,
+				Amount: amount, Currency: currency,
 			})
 		}
 		for j, n := range numbers {
