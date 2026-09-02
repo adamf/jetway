@@ -247,3 +247,34 @@ Nothing open anywhere leaves the item on the queue for a person. With
 `AskCarriers` the engine will instead request a closed or unknown flight and
 leave the passenger holding an HN, which is a different promise and is off
 by default.
+
+## The aircraft and the tower
+
+Two networks beside the airline's own. The aircraft reports its movements
+over its datalink; the provider forwards them to the airline as ARINC 620
+messages on Type B, and operations derives the MVT from the report. Air
+traffic services runs the AFTN: the airline files a flight plan, and the
+towers send departure and arrival messages when they see the aircraft move.
+
+```mermaid
+sequenceDiagram
+    participant A as Aircraft
+    participant P as Datalink provider (ARINC 620)
+    participant O as Airline operations (gateway.Ground)
+    participant T as Tower / ANSP (AFTN)
+    participant W as Ops watch
+
+    O->>T: FF EGLLZPZX KJFKZQZX · (FPL-BAW117-IS -B772/H-… -EGLL1200 -N0480F350 DCT -KJFK0700 -DOF/251126 REG/GBZHA)
+    Note over A,P: OUT, then OFF, over the air (ARINC 618)
+    P->>O: QU LHROOBA · DEP / FI BA117/AN GBZHA/DA EGLL/DS KJFK/OT 1207/OF 1219 / DT SKY LHR 261219 M01A
+    O->>W: MVT BA117/26.GBZHA.LHR AD1207/1219 EA1905 JFK PX143
+    T->>O: FF KJFKBAWX · (DEP-BAW117-EGLL1219-KJFK-DOF/251126)
+    Note over A,P: ON, then IN
+    P->>O: ARR / FI BA117/AN GBZHA/DA EGLL/AD KJFK/ON 1857/IN 1905
+    O->>W: MVT BA117/26.GBZHA.JFK AA1857/1905
+    T->>O: FF EGLLBAWX · (ARR-BAW117-EGLL-KJFK1857)
+```
+
+The switch carries AFTN traffic by indicator: an addressee carrying a
+carrier's three-letter designator goes down that carrier's link wherever the
+location; anything else goes to the link marked as the aeronautical network.
