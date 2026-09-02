@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/adamf/jetway/pkg/api"
@@ -46,7 +48,10 @@ type Node struct {
 	API     *api.Server
 
 	listeners []ingress.Ingress
-	tcp       map[string]*ingress.TCP
+	// holding is whether this process is the system's writer right now.
+	holding       atomic.Bool
+	standbyLogged atomic.Bool
+	tcp           map[string]*ingress.TCP
 	// matip holds the MATIP listeners so replies can find the session that
 	// carried the request. It is per-node rather than package-level: two nodes
 	// in one process -- which is what the load harness builds -- must not share
@@ -56,6 +61,11 @@ type Node struct {
 
 // Options are the knobs the scenario suite needs and jetwayd does not.
 type Options struct {
+	// Store, when set, is used instead of the one the config names: a
+	// harness sharing one store between nodes, which is how a lease is
+	// tested.
+	Store store.Store
+
 	// LocatorSecret seeds record locator allocation. Required.
 	LocatorSecret []byte
 	// SkipConsole omits the HTTP server. A load run wants the pipeline, not
@@ -71,9 +81,12 @@ type Options struct {
 // Listeners bind here, so a port conflict or an unreadable certificate fails
 // at build time rather than later in a goroutine where it reads as silence.
 func Build(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Options) (*Node, error) {
-	st, err := openStore(ctx, cfg, log)
-	if err != nil {
-		return nil, err
+	st := opts.Store
+	var err error
+	if st == nil {
+		if st, err = openStore(ctx, cfg, log); err != nil {
+			return nil, err
+		}
 	}
 
 	n := &Node{Config: cfg, Log: log, Store: st, Bus: gateway.NewBus(400),
@@ -139,6 +152,9 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Optio
 			Console: cfg.HTTP.Console,
 			Metrics: cfg.HTTP.Metrics,
 			Ready: func(ctx context.Context) error {
+				if cfg.Lease.Enabled && !n.Holding() {
+					return fmt.Errorf("standing by: %s is held elsewhere", cfg.Identity.Designator)
+				}
 				_, err := st.ListPNRs(ctx, 1)
 				return err
 			},
@@ -151,15 +167,14 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Optio
 // Start brings up everything that accepts or generates work, and returns once
 // the links are running. It does not serve the console; Serve does that.
 func (n *Node) Start(ctx context.Context) error {
-	handler := n.Handler()
-	for _, in := range n.listeners {
-		in := in
-		go func() {
-			if err := in.Start(ctx, handler); err != nil && ctx.Err() == nil {
-				n.Log.Error("ingress stopped", "ingress", in.Name(), "err", err)
-			}
-		}()
-		n.Log.Info("ingress listening", "name", in.Name(), "addr", in.Addr())
+	if n.Config.Lease.Enabled {
+		// The links open only while this process holds the system. Until
+		// then it stands by, ready to take over the moment the holder lets
+		// the lease lapse.
+		go n.runLease(ctx)
+	} else {
+		n.holding.Store(true)
+		n.bindListeners(ctx)
 	}
 
 	if n.Spool != nil {
@@ -189,6 +204,100 @@ func (n *Node) Start(ctx context.Context) error {
 	go n.purgeAvailability(ctx)
 	go n.Sweeper.Run(ctx, time.Minute)
 	return nil
+}
+
+// Holding reports whether this process currently holds the system: without
+// a lease, always; with one, only while it is the writer.
+func (n *Node) Holding() bool { return n.holding.Load() }
+
+// bindListeners opens the ingress listeners and serves them.
+func (n *Node) bindListeners(ctx context.Context) {
+	handler := n.Handler()
+	for _, in := range n.listeners {
+		in := in
+		go func() {
+			if err := in.Start(ctx, handler); err != nil && ctx.Err() == nil {
+				n.Log.Error("ingress stopped", "ingress", in.Name(), "err", err)
+			}
+		}()
+		n.Log.Info("ingress listening", "name", in.Name(), "addr", in.Addr())
+	}
+}
+
+// runLease is the standby and the hold: acquire, bind, renew; on losing the
+// lease, drain the links and stand by again.
+func (n *Node) runLease(ctx context.Context) {
+	leaser, ok := n.Store.(store.Leaser)
+	if !ok {
+		n.Log.Error("lease enabled but the store cannot hold one; binding without it")
+		n.holding.Store(true)
+		n.bindListeners(ctx)
+		return
+	}
+	system := n.Config.Identity.Designator
+	holder := n.Config.Lease.Holder
+	if holder == "" {
+		host, _ := os.Hostname()
+		holder = fmt.Sprintf("%s/%d", host, os.Getpid())
+	}
+	ttl := n.Config.Lease.TTL
+	if ttl <= 0 {
+		ttl = 15 * time.Second
+	}
+	poll := ttl / 3
+	for ctx.Err() == nil {
+		got, err := leaser.Acquire(ctx, system, holder, ttl)
+		if err != nil {
+			n.Log.Warn("lease acquire failed", "system", system, "err", err)
+		}
+		if !got {
+			if n.standbyLogged.CompareAndSwap(false, true) {
+				n.Log.Info("standing by", "system", system, "holder", holder)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(poll):
+			}
+			continue
+		}
+		n.standbyLogged.Store(false)
+		n.Log.Info("holding the system", "system", system, "holder", holder, "ttl", ttl.String())
+		lctx, cancel := context.WithCancel(ctx)
+		n.holding.Store(true)
+		n.bindListeners(lctx)
+		for lctx.Err() == nil {
+			select {
+			case <-ctx.Done():
+				cancel()
+				leaser.Release(context.Background(), system, holder) //nolint:errcheck
+				return
+			case <-time.After(poll):
+			}
+			ok, err := leaser.Renew(lctx, system, holder, ttl)
+			if err != nil {
+				n.Log.Warn("lease renew failed", "system", system, "err", err)
+				continue // the term has time in it; try again next poll
+			}
+			if !ok {
+				break
+			}
+		}
+		// Lost: stop being the writer before anything else, then drop the
+		// links so partners redial to whoever holds it now.
+		n.holding.Store(false)
+		n.Log.Error("lease lost; dropping the links", "system", system, "holder", holder)
+		cancel()
+		for _, in := range n.listeners {
+			in.Close() //nolint:errcheck
+		}
+		if ls, tcp, err := n.buildIngress(); err == nil {
+			n.listeners, n.tcp = ls, tcp
+		} else {
+			n.Log.Error("could not rebuild the ingress after losing the lease", "err", err)
+			return
+		}
+	}
 }
 
 // Addr returns the address of the named TCP listener, which is how a test that

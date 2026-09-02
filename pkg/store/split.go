@@ -77,6 +77,25 @@ func (s Split) RevenueByLeg(ctx context.Context, wireDate string) ([]LegRevenue,
 	return s.Records.RevenueByLeg(ctx, wireDate)
 }
 
+func (s Split) Acquire(ctx context.Context, system, holder string, ttl time.Duration) (bool, error) {
+	if l, ok := s.Records.(Leaser); ok {
+		return l.Acquire(ctx, system, holder, ttl)
+	}
+	return true, nil
+}
+func (s Split) Renew(ctx context.Context, system, holder string, ttl time.Duration) (bool, error) {
+	if l, ok := s.Records.(Leaser); ok {
+		return l.Renew(ctx, system, holder, ttl)
+	}
+	return true, nil
+}
+func (s Split) Release(ctx context.Context, system, holder string) error {
+	if l, ok := s.Records.(Leaser); ok {
+		return l.Release(ctx, system, holder)
+	}
+	return nil
+}
+
 // Ping implements Pinger against the records store, the one that matters.
 func (s Split) Ping(ctx context.Context) error {
 	if p, ok := s.Records.(Pinger); ok {

@@ -5,6 +5,14 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.48 — One writer per system
+- `config.Lease`: when enabled, a node binds its links only while it holds
+  the system's lease in the store (`store.Leaser`, migration 0009), renews
+  it at a third of the term, stands by while another process holds it, and
+  takes over when the holder lets it lapse or releases on shutdown.
+  `/readyz` is not ready while standing by. `node.Options.Store` lets a
+  harness share one store between nodes, which is how it is tested.
+
 ## v0.1.47 — Readiness, retirement, and outbox metrics
 - `/readyz` fails when the store cannot be reached; `store.Pinger` on every
   backend.

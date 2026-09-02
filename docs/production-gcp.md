@@ -125,11 +125,10 @@ every system's process, but only the holder of a lease (a row in a
 lease; a database lease is simpler and in the same failure domain as the
 book) opens the listeners for that system. When the leader dies, the lease
 expires in a few seconds, a standby takes it and binds; partners reconnect
-to the same NLB address and land on the new leader. jetway does not have
-this lease yet (section 9). Without it, the honest alternative is a MIG of
-size one per system with autohealing, which gives an RTO of the VM recreate
-time, typically 60 to 120 seconds -- inside most partners' timers but not
-inside all of them.
+to the same NLB address and land on the new leader. This is `config.Lease`
+since v0.1.48: the lease row lives in the book's database, the term
+defaults to fifteen seconds and is renewed at five, so a failover takes
+between five and fifteen seconds plus the partners' redial.
 
 ## 4. Capacity
 
@@ -297,9 +296,12 @@ zero acknowledged-and-lost messages (measured by the reconciliation in
 In the order a team would build it. Items struck through were done the
 day this document was written; the rest are open.
 
-1. **A system lease.** Leader election per system so N+1 standbys can hold
-   the address (section 3). Today two processes for one system are two
-   writers.
+1. ~~A system lease.~~ `lease.enabled: true` makes a node bind its links
+   only while it holds the system's row in `system_lease`, renewing at a
+   third of the term; standbys poll and take over when it lapses or is
+   released, and are not ready meanwhile. Still to add: the drain before
+   release, so a holder that is asked to stop empties its outboxes before
+   the standby binds.
 2. ~~Readiness.~~ `/readyz` now fails when the store cannot be reached
    (`store.Pinger`), distinct from `/healthz`; a `Ready` hook takes further
    checks. Still to add: the spool's backlog age and the lease.

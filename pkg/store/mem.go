@@ -18,6 +18,8 @@ import (
 // for tests, and for a carrier evaluating the message flow before provisioning
 // a database. It is not a production backend: nothing survives a restart.
 type Mem struct {
+	leases map[string]memLease
+
 	// MaxMessages and MaxRecords bound what is retained, oldest discarded
 	// first. Zero means unbounded, which is right for a test and wrong for
 	// anything reachable from the internet: without a bound, a public demo is
@@ -608,6 +610,49 @@ func (s *Mem) RevenueByLeg(ctx context.Context, wireDate string) ([]LegRevenue, 
 		return a.Board < b.Board
 	})
 	return out, nil
+}
+
+type memLease struct {
+	holder  string
+	expires time.Time
+}
+
+// Acquire implements Leaser. A memory store's leases only order the
+// processes sharing that store, which is the test harness's case.
+func (s *Mem) Acquire(ctx context.Context, system, holder string, ttl time.Duration) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.leases == nil {
+		s.leases = map[string]memLease{}
+	}
+	now := s.now()
+	if l, ok := s.leases[system]; ok && l.holder != holder && l.expires.After(now) {
+		return false, nil
+	}
+	s.leases[system] = memLease{holder: holder, expires: now.Add(ttl)}
+	return true, nil
+}
+
+// Renew implements Leaser.
+func (s *Mem) Renew(ctx context.Context, system, holder string, ttl time.Duration) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, ok := s.leases[system]
+	if !ok || l.holder != holder || !l.expires.After(s.now()) {
+		return false, nil
+	}
+	s.leases[system] = memLease{holder: holder, expires: s.now().Add(ttl)}
+	return true, nil
+}
+
+// Release implements Leaser.
+func (s *Mem) Release(ctx context.Context, system, holder string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if l, ok := s.leases[system]; ok && l.holder == holder {
+		delete(s.leases, system)
+	}
+	return nil
 }
 
 // Ping implements Pinger: memory is always here.

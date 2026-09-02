@@ -20,6 +20,7 @@ type Config struct {
 	Identity  Identity  `yaml:"identity"`
 	Store     Store     `yaml:"store"`
 	Spool     Spool     `yaml:"spool"`
+	Lease     Lease     `yaml:"lease"`
 	HTTP      HTTP      `yaml:"http"`
 	Ingress   []Ingress `yaml:"ingress"`
 	Peers     []Peer    `yaml:"peers"`
@@ -80,6 +81,19 @@ type Store struct {
 	// unbounded; set them on anything reachable from the internet.
 	MaxMessages int `yaml:"max_messages"`
 	MaxRecords  int `yaml:"max_records"`
+}
+
+// Lease makes one process the system's writer. When enabled, a node binds
+// its links only while it holds the system's lease in the store, renews it
+// inside the term, stands by while another process holds it, and takes over
+// when that process lets it lapse. Two processes for one system without a
+// lease are two writers answering one partner.
+type Lease struct {
+	Enabled bool `yaml:"enabled"`
+	// TTL is the term; a holder renews at a third of it. Default 15s.
+	TTL time.Duration `yaml:"ttl"`
+	// Holder names this process in the lease. Default hostname and pid.
+	Holder string `yaml:"holder"`
 }
 
 // Spool configures the durable inbound buffer.
@@ -277,6 +291,7 @@ func Default() *Config {
 		Identity: Identity{Designator: "1J", TTYAddress: "LONRM1J", Name: "jetway"},
 		Store:    Store{Backend: "mem", Migrate: true},
 		Spool:    Spool{Enabled: false, DrainInterval: 5 * time.Second},
+		Lease:    Lease{TTL: 15 * time.Second},
 		HTTP:     HTTP{Addr: "127.0.0.1:8080", Console: true, Metrics: true},
 		// One listener per partner. That is how circuits are actually
 		// provisioned, and it is what lets a peer be identified without the

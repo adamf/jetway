@@ -162,6 +162,17 @@ type SoldSeats struct {
 	Seats     int
 }
 
+// Leaser hands out the right to run a system: exactly one holder at a time,
+// for a term the holder must renew. Acquire takes a free or lapsed lease and
+// says whether it did; Renew extends a lease the caller holds and fails if
+// someone else has it; Release gives it up at once so a standby need not
+// wait out the term.
+type Leaser interface {
+	Acquire(ctx context.Context, system, holder string, ttl time.Duration) (bool, error)
+	Renew(ctx context.Context, system, holder string, ttl time.Duration) (bool, error)
+	Release(ctx context.Context, system, holder string) error
+}
+
 // Pinger is a store that can say whether its backend is reachable, for a
 // readiness check. Memory is always reachable.
 type Pinger interface {

@@ -421,6 +421,40 @@ func (s *Postgres) CreatePNR(ctx context.Context, p *pnr.PNR, events []Event) er
 	})
 }
 
+// Acquire implements Leaser: one row per system, taken when free or lapsed.
+// The insert-or-update is a single statement, so two standbys racing for a
+// lapsed lease cannot both win.
+func (s *Postgres) Acquire(ctx context.Context, system, holder string, ttl time.Duration) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO system_lease (system, holder, expires_at, taken_at)
+		VALUES ($1, $2, now() + $3::interval, now())
+		ON CONFLICT (system) DO UPDATE
+		   SET holder = EXCLUDED.holder, expires_at = EXCLUDED.expires_at, taken_at = now()
+		 WHERE system_lease.expires_at < now() OR system_lease.holder = EXCLUDED.holder`,
+		system, holder, ttl.String())
+	if err != nil {
+		return false, fmt.Errorf("store: acquire lease: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// Renew implements Leaser.
+func (s *Postgres) Renew(ctx context.Context, system, holder string, ttl time.Duration) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE system_lease SET expires_at = now() + $3::interval
+		 WHERE system = $1 AND holder = $2 AND expires_at > now()`, system, holder, ttl.String())
+	if err != nil {
+		return false, fmt.Errorf("store: renew lease: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// Release implements Leaser.
+func (s *Postgres) Release(ctx context.Context, system, holder string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM system_lease WHERE system = $1 AND holder = $2`, system, holder)
+	return err
+}
+
 // Ping implements Pinger.
 func (s *Postgres) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
