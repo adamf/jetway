@@ -142,20 +142,46 @@ func NameLine(n Name) string { return nameLine(n) }
 // exported for the messages that borrow the PNL name form.
 func ParseName(t string) (Name, error) { return parseName(strings.TrimSpace(t)) }
 
-func nameLine(n Name) string {
+// maxNameLine is the longest a name item's line may run: a Type B text
+// line is 64 characters, and the transmission systems count from 1.
+const maxNameLine = 63
+
+// nameLines renders a name item as the wire carries it, folded to the line
+// length: the party count, surname and given names first, then the dotted
+// elements packed after them. What does not fit continues on the next line,
+// indented one space -- more given names begin with a slash, more elements
+// with a dot -- which is how a list keeps a family of six with a ticket
+// number each inside sixty-four characters.
+func nameLines(n Name) []string {
 	party := n.Party
 	if party <= 0 {
 		party = max(1, len(n.Givens))
 	}
-	s := fmt.Sprintf("%d%s", party, n.Surname)
+	var lines []string
+	cur := fmt.Sprintf("%d%s", party, n.Surname)
 	for _, g := range n.Givens {
-		s += "/" + g
+		if len(cur)+1+len(g) > maxNameLine {
+			lines = append(lines, cur)
+			cur = " "
+		}
+		cur += "/" + g
 	}
 	for _, e := range n.Elements {
-		s += " " + e
+		if len(cur)+1+len(e) > maxNameLine {
+			lines = append(lines, cur)
+			cur = " " + e
+			continue
+		}
+		cur += " " + e
 	}
-	return s
+	return append(lines, cur)
 }
+
+// NameLines renders one name item as the wire carries it, folded to the
+// line length, for the other messages that borrow the PNL name form.
+func NameLines(n Name) []string { return nameLines(n) }
+
+func nameLine(n Name) string { return strings.Join(nameLines(n), "\n") }
 
 // linesPerPart keeps each part inside the Type B 60-line envelope, leaving
 // room for the address block a transmission system prepends.
@@ -296,6 +322,24 @@ func Parse(text string) (*Message, error) {
 			m.Final = false
 			closeGroup()
 			return m, nil
+		case strings.HasPrefix(t, ".") || strings.HasPrefix(t, "/"):
+			// A continuation of the name item above: more given names, or
+			// more elements, folded onto their own line.
+			var last *Name
+			switch {
+			case sec != nil && len(sec.Names) > 0:
+				last = &sec.Names[len(sec.Names)-1]
+			case g != nil && len(g.Names) > 0:
+				last = &g.Names[len(g.Names)-1]
+			default:
+				return nil, fmt.Errorf("pnl: continuation %q before any name", t)
+			}
+			if strings.HasPrefix(t, "/") {
+				more, rest, _ := strings.Cut(t, " ")
+				last.Givens = append(last.Givens, strings.Split(strings.TrimPrefix(more, "/"), "/")...)
+				t = strings.TrimSpace(rest)
+			}
+			last.Elements = append(last.Elements, splitElements(t)...)
 		case strings.HasPrefix(t, "-"):
 			closeGroup()
 			ng, err := parseGroupHead(t)

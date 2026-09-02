@@ -5,6 +5,14 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.33 — Long name items fold
+- A name item that does not fit a Type B line -- a family of six with a
+  ticket number each -- now folds onto continuation lines indented one
+  space: more given names begin with a slash, more elements with a dot.
+  `pnl.Parse` reads the continuation back into one item, `pnl.NameLines`
+  is the folded form, and the PSM and PTM write it too. Found by filling a
+  recorded day to a holiday load: the first real family broke the encoder.
+
 ## v0.1.32 — Loading a book of record
 - `Store.LoadPNRs` stores many new records in one batch, each at version 1
   with one `loaded` event naming the actor. Postgres streams both tables

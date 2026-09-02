@@ -317,7 +317,7 @@ func BuildPFS(f *Flight) []string {
 			}
 			b := block{head: []string{"-" + dest, cat}}
 			for _, party := range groupByParty(pax) {
-				b.body = append(b.body, pnl.NameLine(nameItem(party)))
+				b.body = append(b.body, pnl.NameLines(nameItem(party))...)
 			}
 			blocks = append(blocks, b)
 		}
@@ -851,7 +851,7 @@ func BuildETL(f *Flight) []string {
 			if p.Seat != "" {
 				n.Elements = append(n.Elements, ".S/"+p.Seat)
 			}
-			b.body = append(b.body, pnl.NameLine(n))
+			b.body = append(b.body, pnl.NameLines(n)...)
 		}
 		blocks = append(blocks, b)
 	}
