@@ -72,7 +72,7 @@ func TestRecordsArePartitionedByRetirementDay(t *testing.T) {
 	day := time.Date(2025, 11, 26, 0, 0, 0, 0, time.UTC)
 	rec := &pnr.PNR{RecordLocator: "CCCCC1", Status: pnr.StatusOpen, CreatedAt: day.AddDate(0, -1, 0),
 		Passengers: []pnr.Passenger{{Ref: 1, Surname: "NEW", Given: "ONE", Title: "MR"}},
-		Segments: []pnr.Segment{{Ref: 1, Type: pnr.SegmentAir, Carrier: "WN", FlightNum: "0100", Depart: day, WireDate: "26NOV", Board: "BNA", Off: "MDW", Class: "Y", Status: "HK", Seats: 1}}}
+		Segments:   []pnr.Segment{{Ref: 1, Type: pnr.SegmentAir, Carrier: "WN", FlightNum: "0100", Depart: day, WireDate: "26NOV", Board: "BNA", Off: "MDW", Class: "Y", Status: "HK", Seats: 1}}}
 	if err := wn.CreatePNR(ctx, rec, []Event{{Type: "created"}}); err != nil {
 		t.Fatal(err)
 	}
