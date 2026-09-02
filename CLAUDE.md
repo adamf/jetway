@@ -23,6 +23,8 @@ about which layer is which.
 | `pkg/ats` | **Specified via free reproductions.** Doc 4444 is sold, but the FAA's ICAO flight planning guidance reproduces the message forms with verbatim examples the parser is tested against. |
 | `pkg/acars` | **Inferred, closely.** ARINC 620 is sold; OAG publishes the element table and verbatim OOOI examples this package is built and tested against. |
 | `pkg/dcs` load control | **Method specified, data representative.** The AHM 560/565 index arithmetic is the published method; `DefaultFleet` is rounded type-class data, not any operator's. |
+| `pkg/fare` | **Structure inferred, data none.** Fare basis, rules, taxes and pricing follow how ATPCO filings and tickets work; the filings themselves are licensed and the package carries no fare. Callers supply a tariff. |
+| `pkg/inventory` | **Method specified.** Serial nested class authorisations are the textbook leg-based inventory control; the numbers are the caller's. |
 
 When you implement something in the inferred category, say so in the package
 doc, make it an extensible `Profile`, and keep unrecognised input verbatim.
