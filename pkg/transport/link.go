@@ -45,20 +45,40 @@ type Link struct {
 
 	mu     sync.Mutex
 	closed bool
+	out    *Outbox
 }
 
-// Send writes one message to the peer. It is safe for concurrent use.
+// newLink wires a connection to its outbox. A write failure closes the
+// connection, which ends the read loop, which is how both sides learn.
+func newLink(peer, format string, conn net.Conn, framer Framer, log *slog.Logger) *Link {
+	l := &Link{Peer: peer, Format: format, conn: conn, framer: framer, log: log}
+	l.out = NewOutbox(OutboxDepth, func(raw []byte) error {
+		if err := conn.SetWriteDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			return err
+		}
+		return framer.WriteFrame(conn, raw)
+	}, func(err error) {
+		log.Warn("link write failed; closing", "peer", peer, "err", err)
+		l.Close()
+	})
+	return l
+}
+
+// Send queues one message for the link's writer. It is safe for concurrent
+// use; it returns ErrCongested when the queue has been full for
+// SendTimeout, and an error naming the link once it is closed.
 func (l *Link) Send(raw []byte) error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.closed {
+	closed := l.closed
+	l.mu.Unlock()
+	if closed {
 		return fmt.Errorf("transport: link to %s is closed", l.Peer)
 	}
-	if err := l.conn.SetWriteDeadline(time.Now().Add(30 * time.Second)); err != nil {
-		return err
-	}
-	return l.framer.WriteFrame(l.conn, raw)
+	return l.out.Send(raw)
 }
+
+// Queued reports how many frames wait to be written on this link.
+func (l *Link) Queued() int { return l.out.Depth() }
 
 // Close shuts the link down.
 func (l *Link) Close() error {
@@ -68,6 +88,7 @@ func (l *Link) Close() error {
 		return nil
 	}
 	l.closed = true
+	l.out.Close()
 	return l.conn.Close()
 }
 
@@ -183,7 +204,7 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	l := &Link{Peer: hello.Peer, Format: hello.Format, conn: conn, framer: s.Framer, log: s.Log}
+	l := newLink(hello.Peer, hello.Format, conn, s.Framer, s.Log)
 	s.mu.Lock()
 	if prev := s.links[hello.Peer]; prev != nil {
 		prev.Close()
@@ -317,7 +338,7 @@ func (c *Client) session(ctx context.Context) error {
 			return err
 		}
 	}
-	l := &Link{Peer: c.Hello.Peer, Format: c.Hello.Format, conn: conn, framer: c.Framer, log: c.Log}
+	l := newLink(c.Hello.Peer, c.Hello.Format, conn, c.Framer, c.Log)
 	c.mu.Lock()
 	c.link = l
 	c.mu.Unlock()

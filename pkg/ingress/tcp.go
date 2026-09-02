@@ -66,16 +66,32 @@ type TCP struct {
 type session struct {
 	conn   net.Conn
 	framer framer
-	mu     sync.Mutex
+	out    *transport.Outbox
 }
 
-func (s *session) send(raw []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.conn.SetWriteDeadline(time.Now().Add(30 * time.Second)); err != nil {
-		return err
-	}
-	return s.framer.WriteFrame(s.conn, raw)
+// newSession wires the connection to its outbox: writes go through one
+// writer goroutine so the read loop never waits on the peer's window (see
+// transport.Outbox). A failed write closes the connection and so ends the
+// read loop, and the peer redials.
+func newSession(conn net.Conn, f framer, log *slog.Logger, peer string) *session {
+	s := &session{conn: conn, framer: f}
+	s.out = transport.NewOutbox(transport.OutboxDepth, func(raw []byte) error {
+		if err := conn.SetWriteDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			return err
+		}
+		return f.WriteFrame(conn, raw)
+	}, func(err error) {
+		log.Warn("link write failed; closing", "peer", peer, "err", err)
+		conn.Close()
+	})
+	return s
+}
+
+func (s *session) send(raw []byte) error { return s.out.Send(raw) }
+
+func (s *session) close() {
+	s.out.Close()
+	s.conn.Close()
 }
 
 // NewTCP builds a TCP ingress.
@@ -199,10 +215,11 @@ func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 		return
 	}
 
-	sess := &session{conn: conn, framer: t.framer}
+	sess := newSession(conn, t.framer, t.log, peer)
+	defer sess.out.Close()
 	t.mu.Lock()
 	if prev := t.sessions[peer]; prev != nil {
-		prev.conn.Close()
+		prev.close()
 	}
 	t.sessions[peer] = sess
 	t.mu.Unlock()
@@ -321,7 +338,7 @@ func (t *TCP) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, s := range t.sessions {
-		s.conn.Close()
+		s.close()
 	}
 	t.sessions = map[string]*session{}
 	if t.ln != nil {

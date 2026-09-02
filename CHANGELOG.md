@@ -5,6 +5,18 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.36 — Links never wait on the peer's window
+- Every link's writes go through `transport.Outbox`: a bounded queue drained
+  by one writer goroutine, in `transport.Link`, the TCP ingress session and
+  the MATIP session. Both ends of a link run their handler inside the read
+  loop and often answer what they read; with writes inline, a reader waiting
+  for the socket and a peer doing the same was a deadlock that only the
+  thirty-second write deadline broke. Filling a recorded day to a holiday
+  load found it in the first departure bank. `Send` now returns
+  `ErrCongested` when the queue has been full for `SendTimeout`, and fails
+  at once while the peer stays congested, so a stopped peer costs a message
+  an error rather than a stall. `OutboxDepth` and `SendTimeout` are tunable.
+
 ## v0.1.35 — Parts count lines, not names (v0.1.34 shipped with the guard missing; do not use it)
 - `pnl.BuildParts` paginates on the lines a folded item renders to, so a
   cabin of families with tickets still fits every part inside the Type B

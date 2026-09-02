@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"github.com/adamf/jetway/pkg/transport"
 	"net"
 	"sync"
 	"time"
@@ -68,6 +69,7 @@ type Session struct {
 
 	mu     sync.Mutex
 	closed bool
+	out    *transport.Outbox
 }
 
 // Remote returns the characteristics the peer declared when opening.
@@ -151,17 +153,27 @@ func Accept(conn net.Conn, cfg Config, approve Approver) (*Session, error) {
 	return s, nil
 }
 
-// Send transmits one Type B message as a data packet.
+// Send queues one Type B message as a data packet for the session's writer.
+// Data packets leave through one goroutine so the receive loop never waits
+// on the peer's window (see transport.Outbox); a write that fails closes the
+// session.
 func (s *Session) Send(payload []byte) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return net.ErrClosed
 	}
-	if err := s.conn.SetWriteDeadline(time.Now().Add(s.cfg.WriteTimeout)); err != nil {
-		return err
+	if s.out == nil {
+		s.out = transport.NewOutbox(transport.OutboxDepth, func(raw []byte) error {
+			if err := s.conn.SetWriteDeadline(time.Now().Add(s.cfg.WriteTimeout)); err != nil {
+				return err
+			}
+			return WritePacket(s.conn, DataPacket(raw))
+		}, func(err error) { s.Close(CloseCause(0)) })
 	}
-	return WritePacket(s.conn, DataPacket(payload))
+	out := s.out
+	s.mu.Unlock()
+	return out.Send(payload)
 }
 
 // Receive returns the next Type B message.
@@ -212,6 +224,9 @@ func (s *Session) Close(cause CloseCause) error {
 		return nil
 	}
 	s.closed = true
+	if s.out != nil {
+		s.out.Close()
+	}
 	s.conn.SetWriteDeadline(time.Now().Add(5 * time.Second)) //nolint:errcheck
 	WritePacket(s.conn, ClosePacket(cause))                  //nolint:errcheck
 	return s.conn.Close()
