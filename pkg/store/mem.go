@@ -577,7 +577,7 @@ func (s *Mem) SoldSeats(ctx context.Context, carrier, wireDate string) ([]SoldSe
 			if wireDate != "" && !strings.EqualFold(sg.WireDate, wireDate) {
 				continue
 			}
-			k := SoldSeats{Carrier: sg.Carrier, FlightNum: strings.TrimLeft(sg.FlightNum, "0"), WireDate: strings.ToUpper(sg.WireDate), Class: sg.Class, Status: sg.Status}
+			k := SoldSeats{Carrier: sg.Carrier, FlightNum: strings.TrimLeft(sg.FlightNum, "0"), WireDate: strings.ToUpper(sg.WireDate), Board: sg.Board, Class: sg.Class, Status: sg.Status}
 			acc[k] += sg.Seats
 		}
 	}
@@ -593,6 +593,9 @@ func (s *Mem) SoldSeats(ctx context.Context, carrier, wireDate string) ([]SoldSe
 		}
 		if a.WireDate != b.WireDate {
 			return a.WireDate < b.WireDate
+		}
+		if a.Board != b.Board {
+			return a.Board < b.Board
 		}
 		if a.Class != b.Class {
 			return a.Class < b.Class

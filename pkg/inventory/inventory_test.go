@@ -10,7 +10,7 @@ import (
 )
 
 func b737() Capacity {
-	return func(carrier, flight, date string) (map[string]int, bool) {
+	return func(carrier, flight, date, board string) (map[string]int, bool) {
 		if carrier == "WN" && flight == "2554" {
 			return map[string]int{"Y": 174}, true
 		}

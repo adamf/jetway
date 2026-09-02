@@ -56,7 +56,7 @@ func testLoadPNRs(t *testing.T, s Store) {
 	}
 	// The sold-seat count reads the same records back as an inventory would.
 	sold, err := s.SoldSeats(ctx, "WN", "26NOV")
-	if err != nil || len(sold) != 1 || sold[0].FlightNum != "2554" || sold[0].Class != "Y" || sold[0].Status != "HK" || sold[0].Seats != 25 {
+	if err != nil || len(sold) != 1 || sold[0].FlightNum != "2554" || sold[0].Board != "BNA" || sold[0].Class != "Y" || sold[0].Status != "HK" || sold[0].Seats != 25 {
 		t.Errorf("SoldSeats after load: %+v %v", sold, err)
 	}
 	if none, _ := s.SoldSeats(ctx, "WN", "27NOV"); len(none) != 0 {

@@ -238,14 +238,14 @@ func (s *Postgres) CreatePNR(ctx context.Context, p *pnr.PNR, events []Event) er
 // two spellings carriers use count as one flight.
 func (s *Postgres) SoldSeats(ctx context.Context, carrier, wireDate string) ([]SoldSeats, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT ltrim(seg->>'flight_num', '0'), upper(seg->>'wire_date'), coalesce(seg->>'class',''), coalesce(seg->>'status',''),
+		SELECT ltrim(seg->>'flight_num', '0'), upper(seg->>'wire_date'), coalesce(seg->>'board',''), coalesce(seg->>'class',''), coalesce(seg->>'status',''),
 		       sum(coalesce((seg->>'seats')::int, 0))::int
 		FROM pnr, jsonb_array_elements(state->'segments') seg
 		WHERE node = $1 AND status <> 'cancelled'
 		  AND seg->>'type' = 'air' AND seg->>'carrier' = $2 AND coalesce(seg->>'status','') <> 'XX'
 		  AND ($3 = '' OR upper(seg->>'wire_date') = upper($3))
-		GROUP BY 1, 2, 3, 4
-		ORDER BY 1, 2, 3, 4`, s.node, carrier, wireDate)
+		GROUP BY 1, 2, 3, 4, 5
+		ORDER BY 1, 2, 3, 4, 5`, s.node, carrier, wireDate)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +253,7 @@ func (s *Postgres) SoldSeats(ctx context.Context, carrier, wireDate string) ([]S
 	var out []SoldSeats
 	for rows.Next() {
 		r := SoldSeats{Carrier: carrier}
-		if err := rows.Scan(&r.FlightNum, &r.WireDate, &r.Class, &r.Status, &r.Seats); err != nil {
+		if err := rows.Scan(&r.FlightNum, &r.WireDate, &r.Board, &r.Class, &r.Status, &r.Seats); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

@@ -156,6 +156,7 @@ type SoldSeats struct {
 	Carrier   string
 	FlightNum string
 	WireDate  string
+	Board     string
 	Class     string
 	Status    string
 	Seats     int

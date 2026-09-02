@@ -36,9 +36,12 @@ import (
 	"github.com/adamf/jetway/pkg/rescode"
 )
 
-// Capacity says how many seats a flight offers per compartment on a date.
-// ok false means the flight is unknown to the carrier, which is refused.
-type Capacity func(carrier, flightNum, wireDate string) (compartments map[string]int, ok bool)
+// Capacity says how many seats a flight leg offers per compartment on a
+// date. The boarding point names the leg, because a carrier flies one
+// number over several legs in a day and each is its own aircraft; "" is
+// accepted when the caller does not know it and means the first leg the
+// carrier can name. ok false means the carrier does not fly it.
+type Capacity func(carrier, flightNum, wireDate, board string) (compartments map[string]int, ok bool)
 
 // Inventory is one carrier's seats. It implements gateway.Responder and
 // gateway.Releaser.
@@ -87,12 +90,12 @@ func CompartmentFor(class string, compartments map[string]int) string {
 	return "Y"
 }
 
-func poolKey(carrier, flight, date, comp string) string {
-	return strings.Join([]string{carrier, strings.TrimLeft(flight, "0"), strings.ToUpper(date), comp}, "/")
+func poolKey(carrier, flight, date, board, comp string) string {
+	return strings.Join([]string{carrier, strings.TrimLeft(flight, "0"), strings.ToUpper(date), board, comp}, "/")
 }
 
-func classKey(carrier, flight, date, class string) string {
-	return strings.Join([]string{carrier, strings.TrimLeft(flight, "0"), strings.ToUpper(date), class}, "/")
+func classKey(carrier, flight, date, board, class string) string {
+	return strings.Join([]string{carrier, strings.TrimLeft(flight, "0"), strings.ToUpper(date), board, class}, "/")
 }
 
 func (inv *Inventory) waitlistFor(seats int) int {
@@ -104,16 +107,16 @@ func (inv *Inventory) waitlistFor(seats int) int {
 }
 
 // pool resolves a segment to its cabin and the cabin's seats.
-func (inv *Inventory) pool(carrier, flight, date, class string) (key string, seats int, ok bool) {
+func (inv *Inventory) pool(carrier, flight, date, board, class string) (key string, seats int, ok bool) {
 	if inv.Capacity == nil {
 		return "", 0, false
 	}
-	comps, ok := inv.Capacity(carrier, flight, date)
+	comps, ok := inv.Capacity(carrier, flight, date, board)
 	if !ok || len(comps) == 0 {
 		return "", 0, false
 	}
 	comp := CompartmentFor(class, comps)
-	return poolKey(carrier, flight, date, comp), comps[comp], true
+	return poolKey(carrier, flight, date, board, comp), comps[comp], true
 }
 
 // Decide implements gateway.Responder: a status per segment awaiting one.
@@ -128,7 +131,7 @@ func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer
 		if !awaitingDecision(s.Status) {
 			continue
 		}
-		if forced, ok := inv.overrides[classKey(s.Carrier, s.FlightNum, s.WireDate, s.Class)]; ok {
+		if forced, ok := inv.overrides[classKey(s.Carrier, s.FlightNum, s.WireDate, s.Board, s.Class)]; ok {
 			out[s.Key()] = forced
 			inv.commit(s, forced)
 			continue
@@ -137,7 +140,7 @@ func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer
 			out[s.Key()] = "UC"
 			continue
 		}
-		key, seats, ok := inv.pool(s.Carrier, s.FlightNum, s.WireDate, s.Class)
+		key, seats, ok := inv.pool(s.Carrier, s.FlightNum, s.WireDate, s.Board, s.Class)
 		if !ok {
 			// A flight the carrier does not operate on that date: unable,
 			// and the requester's schedule is wrong, which UN says.
@@ -159,9 +162,9 @@ func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer
 }
 
 func (inv *Inventory) commit(s pnr.Segment, status string) {
-	key, _, ok := inv.pool(s.Carrier, s.FlightNum, s.WireDate, s.Class)
+	key, _, ok := inv.pool(s.Carrier, s.FlightNum, s.WireDate, s.Board, s.Class)
 	if !ok {
-		key = poolKey(s.Carrier, s.FlightNum, s.WireDate, CompartmentFor(s.Class, nil))
+		key = poolKey(s.Carrier, s.FlightNum, s.WireDate, s.Board, CompartmentFor(s.Class, nil))
 	}
 	switch status {
 	case "KK", "KL", "TK", "HK":
@@ -191,9 +194,9 @@ func (inv *Inventory) Release(ctx context.Context, s pnr.Segment, was string) {
 	}
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
-	key, _, ok := inv.pool(s.Carrier, s.FlightNum, s.WireDate, s.Class)
+	key, _, ok := inv.pool(s.Carrier, s.FlightNum, s.WireDate, s.Board, s.Class)
 	if !ok {
-		key = poolKey(s.Carrier, s.FlightNum, s.WireDate, CompartmentFor(s.Class, nil))
+		key = poolKey(s.Carrier, s.FlightNum, s.WireDate, s.Board, CompartmentFor(s.Class, nil))
 	}
 	switch was {
 	case "KK", "KL", "TK", "HK":
@@ -212,10 +215,10 @@ func (inv *Inventory) Reset() {
 
 // SetOverride forces the outcome for one class on one flight and date, the
 // way a demo shows a refusal or a waitlist on demand.
-func (inv *Inventory) SetOverride(carrier, flight, wireDate, class, status string) {
+func (inv *Inventory) SetOverride(carrier, flight, wireDate, board, class, status string) {
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
-	inv.overrides[classKey(carrier, flight, wireDate, class)] = status
+	inv.overrides[classKey(carrier, flight, wireDate, board, class)] = status
 }
 
 // Availability reports what the carrier would grant per key: the seats left
@@ -239,7 +242,7 @@ func (inv *Inventory) Availability(keys []avail.Key, asOf time.Time) []avail.Ent
 			out = append(out, e)
 			continue
 		}
-		if forced, ok := inv.overrides[classKey(k.Carrier, k.FlightNum, wire, k.Class)]; ok {
+		if forced, ok := inv.overrides[classKey(k.Carrier, k.FlightNum, wire, k.Board, k.Class)]; ok {
 			switch forced {
 			case "UC", "UN":
 				e.Status = avail.Closed
@@ -251,7 +254,7 @@ func (inv *Inventory) Availability(keys []avail.Key, asOf time.Time) []avail.Ent
 			out = append(out, e)
 			continue
 		}
-		key, seats, ok := inv.pool(k.Carrier, k.FlightNum, wire, k.Class)
+		key, seats, ok := inv.pool(k.Carrier, k.FlightNum, wire, k.Board, k.Class)
 		if !ok {
 			// Not a flight the carrier operates that day: say nothing
 			// rather than advertise a seat on it.
@@ -274,8 +277,8 @@ func (inv *Inventory) Availability(keys []avail.Key, asOf time.Time) []avail.Ent
 
 // Pool is one cabin's count, for the console.
 type Pool struct {
-	Flight, Date, Compartment string
-	Seats, Sold, Waitlisted   int
+	Flight, Date, Board, Compartment string
+	Seats, Sold, Waitlisted          int
 }
 
 // Snapshot lists every cabin with anything sold or waitlisted.
@@ -290,13 +293,13 @@ func (inv *Inventory) Snapshot() []Pool {
 		}
 		seen[key] = true
 		parts := strings.Split(key, "/")
-		if len(parts) != 4 {
+		if len(parts) != 5 {
 			return
 		}
-		p := Pool{Flight: parts[0] + parts[1], Date: parts[2], Compartment: parts[3], Sold: inv.sold[key], Waitlisted: inv.waitlisted[key]}
+		p := Pool{Flight: parts[0] + parts[1], Date: parts[2], Board: parts[3], Compartment: parts[4], Sold: inv.sold[key], Waitlisted: inv.waitlisted[key]}
 		if inv.Capacity != nil {
-			if comps, ok := inv.Capacity(parts[0], parts[1], parts[2]); ok {
-				p.Seats = comps[parts[3]]
+			if comps, ok := inv.Capacity(parts[0], parts[1], parts[2], parts[3]); ok {
+				p.Seats = comps[parts[4]]
 			}
 		}
 		out = append(out, p)

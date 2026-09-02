@@ -5,6 +5,11 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.38 — Inventory pools by leg
+- The inventory keys a cabin by flight, date and boarding point, and
+  `Store.SoldSeats` groups by board: a carrier flies one number over
+  several legs a day, and each leg is its own aircraft.
+
 ## v0.1.37 — A seat inventory
 - `pkg/inventory`: a carrier's seats per cabin. Capacity comes from the
   schedule per flight, date and compartment; booking classes draw on their
