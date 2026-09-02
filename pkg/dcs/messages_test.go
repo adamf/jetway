@@ -96,6 +96,16 @@ func TestParsePSMPublishedExample(t *testing.T) {
 	}
 }
 
+func TestParsePSMAcceptsDigitsInNames(t *testing.T) {
+	m, err := ParsePSM("PSM\nFR5416/02OCT OPO PART1\n-SXB 1PAX/1SSR\nWCHR 001Y\nY CLASS 1PAX/1SSR\n1DEMAND006835/PAX1MR 12A\n WCHR\nENDPSM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Groups) != 1 || len(m.Groups[0].Passengers) != 1 || m.Groups[0].Passengers[0].Given != "PAX1MR" {
+		t.Errorf("%+v", m.Groups)
+	}
+}
+
 func TestParsePSMNilForms(t *testing.T) {
 	m, err := ParsePSM("PSM\nCX123/03DEC HKG PART1\n-NRT NIL\n-YVR NIL\n-YYZ NIL\nSI\nREDUCED MEAL SERVICE DUE LABOR STRIKE MEET FLT WITH VOUCHERS\nENDPSM")
 	if err != nil {

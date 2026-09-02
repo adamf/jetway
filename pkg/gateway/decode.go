@@ -65,6 +65,12 @@ type decoded struct {
 	// Departure is set when the message is departure control output -- PFS,
 	// PTM, PSM, ETL, LDM, CPM: about a flight that has closed, not a booking.
 	Departure *dcs.Message
+	// Unreadable is set when a message was recognised by its identifier --
+	// a movement, a name list, a bag message, departure output -- and then
+	// failed to parse. It goes to the dead letter queue with this reason,
+	// rather than falling through to the booking grammar and being refused
+	// for not naming a record it was never about.
+	Unreadable string
 	// Schedule is set when the message is an SSM or ASM. Like availability, a
 	// schedule change touches no single record and must not create one.
 	Schedule *ssim.Message
@@ -282,6 +288,7 @@ func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 				Layer: "mvt", Severity: "warn", Code: "unreadable_movement",
 				Detail: err.Error(),
 			})
+			d.Unreadable = err.Error()
 			return d, nil
 		}
 		d.Movement = mm
@@ -305,6 +312,7 @@ func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 				Layer: "pnl", Severity: "warn", Code: "unreadable_name_list",
 				Detail: err.Error(),
 			})
+			d.Unreadable = err.Error()
 			return d, nil
 		}
 		d.NameList = nm
@@ -323,6 +331,7 @@ func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 				Layer: "dcs", Severity: "warn", Code: "unreadable_departure_message",
 				Detail: err.Error(),
 			})
+			d.Unreadable = err.Error()
 			return d, nil
 		}
 		d.Departure = dm
@@ -340,6 +349,7 @@ func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 				Layer: "baggage", Severity: "warn", Code: "unreadable_bag_message",
 				Detail: err.Error(),
 			})
+			d.Unreadable = err.Error()
 			return d, nil
 		}
 		d.Baggage = bm

@@ -675,10 +675,13 @@ func BuildPSM(f *Flight) []string {
 }
 
 var (
-	psmRecapRe  = regexp.MustCompile(`^-([A-Z]{3})(?: (\d+)PAX/(\d+)SSR| NIL)?$`)
-	psmCountRe  = regexp.MustCompile(`^([A-Z]{3,4})((?: \d{3}[A-Z])+)$`)
-	psmClassRe  = regexp.MustCompile(`^([A-Z]) CLASS (?:(\d+)PAX/(\d+)SSR|NIL)$`)
-	psmNameRe   = regexp.MustCompile(`^(\d+)([A-Z' -]+)/([A-Z' -]+) (\d{1,3}[A-Z])$`)
+	psmRecapRe = regexp.MustCompile(`^-([A-Z]{3})(?: (\d+)PAX/(\d+)SSR| NIL)?$`)
+	psmCountRe = regexp.MustCompile(`^([A-Z]{3,4})((?: \d{3}[A-Z])+)$`)
+	psmClassRe = regexp.MustCompile(`^([A-Z]) CLASS (?:(\d+)PAX/(\d+)SSR|NIL)$`)
+	// Names are letters on every real list; digits are allowed because a test
+	// system's synthetic names carry them, and refusing a whole PSM for one odd
+	// name would lose the other passengers' assistance requests.
+	psmNameRe   = regexp.MustCompile(`^(\d+)([A-Z0-9' -]+)/([A-Z0-9' -]+) (\d{1,3}[A-Z])$`)
 	psmOnwardRe = regexp.MustCompile(`^([A-Z0-9]{2}[A-Z]?\d{1,4}[A-Z]?)([A-Z])(\d{2})([A-Z]{3})`)
 )
 

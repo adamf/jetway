@@ -485,6 +485,9 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 	msg.Diagnostics = dec.Diagnostics
 	msg.Status = store.StatusDecoded
 	g.trace(msg.ID, "decoded", string(dec.Format)+" "+dec.Kind)
+	if dec.Unreadable != "" {
+		return fmt.Errorf("gateway: %s not readable: %s", dec.Kind, dec.Unreadable)
+	}
 
 	// A retransmission is normal on a store-and-forward link. Record it, then
 	// decline to apply it: applying a sell twice books two seats.

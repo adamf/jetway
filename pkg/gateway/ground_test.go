@@ -142,3 +142,20 @@ func TestWithoutGroundTheOlderBehaviourHolds(t *testing.T) {
 		t.Errorf("filed as %s", res.Status)
 	}
 }
+
+func TestUnreadableDepartureOutputGoesToTheDLQWithItsReason(t *testing.T) {
+	gw, rec := carrierNode(t)
+	res, err := gw.Ingest(context.Background(), "net", tty("JFKKLBA", "LHRKLBA", "LDM\nthis is not an identification line\n-JFK"))
+	if err != nil {
+		t.Fatalf("Ingest must still succeed; the bytes are captured: %v", err)
+	}
+	if res.Status != store.StatusDLQ {
+		t.Errorf("status %s, want dlq", res.Status)
+	}
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "dcs:") {
+		t.Errorf("the reason should be the parser's, got %v", res.Err)
+	}
+	if len(rec.deps) != 0 {
+		t.Error("an unreadable message was handed to the ground")
+	}
+}
