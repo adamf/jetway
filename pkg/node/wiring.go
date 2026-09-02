@@ -99,7 +99,33 @@ func (n *Node) buildIngress() ([]ingress.Ingress, map[string]*ingress.TCP, error
 
 // registerPeers wires each configured partner into routing and egress.
 func (n *Node) registerPeers() error {
-	cfg, gw, router, tcps, log := n.Config, n.Gateway, n.Router, n.tcp, n.Log
+	for _, p := range n.Config.Peers {
+		if err := n.registerPeer(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReloadPeers adds the peers in the new list that this node does not have
+// yet, without a restart: a partner onboarded while the links stay up.
+// Peers already configured are left as they are; removing one is a restart,
+// because a link that is open is a promise.
+func (n *Node) ReloadPeers(peers []config.Peer) (added int, err error) {
+	for _, p := range peers {
+		if n.Gateway.Peer(p.Name) != nil {
+			continue
+		}
+		if err := n.registerPeer(p); err != nil {
+			return added, err
+		}
+		added++
+	}
+	return added, nil
+}
+
+func (n *Node) registerPeer(p config.Peer) error {
+	gw, router, tcps, log := n.Gateway, n.Router, n.tcp, n.Log
 
 	// Replies on an inbound link go back down whichever TCP listener currently
 	// holds a session with that peer.
@@ -117,27 +143,25 @@ func (n *Node) registerPeers() error {
 		return fmt.Errorf("no open link to %q", peer)
 	}
 
-	for _, p := range cfg.Peers {
-		format := store.FormatTypeB
-		switch p.Format {
-		case "edifact":
-			format = store.FormatEDIFACT
-		case "aftn":
-			format = store.FormatAFTN
-		}
-		gw.AddPeer(&gateway.Peer{
-			Name: p.Name, Carrier: p.Carrier, Format: format,
-			TTYAddress: p.TTYAddress, Addresses: p.Addresses, CONTRL: p.CONTRL,
-			ICAO: p.ICAO, AFTN: p.AFTN,
-		})
-		s, err := egress.BuildWith(p, sessions, router, log)
-		if err != nil {
-			return err
-		}
-		router.Register(p.Name, s, p.Egress.Retry, format)
-		log.Info("peer configured", "name", p.Name, "carrier", p.Carrier,
-			"format", p.Format, "egress", s.Describe())
+	format := store.FormatTypeB
+	switch p.Format {
+	case "edifact":
+		format = store.FormatEDIFACT
+	case "aftn":
+		format = store.FormatAFTN
 	}
+	gw.AddPeer(&gateway.Peer{
+		Name: p.Name, Carrier: p.Carrier, Format: format,
+		TTYAddress: p.TTYAddress, Addresses: p.Addresses, CONTRL: p.CONTRL,
+		ICAO: p.ICAO, AFTN: p.AFTN,
+	})
+	s, err := egress.BuildWith(p, sessions, router, log)
+	if err != nil {
+		return err
+	}
+	router.Register(p.Name, s, p.Egress.Retry, format)
+	log.Info("peer configured", "name", p.Name, "carrier", p.Carrier,
+		"format", p.Format, "egress", s.Describe())
 	return nil
 }
 

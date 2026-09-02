@@ -308,21 +308,22 @@ day this document was written; the rest are open.
 3. ~~Drain on SIGTERM.~~ `jetwayd` already drains its ingresses and the
    HTTP server on SIGTERM with a timeout. Still to add: releasing the lease
    first and waiting for the outboxes to empty.
-4. **Spool on by default** in the production config, with a bounded size
-   and an alert, and a documented replay on start.
+4. ~~Spool on by default.~~ `config.Default` enables it at `spool/`. Still
+   to add: a bound on its size, and the alert on its oldest entry.
 5. ~~Retire as an operation.~~ `POST /api/admin/retire` and `jetwayctl
    retire --before`, so retention is a scheduled job. wholesky still runs it
    as an application side effect at the day's wrap, which is right for a
    simulation and wrong for a carrier.
-6. **Hot peer reload.** Adding a partner without a restart; a SIGHUP or a
-   config watch.
+6. ~~Hot peer reload.~~ SIGHUP re-reads the config and `Node.ReloadPeers`
+   adds what is new. Removing a peer is a restart.
 7. ~~Metrics for the outbox~~ (`jetway_outbox_depth{peer}`,
    `jetway_outbox_congested_total{peer}`). Still to add: the inventory's
    seats left per cabin at the class boundary, for revenue management to
    read.
-8. **Rate limiting per peer** at ingress, so one partner's burst cannot
-   starve another's replies; today fairness is whatever the scheduler
-   gives the goroutines.
+8. ~~Rate limiting per peer~~ at ingress: `rate_limit` and `burst` per
+   ingress, applied by pacing the reader so the partner's own circuit pushes
+   back. Per-peer rather than per-ingress limits, and fairness across
+   peers on one ingress, are still open.
 9. **Load test as a release gate.** wholesky at warp 1 against a staging
    instance of the production topology, with the invariant suite (no
    oversell, message conservation, interline convergence) as the pass

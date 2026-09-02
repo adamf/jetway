@@ -5,6 +5,18 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.50 — Peers without a restart
+- `Node.ReloadPeers` adds the peers a new config names; `jetwayd` does it
+  on SIGHUP. Removing a peer is still a restart: an open link is a promise.
+
+## v0.1.49 — Rate limits and the spool by default
+- `ingress.rate_limit` and `burst` cap what one peer may send on a TCP
+  ingress, applied by pacing the reader so the peer's own link pushes back;
+  nothing is dropped.
+- The write-ahead spool is on by default (`spool/`); a harness that wants
+  memory only turns it off. (This release shipped without its changelog
+  entry; it is here.)
+
 ## v0.1.48 — One writer per system
 - `config.Lease`: when enabled, a node binds its links only while it holds
   the system's lease in the store (`store.Leaser`, migration 0009), renews

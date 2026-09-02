@@ -118,6 +118,35 @@ func run() error {
 	if err := nd.Start(ctx); err != nil {
 		return err
 	}
+	// SIGHUP re-reads the config and adds any peers it names that this
+	// node does not have: a partner onboarded without a restart.
+	go func() {
+		hup := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		defer signal.Stop(hup)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+			}
+			fresh, err := loadConfig(*configPath)
+			if err != nil {
+				log.Error("reload: config not loaded", "err", err)
+				continue
+			}
+			if err := fresh.Validate(); err != nil {
+				log.Error("reload: config invalid", "err", err)
+				continue
+			}
+			added, err := nd.ReloadPeers(fresh.Peers)
+			if err != nil {
+				log.Error("reload: peers", "added", added, "err", err)
+				continue
+			}
+			log.Info("reload: peers", "added", added, "total", len(fresh.Peers))
+		}
+	}()
 	if err := nd.Serve(ctx, drainTimeout); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
