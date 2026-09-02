@@ -664,7 +664,8 @@ const fmtLabel = f => f === "edifact" ? "EDIFACT" : f === "aftn" ? "AFTN" : "Typ
 // peerLabel names the system at the far end of a link: a carrier's
 // reservations system, an air navigation service provider, or whatever
 // the link is called.
-const peerLabel = p => p.aftn ? (p.carrier || p.name) + " ats" : p.carrier ? p.carrier + " res" : p.name;
+const peerLabel = p => (p.aftn || p.format === "aftn") ? (p.carrier || p.name) + " ats"
+  : (p.carrier && p.carrier.length === 2) ? p.carrier + " res" : p.name;
 
 function drawTopo(){
   const t = $("#topo"); t.innerHTML = "";
