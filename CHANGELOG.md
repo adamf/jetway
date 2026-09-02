@@ -5,6 +5,15 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.44 — Elements that name their passenger
+- A name item's element may end with the passenger it belongs to, written
+  as the item writes the name -- `.R/CHLD HK1 SMITH/TIMMSTR`, `.R/TKNE HK1
+  5262000000003C1 SMITH/TIMMSTR` -- and departure control then attaches it
+  to that passenger alone. Before this a family's CHLD made every name a
+  child, an INFT made every name an infant, and one ticket covered the
+  item. An element naming nobody stays the party's. Ticket numbers with the
+  airline code hyphenated off are recognised.
+
 ## v0.1.43 — Retirement reclaims the default partitions
 - `RetireBefore` truncates an emptied default partition, so the space a
   converted book left behind comes back at once instead of waiting for

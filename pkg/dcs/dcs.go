@@ -816,12 +816,13 @@ func (f *Flight) addNames(g pnl.Group, n pnl.Name, now time.Time) {
 		givens = append(givens, "TBA")
 	}
 	loc := elementValue(n.Elements, ".L/")
-	ssrs, ticket, rest := parseElements(n.Elements)
+	parsed := parseElements(n.Elements, n.Surname, givens[:party])
 	for i := 0; i < party; i++ {
+		ssrs, ticket := parsed.forPassenger(i)
 		p := &Passenger{
 			ID: f.nextID, Surname: n.Surname, Given: givens[i], Locator: loc, Party: key,
 			Class: g.Class, Compartment: f.compartmentFor(g.Class), Dest: g.Dest,
-			Type: typeOf(givens[i], ssrs), SSRs: ssrs, Ticket: ticket, Elements: rest,
+			Type: typeOf(givens[i], ssrs), SSRs: ssrs, Ticket: ticket, Elements: parsed.rest,
 			Status: StatusListed,
 		}
 		f.nextID++
@@ -829,46 +830,109 @@ func (f *Flight) addNames(g pnl.Group, n pnl.Name, now time.Time) {
 	}
 }
 
-// parseElements reads the dotted elements a name item carries: service
-// requests and the ticket number are interpreted, everything else is kept.
-func parseElements(elements []string) (ssrs []SSR, ticket string, rest []string) {
-	for _, e := range elements {
+// itemElements is a name item's elements sorted by whom they belong to. An
+// element may name a passenger of the item -- ".R/CHLD HK1 SMITH/TIMMSTR",
+// the name as the item writes it, at the end of the text -- and then it is
+// that passenger's alone: the child's CHLD, the infant's INFT, each name's
+// own ticket. An element that names nobody is the party's, as before.
+type itemElements struct {
+	shared   []SSR
+	own      [][]SSR
+	ticket   string   // the party's, when one ticket covers the item
+	tickets  []string // per passenger, when the tickets name their passengers
+	rest     []string
+	surname  string
+	givens   []string
+	hasNamed bool
+}
+
+func (e *itemElements) forPassenger(i int) ([]SSR, string) {
+	ssrs := append([]SSR(nil), e.shared...)
+	if i < len(e.own) {
+		ssrs = append(ssrs, e.own[i]...)
+	}
+	ticket := e.ticket
+	if i < len(e.tickets) && e.tickets[i] != "" {
+		ticket = e.tickets[i]
+	}
+	return ssrs, ticket
+}
+
+// whose reports which passenger of the item an element's text names, by
+// its last token, or -1 when it names none.
+func (e *itemElements) whose(text string) (int, string) {
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return -1, text
+	}
+	last := fields[len(fields)-1]
+	sur, given, ok := strings.Cut(last, "/")
+	if !ok || !strings.EqualFold(sur, e.surname) {
+		return -1, text
+	}
+	for i, g := range e.givens {
+		if strings.EqualFold(g, given) {
+			return i, strings.Join(fields[:len(fields)-1], " ")
+		}
+	}
+	return -1, text
+}
+
+func parseElements(elements []string, surname string, givens []string) *itemElements {
+	e := &itemElements{surname: surname, givens: givens, own: make([][]SSR, len(givens)), tickets: make([]string, len(givens))}
+	for _, el := range elements {
 		switch {
-		case strings.HasPrefix(e, ".L/"):
-			// The locator is read by partyKey.
-		case strings.HasPrefix(e, ".R/"):
-			// .R/WCHR HK1, .R/TKNE HK1 1251234567890C1, .R/VGML
-			fields := strings.Fields(strings.TrimPrefix(e, ".R/"))
+		case strings.HasPrefix(el, ".L/"):
+		case strings.HasPrefix(el, ".R/"):
+			fields := strings.Fields(strings.TrimPrefix(el, ".R/"))
 			if len(fields) == 0 {
 				continue
 			}
 			code := fields[0]
-			text := strings.Join(fields[1:], " ")
+			who, text := e.whose(strings.Join(fields[1:], " "))
 			if code == "TKNE" {
-				// The ticket number is the last token that looks like one:
-				// thirteen digits, optionally with a coupon suffix.
-				for i := len(fields) - 1; i > 0; i-- {
-					if isTicketNumber(fields[i]) {
-						ticket = fields[i]
+				tf := strings.Fields(text)
+				num := ""
+				for i := len(tf) - 1; i >= 0; i-- {
+					if isTicketNumber(tf[i]) {
+						num = tf[i]
 						break
 					}
 				}
+				if num == "" {
+					continue
+				}
+				if who >= 0 {
+					e.tickets[who] = num
+				} else if e.ticket == "" {
+					e.ticket = num
+				}
 				continue
 			}
-			ssrs = append(ssrs, SSR{Code: code, Text: text})
+			ssr := SSR{Code: code, Text: text}
+			if who >= 0 {
+				e.own[who] = append(e.own[who], ssr)
+				e.hasNamed = true
+			} else {
+				e.shared = append(e.shared, ssr)
+			}
 		default:
-			rest = append(rest, e)
+			e.rest = append(e.rest, el)
 		}
 	}
-	return ssrs, ticket, rest
+	return e
 }
 
+// parseElements reads the dotted elements a name item carries: service
+// requests and the ticket number are interpreted, everything else is kept.
 func isTicketNumber(s string) bool {
 	digits := 0
 	for i, r := range s {
 		switch {
 		case r >= '0' && r <= '9':
 			digits++
+		case r == '-' && i == 3:
+			// The airline code is often written off from the serial.
 		case r == 'C' && i >= 13:
 			// coupon suffix: 1251234567890C1
 		default:
@@ -932,9 +996,14 @@ func (f *Flight) changeNames(g pnl.Group, n pnl.Name, now time.Time) {
 		f.addNames(g, n, now)
 		return
 	}
-	ssrs, ticket, rest := parseElements(n.Elements)
+	givens := make([]string, 0, len(members))
 	for _, p := range members {
-		p.SSRs, p.Elements = ssrs, rest
+		givens = append(givens, p.Given)
+	}
+	parsed := parseElements(n.Elements, n.Surname, givens)
+	for i, p := range members {
+		ssrs, ticket := parsed.forPassenger(i)
+		p.SSRs, p.Elements = ssrs, parsed.rest
 		if ticket != "" {
 			p.Ticket = ticket
 		}
