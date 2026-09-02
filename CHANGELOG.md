@@ -5,6 +5,15 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.24 — Many systems, one database
+- `Postgres.Node` returns a view scoped to one system: rows carry the
+  system they belong to and every query sees only its own. Migration 0007
+  adds the column and makes locators unique per system.
+- `store.Split` keeps the message log in one store and the records in
+  another.
+- `Store.Purge` discards everything older than a moment, per node, on both
+  backends.
+
 ## v0.1.23
 - A movement, name list, bag message or departure message that is
   recognised and then fails to parse goes to the dead letter queue with the
