@@ -55,7 +55,8 @@ func TestElementsNamingAPassengerBelongToThatPassenger(t *testing.T) {
 	if got := codes(by["TIMMSTR"]); len(got) != 2 || got[1] != "CHLD" {
 		t.Errorf("Tim should carry the meal and CHLD: %v", got)
 	}
-	if by["ANNMRS"].Ticket != "526-2000000002" || by["TIMMSTR"].Ticket != "526-2000000003" {
+	// The coupon reference stays on the ticket; the ETL wants it.
+	if by["ANNMRS"].Ticket != "526-2000000002C1" || by["TIMMSTR"].Ticket != "526-2000000003C1" {
 		t.Errorf("each name its own ticket: %q %q", by["ANNMRS"].Ticket, by["TIMMSTR"].Ticket)
 	}
 }

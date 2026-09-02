@@ -5,6 +5,11 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.45 — v0.1.44, with its test right
+- v0.1.44 shipped with a test that wanted the coupon reference stripped
+  from the ticket; departure control keeps it, as the ETL needs it. Use
+  this release.
+
 ## v0.1.44 — Elements that name their passenger
 - A name item's element may end with the passenger it belongs to, written
   as the item writes the name -- `.R/CHLD HK1 SMITH/TIMMSTR`, `.R/TKNE HK1
