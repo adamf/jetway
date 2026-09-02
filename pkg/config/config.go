@@ -246,6 +246,12 @@ type Peer struct {
 	// Addresses are further Type B addresses this link serves, beyond
 	// TTYAddress, used when routing on the address line.
 	Addresses []string `yaml:"addresses"`
+	// ICAO is the peer's three-letter ICAO designator, so AFTN addressees
+	// carrying it route down this link.
+	ICAO string `yaml:"icao"`
+	// AFTN marks the link to the aeronautical fixed network: AFTN addressees
+	// no other link claims route here.
+	AFTN bool `yaml:"aftn"`
 	// CONTRL is when to send a syntax and service report for an interchange
 	// this peer sends: "requested" (the default) honours the acknowledgement
 	// request in UNB 0031, "always", "errors" for rejections only, or "never".

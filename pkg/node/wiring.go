@@ -119,12 +119,16 @@ func (n *Node) registerPeers() error {
 
 	for _, p := range cfg.Peers {
 		format := store.FormatTypeB
-		if p.Format == "edifact" {
+		switch p.Format {
+		case "edifact":
 			format = store.FormatEDIFACT
+		case "aftn":
+			format = store.FormatAFTN
 		}
 		gw.AddPeer(&gateway.Peer{
 			Name: p.Name, Carrier: p.Carrier, Format: format,
 			TTYAddress: p.TTYAddress, Addresses: p.Addresses, CONTRL: p.CONTRL,
+			ICAO: p.ICAO, AFTN: p.AFTN,
 		})
 		s, err := egress.BuildWith(p, sessions, router, log)
 		if err != nil {
