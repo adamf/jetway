@@ -302,7 +302,7 @@ func Default() *Config {
 		Store:    Store{Backend: "mem", Migrate: true},
 		// On by default: a store outage becomes a pause, not refused
 		// acknowledgements. A harness that wants memory only turns it off.
-		Spool:    Spool{Enabled: true, Dir: "spool", DrainInterval: 5 * time.Second, MaxEntries: 100000},
+		Spool: Spool{Enabled: true, Dir: "spool", DrainInterval: 5 * time.Second, MaxEntries: 100000},
 		Lease: Lease{TTL: 15 * time.Second},
 		HTTP:  HTTP{Addr: "127.0.0.1:8080", Console: true, Metrics: true},
 		// One listener per partner. That is how circuits are actually
