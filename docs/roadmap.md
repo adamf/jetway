@@ -45,6 +45,7 @@ that difference — the tests would only be checking the same guess twice.
 | **IATA RP 1719 (PFS) and RP 1719c (ETL)** | `pkg/dcs` builds and parses both as inferred layouts following the PNL family. The category vocabulary is public; the line layout is the guess. No free reproduction was found where the PSM, PTM, LDM and CPM all had one. |
 | **IATA RP 1715 (PSM), RP 1718 (PTM), AHM 583 (LDM), AHM 587 (CPM)** | Built from the practices' own worked examples as airports and handlers reproduce them, and tested against those verbatim. Close, and still a profile: the element directory behind the examples was not read. |
 | **IATA AHM 560** | The index arithmetic is the published method. The aircraft data in `dcs.DefaultFleet` is representative type-class data, not an operator's; a deployment supplies its own. |
+| **ARINC 618/620** | `pkg/acars` reads the OOOI reports a provider forwards, from OAG's verbatim examples; the air-ground leg (618) and the company formats (A80 and friends) are not modelled. |
 | **ATPCO Optional Services** | Reason-for-issuance sub-codes are carried as free text rather than validated. The seven top-level groups are public and are enforced. |
 
 Two things follow from this that are worth stating plainly.

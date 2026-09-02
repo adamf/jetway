@@ -79,6 +79,9 @@ type Format string
 const (
 	FormatTypeB   Format = "typeb"
 	FormatEDIFACT Format = "edifact"
+	// FormatAFTN is the aeronautical fixed network's envelope: air traffic
+	// services traffic, Type B's cousin.
+	FormatAFTN    Format = "aftn"
 	FormatUnknown Format = "unknown"
 )
 

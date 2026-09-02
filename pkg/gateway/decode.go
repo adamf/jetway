@@ -8,7 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adamf/jetway/pkg/acars"
+	"github.com/adamf/jetway/pkg/aftn"
 	"github.com/adamf/jetway/pkg/airimp"
+	"github.com/adamf/jetway/pkg/ats"
 	"github.com/adamf/jetway/pkg/avs"
 	"github.com/adamf/jetway/pkg/baggage"
 	"github.com/adamf/jetway/pkg/dcs"
@@ -65,6 +68,14 @@ type decoded struct {
 	// Departure is set when the message is departure control output -- PFS,
 	// PTM, PSM, ETL, LDM, CPM: about a flight that has closed, not a booking.
 	Departure *dcs.Message
+	// AFTN is the envelope when the message came over the aeronautical
+	// fixed network; ATS is the air traffic services message inside it,
+	// when the text is one.
+	AFTN *aftn.Message
+	ATS  *ats.Message
+	// OOOI is an aircraft's datalink report -- out, off, on, in -- forwarded
+	// by the service provider over Type B.
+	OOOI *acars.Message
 	// Unreadable is set when a message was recognised by its identifier --
 	// a movement, a name list, a bag message, departure output -- and then
 	// failed to parse. It goes to the dead letter queue with this reason,
@@ -150,9 +161,12 @@ func (g *Gateway) decode(peer *Peer, msg *store.Message, opts IngestOptions) (*d
 		d   *decoded
 		err error
 	)
-	if looksLikeEDIFACT(raw) {
+	switch {
+	case looksLikeEDIFACT(raw):
 		d, err = g.decodeEDIFACT(peer, raw, opts)
-	} else {
+	case aftn.Looks(raw):
+		d, err = g.decodeAFTN(peer, raw)
+	default:
 		d, err = g.decodeTypeB(peer, raw)
 	}
 	if d != nil {
@@ -241,6 +255,37 @@ func (g *Gateway) decodeEDIFACT(peer *Peer, raw []byte, opts IngestOptions) (*de
 	return d, nil
 }
 
+// decodeAFTN reads an aeronautical fixed network message. The envelope is
+// specified by ICAO Annex 10; the text is an ATS message when it looks like
+// one, and free text otherwise.
+func (g *Gateway) decodeAFTN(peer *Peer, raw []byte) (*decoded, error) {
+	env, err := aftn.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: aftn decode: %w", err)
+	}
+	d := &decoded{Format: store.FormatAFTN, AFTN: env, peer: peer, Kind: "AFTN/" + string(env.Priority)}
+	if !ats.Looks(env.Text) {
+		return d, nil
+	}
+	m, err := ats.Parse(env.Text)
+	if err != nil {
+		d.Kind = "ATS"
+		d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+			Layer: "ats", Severity: "warn", Code: "unreadable_ats_message", Detail: err.Error(),
+		})
+		d.Unreadable = err.Error()
+		return d, nil
+	}
+	d.ATS = m
+	d.Kind = "ATS/" + string(m.Type) + "/" + m.AircraftID
+	for _, u := range m.Unparsed {
+		d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+			Layer: "ats", Severity: "info", Code: "unparsed_field", Detail: u,
+		})
+	}
+	return d, nil
+}
+
 func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 	tb, err := typeb.Parse(raw)
 	if err != nil {
@@ -298,6 +343,24 @@ func (g *Gateway) decodeTypeB(peer *Peer, raw []byte) (*decoded, error) {
 				Layer: "mvt", Severity: "info", Code: "unrecognised_line", Detail: u,
 			})
 		}
+		return d, nil
+	}
+
+	// An aircraft's datalink report, forwarded by the provider. About an
+	// airframe, not a booking, and read by operations.
+	if acars.IsOOOI(tb.Text) {
+		om, err := acars.Parse(tb.Text)
+		if err != nil {
+			d.Kind = firstWord(tb.Text)
+			d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+				Layer: "acars", Severity: "warn", Code: "unreadable_datalink_report",
+				Detail: err.Error(),
+			})
+			d.Unreadable = err.Error()
+			return d, nil
+		}
+		d.OOOI = om
+		d.Kind = "ACARS/" + string(om.Kind) + "/" + om.Flight
 		return d, nil
 	}
 

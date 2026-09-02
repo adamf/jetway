@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/adamf/jetway/pkg/acars"
+	"github.com/adamf/jetway/pkg/aftn"
+	"github.com/adamf/jetway/pkg/ats"
 	"github.com/adamf/jetway/pkg/baggage"
 	"github.com/adamf/jetway/pkg/dcs"
 	"github.com/adamf/jetway/pkg/pnl"
@@ -20,8 +23,22 @@ type recorder struct {
 	lists    []*pnl.Message
 	bags     []*baggage.Message
 	deps     []*dcs.Message
+	oooi     []*acars.Message
+	ats      []*ats.Message
 	origins  []string
 	refuseOn string
+}
+
+func (r *recorder) Datalink(ctx context.Context, m *acars.Message, o typeb.Address) error {
+	r.oooi = append(r.oooi, m)
+	r.origins = append(r.origins, o.String())
+	return nil
+}
+
+func (r *recorder) ATS(ctx context.Context, m *ats.Message, env *aftn.Message) error {
+	r.ats = append(r.ats, m)
+	r.origins = append(r.origins, env.Originator)
+	return nil
 }
 
 func (r *recorder) NameList(ctx context.Context, m *pnl.Message, o typeb.Address) error {
@@ -157,5 +174,104 @@ func TestUnreadableDepartureOutputGoesToTheDLQWithItsReason(t *testing.T) {
 	}
 	if len(rec.deps) != 0 {
 		t.Error("an unreadable message was handed to the ground")
+	}
+}
+
+// The other networks reach the ground seam: an aircraft's datalink report
+// over Type B, and an air traffic services message over the AFTN.
+func TestGroundReceivesDatalinkAndATS(t *testing.T) {
+	gw, rec := carrierNode(t)
+	gw.Identity.AFTNAddress = "EGLLBAWO"
+	ctx := context.Background()
+
+	res, err := gw.Ingest(ctx, "net", tty("LHRKLBA", "LONXSXS", "DEP\nFI BA117/AN G-BZHA/DA EGLL/DS KJFK/OT 1207/OF 1219/FB 62400\nDT SIT LHR 261219 M01A"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != store.StatusApplied {
+		t.Errorf("OOOI status %s", res.Status)
+	}
+	if len(rec.oooi) != 1 || rec.oooi[0].Off != "1219" || rec.oooi[0].Registration != "G-BZHA" {
+		t.Errorf("datalink report not handed over: %+v", rec.oooi)
+	}
+	if msg, _ := gw.Store.GetMessage(ctx, res.MessageID); msg == nil || msg.Kind != "ACARS/DEP/BA117" {
+		t.Errorf("kind %+v", msg)
+	}
+
+	env := &aftn.Message{TransmissionID: "LPA001", Priority: aftn.PrioritySafety, Addressees: []string{"EGLLBAWO"},
+		FilingTime: "261220", Originator: "EGLLZPZX", Text: "(DEP-BAW117-EGLL1219-KJFK-DOF/251126)"}
+	raw, err := env.Encode(aftn.EncodeOptions{CRLF: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = gw.Ingest(ctx, "net", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != store.StatusApplied {
+		t.Errorf("ATS status %s", res.Status)
+	}
+	if len(rec.ats) != 1 || rec.ats[0].Type != ats.TypeDEP || rec.ats[0].EOBT != "1219" || rec.origins[len(rec.origins)-1] != "EGLLZPZX" {
+		t.Errorf("ATS message not handed over: %+v %v", rec.ats, rec.origins)
+	}
+	if msg, _ := gw.Store.GetMessage(ctx, res.MessageID); msg == nil || msg.Format != store.FormatAFTN || msg.Kind != "ATS/DEP/BAW117" {
+		t.Errorf("filed as %+v", msg)
+	}
+}
+
+// A switch carries AFTN traffic by indicator: an airline's flight plan to
+// air traffic services, and the tower's departure message back to the
+// airline by the designator in the addressee.
+func TestSwitchRelaysAFTNByIndicator(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	gw := New(Identity{Designator: "1X", TTYAddress: "XCHDD1X", Name: "switch"}, store.NewMem(), NewBus(100), log, []byte("s"))
+	gw.Relay = true
+	gw.AddPeer(&Peer{Name: "BA", Carrier: "BA", ICAO: "BAW", Format: store.FormatTypeB, TTYAddress: "LHRRMBA"})
+	gw.AddPeer(&Peer{Name: "ATC", AFTN: true, Format: store.FormatAFTN, TTYAddress: "XXXXXATC"})
+	carried := map[string][][]byte{}
+	gw.Sender = SenderFunc(func(ctx context.Context, peer string, raw []byte) error {
+		carried[peer] = append(carried[peer], raw)
+		return nil
+	})
+	ctx := context.Background()
+
+	fpl := &aftn.Message{Priority: aftn.PrioritySafety, Addressees: []string{"EGLLZPZX", "KJFKZQZX"},
+		FilingTime: "261100", Originator: "EGLLBAWO",
+		Text: "(FPL-BAW117-IS\n-B772/H-SDE3FGHIRWXY/LB1\n-EGLL1200\n-N0480F350 DCT CPT UL9 KENET UN14 STU DCT\n-KJFK0700 KBOS\n-DOF/251126 REG/GBZHA)"}
+	raw, _ := fpl.Encode(aftn.EncodeOptions{})
+	res, err := gw.Ingest(ctx, "BA", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != store.StatusApplied || len(carried["ATC"]) != 2 {
+		t.Errorf("flight plan: status %s, ATC received %d copies (two indicators, one link)", res.Status, len(carried["ATC"]))
+	}
+	if len(carried["BA"]) != 0 {
+		t.Error("the flight plan went back to the airline")
+	}
+	dep := &aftn.Message{Priority: aftn.PrioritySafety, Addressees: []string{"KJFKBAWX"},
+		FilingTime: "261220", Originator: "EGLLZPZX", Text: "(DEP-BAW117-EGLL1219-KJFK-DOF/251126)"}
+	raw, _ = dep.Encode(aftn.EncodeOptions{})
+	if _, err := gw.Ingest(ctx, "ATC", raw); err != nil {
+		t.Fatal(err)
+	}
+	if len(carried["BA"]) != 1 {
+		t.Errorf("the departure message did not reach the airline by its designator: BA got %d", len(carried["BA"]))
+	}
+	msgs, _ := gw.Store.ListMessages(ctx, store.MessageFilter{Limit: 10, Peer: "BA"})
+	found := false
+	for _, m := range msgs {
+		if m.Direction == store.Outbound && m.Kind == "relay/ATS/DEP/BAW117" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("relayed copy not filed under its kind: %+v", msgs)
+	}
+	if p := gw.PeerByAddress("LFPGZPZX"); p == nil || p.Name != "ATC" {
+		t.Errorf("an unknown ATS indicator should route to the AFTN link: %v", p)
+	}
+	if p := gw.PeerByAddress("LFPGBAWX"); p == nil || p.Name != "BA" {
+		t.Errorf("BA's indicator at Paris should route to BA: %v", p)
 	}
 }

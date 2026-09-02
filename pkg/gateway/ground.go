@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/adamf/jetway/pkg/acars"
+	"github.com/adamf/jetway/pkg/aftn"
+	"github.com/adamf/jetway/pkg/ats"
 	"github.com/adamf/jetway/pkg/baggage"
 	"github.com/adamf/jetway/pkg/dcs"
 	"github.com/adamf/jetway/pkg/pnl"
@@ -30,6 +33,12 @@ type Ground interface {
 	NameList(ctx context.Context, m *pnl.Message, origin typeb.Address) error
 	Baggage(ctx context.Context, m *baggage.Message, origin typeb.Address) error
 	Departure(ctx context.Context, m *dcs.Message, origin typeb.Address) error
+	// Datalink is an aircraft's OOOI report, forwarded by the datalink
+	// service provider: what operations turns into a movement message.
+	Datalink(ctx context.Context, m *acars.Message, origin typeb.Address) error
+	// ATS is an air traffic services message -- a flight plan, a departure,
+	// an arrival -- with the AFTN envelope it arrived in.
+	ATS(ctx context.Context, m *ats.Message, envelope *aftn.Message) error
 }
 
 // GroundFuncs adapts three functions to Ground, for embedders that only care
@@ -39,6 +48,24 @@ type GroundFuncs struct {
 	OnNameList  func(ctx context.Context, m *pnl.Message, origin typeb.Address) error
 	OnBaggage   func(ctx context.Context, m *baggage.Message, origin typeb.Address) error
 	OnDeparture func(ctx context.Context, m *dcs.Message, origin typeb.Address) error
+	OnDatalink  func(ctx context.Context, m *acars.Message, origin typeb.Address) error
+	OnATS       func(ctx context.Context, m *ats.Message, envelope *aftn.Message) error
+}
+
+// Datalink implements Ground.
+func (g GroundFuncs) Datalink(ctx context.Context, m *acars.Message, origin typeb.Address) error {
+	if g.OnDatalink == nil {
+		return nil
+	}
+	return g.OnDatalink(ctx, m, origin)
+}
+
+// ATS implements Ground.
+func (g GroundFuncs) ATS(ctx context.Context, m *ats.Message, envelope *aftn.Message) error {
+	if g.OnATS == nil {
+		return nil
+	}
+	return g.OnATS(ctx, m, envelope)
 }
 
 // NameList implements Ground.

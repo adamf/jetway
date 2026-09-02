@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/adamf/jetway/pkg/aftn"
 	"github.com/adamf/jetway/pkg/airimp"
 	"github.com/adamf/jetway/pkg/avail"
 	"github.com/adamf/jetway/pkg/avs"
@@ -42,7 +43,10 @@ type Identity struct {
 	// TTYAddress is the seven-character Type B address messages are sent from.
 	TTYAddress string
 	// Name is a human label for the console.
-	Name string
+	Name string // AFTNAddress is this node's addressee indicator on the aeronautical
+	// fixed network, when it has one: EGLLBAWO for an airline's operations
+	// at Heathrow, EGLLZPZX for the tower.
+	AFTNAddress string
 }
 
 // Peer is a configured partner link.
@@ -68,8 +72,19 @@ type Peer struct {
 	TTYAddress string
 	// Addresses are further Type B addresses this link serves, beyond
 	// TTYAddress. A carrier commonly has one address per department and one
-	// circuit, so routing on the address needs the whole set.
+	// circuit, so routing on the address needs the whole set. AFTN
+	// addressee indicators -- eight letters -- may be listed here too.
 	Addresses []string
+	// ICAO is the peer's three-letter ICAO designator (BAW for BA). An AFTN
+	// addressee carrying it at any location -- KJFKBAWX, EGLLBAWO -- routes
+	// down this link, the way a Type B address carrying the carrier's
+	// two-letter code does.
+	ICAO string
+	// AFTN marks the link to the aeronautical fixed network itself: an ANSP,
+	// or a gateway into the network. Any AFTN addressee no other link claims
+	// routes here, because air traffic services is where the rest of the
+	// eight-letter world lives.
+	AFTN bool
 	// AirimpProfile overrides the AIRIMP grammar for this link. Nil uses the
 	// default profile.
 	AirimpProfile *airimp.Profile
@@ -187,6 +202,10 @@ type Gateway struct {
 	// byAddress routes on the Type B address line, which is how a message with
 	// several addressees reaches all of them.
 	byAddress map[string]*Peer
+	// byICAO routes AFTN addressees to the carrier whose designator they
+	// carry; aftnPeer takes what nobody else claims.
+	byICAO   map[string]*Peer
+	aftnPeer *Peer
 }
 
 // New builds a gateway.
@@ -200,6 +219,7 @@ func New(id Identity, st store.Store, bus *Bus, log *slog.Logger, locatorSecret 
 		peers:     map[string]*Peer{},
 		byCarrier: map[string]*Peer{},
 		byAddress: map[string]*Peer{},
+		byICAO:    map[string]*Peer{},
 	}
 }
 
@@ -215,6 +235,12 @@ func (g *Gateway) AddPeer(p *Peer) {
 		if a = normaliseAddress(a); a != "" {
 			g.byAddress[a] = p
 		}
+	}
+	if p.ICAO != "" {
+		g.byICAO[normaliseAddress(p.ICAO)] = p
+	}
+	if p.AFTN {
+		g.aftnPeer = p
 	}
 }
 
@@ -237,16 +263,29 @@ func (g *Gateway) PeerByAddress(addr string) *Peer {
 	if p := g.byAddress[a]; p != nil {
 		return p
 	}
+	if aftn.ValidIndicator(a) {
+		// An AFTN addressee: location, three-letter designator, department.
+		// The designator names the carrier; anything else is air traffic
+		// services, which the AFTN link serves.
+		if p := g.byICAO[a[4:7]]; p != nil {
+			return p
+		}
+		return g.aftnPeer
+	}
 	if parsed, err := typeb.ParseAddress(a); err == nil && parsed.Carrier != "" {
 		return g.byCarrier[parsed.Carrier]
 	}
 	return nil
 }
 
-// IsSelf reports whether an address belongs to this node.
+// IsSelf reports whether an address belongs to this node, on either network.
 func (g *Gateway) IsSelf(addr string) bool {
 	a := normaliseAddress(addr)
-	return a != "" && a == normaliseAddress(g.Identity.TTYAddress)
+	if a == "" {
+		return false
+	}
+	return a == normaliseAddress(g.Identity.TTYAddress) ||
+		(g.Identity.AFTNAddress != "" && a == normaliseAddress(g.Identity.AFTNAddress))
 }
 
 // Delivery is what happened to one addressee of a fanned-out message.
@@ -526,6 +565,11 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 			return nil
 		}
 	}
+	if g.Relay && dec.AFTN != nil {
+		if done := g.relayAFTN(ctx, peer, msg, dec, res); done {
+			return nil
+		}
+	}
 	if g.Relay && dec.Interchange != nil {
 		if done := g.relayEDIFACT(ctx, peer, msg, dec, res); done {
 			return nil
@@ -588,6 +632,28 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 		return g.toGround(ctx, msg, res, "departure", func() error {
 			return g.Ground.Departure(ctx, dec.Departure, origin)
 		})
+	}
+	// An aircraft's datalink report, forwarded by the provider: about an
+	// airframe's day, not a booking.
+	if dec.OOOI != nil {
+		return g.toGround(ctx, msg, res, "datalink", func() error {
+			return g.Ground.Datalink(ctx, dec.OOOI, origin)
+		})
+	}
+	// Air traffic services traffic: a flight plan, a departure, an arrival.
+	// It touches no record and no cache; the Ground seam is where an
+	// operations system or an ANSP reads it.
+	if dec.ATS != nil {
+		return g.toGround(ctx, msg, res, "ats", func() error {
+			return g.Ground.ATS(ctx, dec.ATS, dec.AFTN)
+		})
+	}
+	if dec.AFTN != nil {
+		// Free text on the aeronautical network: filed, and that is all.
+		msg.Status = store.StatusApplied
+		res.Status = store.StatusApplied
+		g.trace(msg.ID, "aftn", "free text filed")
+		return nil
 	}
 	return g.apply(ctx, peer, msg, dec, res, opts)
 }
@@ -747,6 +813,57 @@ func (g *Gateway) relay(ctx context.Context, from *Peer, msg *store.Message, dec
 	}
 	// Pure transit. Nothing here to apply, and inventing a record from a
 	// message addressed to somebody else would be worse than doing nothing.
+	msg.Status = store.StatusApplied
+	res.Status = store.StatusApplied
+	if sent == 0 {
+		msg.Status = store.StatusUndeliverable
+		msg.Error = "addressed elsewhere and no addressee could be routed"
+		res.Status = store.StatusUndeliverable
+	}
+	return true
+}
+
+// relayAFTN forwards an AFTN message to the links its addressees belong to,
+// by the same rules as Type B relay: never back to the origin, everything
+// else to whoever serves the indicator.
+func (g *Gateway) relayAFTN(ctx context.Context, from *Peer, msg *store.Message, dec *decoded, res *Result) bool {
+	forUs := false
+	var onward []string
+	origin := normaliseAddress(dec.AFTN.Originator)
+	for _, a := range dec.AFTN.Addressees {
+		if g.IsSelf(a) {
+			forUs = true
+			continue
+		}
+		if normaliseAddress(a) == origin {
+			g.trace(msg.ID, "relay", "skipping "+a+": it is the originator")
+			continue
+		}
+		onward = append(onward, a)
+	}
+	if len(onward) == 0 {
+		return false
+	}
+	sent := 0
+	for _, a := range onward {
+		peer := g.PeerByAddress(a)
+		if peer == nil {
+			g.trace(msg.ID, "relay", a+": no link serves this indicator")
+			continue
+		}
+		if peer.Name == from.Name && normaliseAddress(a) == normaliseAddress(from.TTYAddress) {
+			continue
+		}
+		if _, err := g.Send(ctx, peer, msg.Raw, "relay/"+dec.Kind, "", msg.ID); err != nil {
+			g.trace(msg.ID, "relay", a+": "+err.Error())
+			continue
+		}
+		sent++
+	}
+	g.trace(msg.ID, "relay", fmt.Sprintf("forwarded to %d of %d addressees", sent, len(onward)))
+	if forUs {
+		return false
+	}
 	msg.Status = store.StatusApplied
 	res.Status = store.StatusApplied
 	if sent == 0 {
