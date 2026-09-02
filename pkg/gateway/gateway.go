@@ -653,7 +653,7 @@ func (g *Gateway) relayEDIFACT(ctx context.Context, from *Peer, msg *store.Messa
 		res.Status = store.StatusUndeliverable
 		g.trace(msg.ID, "relay", "refusing to bounce "+recipient+" traffic back at them")
 	default:
-		id, err := g.Send(ctx, to, msg.Raw, "relay", "", msg.ID)
+		id, err := g.Send(ctx, to, msg.Raw, "relay/"+dec.Kind, "", msg.ID)
 		if err != nil {
 			msg.Status = store.StatusUndeliverable
 			msg.Error = "could not forward to " + recipient + ": " + err.Error()
@@ -719,7 +719,12 @@ func (g *Gateway) relay(ctx context.Context, from *Peer, msg *store.Message, dec
 
 	fan := *dec.TypeB
 	fan.Destinations = onward
-	deliveries := g.Fanout(ctx, &fan, msg.Raw, "relay", "", msg.ID)
+	// A relayed copy keeps the kind of what it carries -- relay/PNL/BA0117 --
+	// so an instrument counting traffic by class sees a forwarded name list
+	// as a name list, not as "relay". It was filed as bare "relay" once,
+	// and every ground-story message crossing the switch was counted as
+	// reservations traffic on its way out.
+	deliveries := g.Fanout(ctx, &fan, msg.Raw, "relay/"+dec.Kind, "", msg.ID)
 	sent := 0
 	for _, d := range deliveries {
 		if d.Err == "" && d.MessageID != "" {
