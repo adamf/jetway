@@ -5,6 +5,11 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.43 — Retirement reclaims the default partitions
+- `RetireBefore` truncates an emptied default partition, so the space a
+  converted book left behind comes back at once instead of waiting for
+  vacuum.
+
 ## v0.1.42 — Fares, pricing, and the class ladder
 - `pkg/fare`: a filing of fares per market and class with basis codes,
   amounts and rules (advance purchase, stay, season, refundability, change

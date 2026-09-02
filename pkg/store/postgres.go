@@ -179,6 +179,17 @@ func (s *Postgres) RetireBefore(ctx context.Context, cutoff time.Time) (Retired,
 		return out, fmt.Errorf("store: retire queue: %w", err)
 	}
 	out.QueueItems = int(tag.RowsAffected())
+	// A default partition that has just been emptied is dead space until
+	// vacuum gets to it -- two gigabytes of it after a conversion. Empty is
+	// the moment to truncate, which gives the space back at once.
+	for _, table := range []string{"pnr_default", "pnr_event_default"} {
+		var n int64
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&n); err == nil && n == 0 {
+			if _, err := s.pool.Exec(ctx, `TRUNCATE `+table); err != nil {
+				return out, fmt.Errorf("store: retire truncate %s: %w", table, err)
+			}
+		}
+	}
 	return out, nil
 }
 
