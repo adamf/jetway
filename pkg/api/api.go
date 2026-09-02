@@ -206,11 +206,12 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		TTY       string `json:"tty_address"`
 		Connected bool   `json:"connected"`
 		FullName  string `json:"full_name,omitempty"`
+		AFTN      bool   `json:"aftn,omitempty"`
 	}
 	var peers []peerView
 	for _, p := range s.Gateway.Peers() {
 		v := peerView{Name: p.Name, Carrier: p.Carrier, Format: string(p.Format),
-			TTY: p.TTYAddress, Connected: connected[p.Name]}
+			TTY: p.TTYAddress, Connected: connected[p.Name], AFTN: p.AFTN}
 		if c, ok := demo.CarrierByDesignator(p.Carrier); ok {
 			v.FullName = c.Name
 		}

@@ -33,7 +33,8 @@ header{display:flex;align-items:center;gap:16px;padding:10px 18px;background:var
 .brand{display:flex;align-items:baseline;gap:9px;font-weight:640;letter-spacing:-.02em;font-size:16px}
 .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);
   box-shadow:0 0 0 3px var(--accent-soft);align-self:center}
-.brand small{font-weight:450;color:var(--ink-3);font-size:11px;letter-spacing:.02em}
+.brand small{font-weight:450;color:var(--ink-3);font-size:11px;letter-spacing:.02em;white-space:nowrap}
+@media (max-width:1500px){.brand small{display:none}}
 .ident{font:11px/1 var(--mono);color:var(--ink-3);padding:5px 8px;border:1px solid var(--line);
   border-radius:6px;background:var(--panel-2)}
 .views{display:flex;gap:3px;margin-left:14px}
@@ -42,7 +43,19 @@ header{display:flex;align-items:center;gap:16px;padding:10px 18px;background:var
   background:none;cursor:pointer;width:auto}
 .view:hover{color:var(--ink)}
 .view.on{color:var(--accent);background:var(--accent-soft);border-color:var(--accent)}
-.links{display:flex;gap:7px;margin-left:auto;flex-wrap:wrap}
+.links{display:flex;gap:7px;margin-left:auto;flex-wrap:nowrap;position:relative;min-width:0}
+.pill.summary{cursor:pointer;user-select:none}
+.pill.summary:hover{border-color:var(--accent);color:var(--ink)}
+.pill.summary .down{color:var(--err)}
+.linklist{position:absolute;right:0;top:calc(100% + 8px);z-index:40;background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--r);box-shadow:0 12px 32px rgba(0,0,0,.35);
+  min-width:360px;max-height:60vh;overflow-y:auto;padding:6px}
+.linklist .lrow{display:grid;grid-template-columns:10px 64px 70px 1fr;gap:10px;align-items:center;
+  padding:6px 8px;border-radius:6px;font:11px/1 var(--mono);color:var(--ink-2)}
+.linklist .lrow:hover{background:var(--panel-2)}
+.linklist .lrow i{width:6px;height:6px;border-radius:50%;background:var(--ink-3)}
+.linklist .lrow.up i{background:var(--ok)}
+.linklist .lrow .fmt,.linklist .lrow .who{color:var(--ink-3);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pill{display:flex;align-items:center;gap:6px;font:11px/1 var(--mono);padding:5px 9px;
   border-radius:20px;border:1px solid var(--line);background:var(--panel-2);color:var(--ink-2);
   white-space:nowrap}
@@ -127,6 +140,9 @@ button.ghost:hover{background:var(--panel-2);color:var(--ink)}
 .node{font:11px/1 var(--mono);padding:6px 9px;border-radius:7px;border:1px solid var(--line);
   background:var(--panel-2);white-space:nowrap;min-width:96px;text-align:center}
 .node.self{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+/* One gateway, many lanes: the node is named once, and the lanes below it
+   keep its width so the tracks line up. */
+.node.self.ghost{visibility:hidden}
 .track{flex:1;height:2px;background:var(--line);position:relative;border-radius:2px}
 .track .pulse{position:absolute;top:-3px;width:8px;height:8px;border-radius:50%;
   background:var(--out);box-shadow:0 0 10px var(--out);animation:travel 1.1s ease-in-out forwards}
@@ -605,28 +621,61 @@ async function loadStatus(){
   $("#ident").textContent = `${s.identity.designator} · ${s.identity.tty}`;
 
   const links = $("#links"); links.innerHTML = "";
-  for (const p of state.peers){
-    const pill = el("div", "pill" + (p.connected ? " up" : ""));
+  if (state.peers.length <= 6){
+    for (const p of state.peers){
+      const pill = el("div", "pill" + (p.connected ? " up" : ""));
+      pill.appendChild(el("i"));
+      pill.appendChild(el("span", null, p.carrier || p.name));
+      pill.appendChild(el("span", "fmt", fmtLabel(p.format)));
+      pill.title = (p.full_name || p.name) + " · " + (p.tty_address || "") +
+                   (p.connected ? " · link up" : " · link down");
+      links.appendChild(pill);
+    }
+  } else {
+    // A switch has hundreds of links; the header names the count and the
+    // list opens on demand rather than wrapping the header off the page.
+    const up = state.peers.filter(p => p.connected).length;
+    const down = state.peers.length - up;
+    const pill = el("div", "pill summary" + (down === 0 ? " up" : ""));
     pill.appendChild(el("i"));
-    pill.appendChild(el("span", null, p.carrier || p.name));
-    pill.appendChild(el("span", "fmt", p.format === "edifact" ? "EDIFACT" : "Type B"));
-    pill.title = (p.full_name || p.name) + " · " + (p.tty_address || "") +
-                 (p.connected ? " · link up" : " · link down");
-    links.appendChild(pill);
+    pill.appendChild(el("span", null, `${state.peers.length} links`));
+    pill.appendChild(el("span", "fmt", `${up} up`));
+    if (down) pill.appendChild(el("span", "down", `${down} down`));
+    pill.title = "every link this node serves";
+    const list = el("div", "linklist"); list.hidden = true;
+    for (const p of state.peers){
+      const row = el("div", "lrow" + (p.connected ? " up" : ""));
+      row.appendChild(el("i"));
+      row.appendChild(el("span", null, p.carrier || p.name));
+      row.appendChild(el("span", "fmt", fmtLabel(p.format)));
+      row.appendChild(el("span", "who", (p.full_name || "") + (p.tty_address ? " · " + p.tty_address : "")));
+      list.appendChild(row);
+    }
+    pill.addEventListener("click", e => { e.stopPropagation(); list.hidden = !list.hidden; });
+    document.addEventListener("click", () => { list.hidden = true; });
+    links.appendChild(pill); links.appendChild(list);
   }
   drawTopo();
 }
 
+// fmtLabel names a wire format the way the industry does.
+const fmtLabel = f => f === "edifact" ? "EDIFACT" : f === "aftn" ? "AFTN" : "Type B";
+
+// peerLabel names the system at the far end of a link: a carrier's
+// reservations system, an air navigation service provider, or whatever
+// the link is called.
+const peerLabel = p => p.aftn ? (p.carrier || p.name) + " ats" : p.carrier ? p.carrier + " res" : p.name;
+
 function drawTopo(){
   const t = $("#topo"); t.innerHTML = "";
-  for (const p of state.peers){
+  state.peers.forEach((p, i) => {
     const w = el("div","wire"); w.dataset.peer = p.carrier || p.name;
-    w.appendChild(el("div","node self", state.identity.designator + " gateway"));
+    w.appendChild(el("div","node self" + (i ? " ghost" : ""), state.identity.designator + " gateway"));
     const track = el("div","track"); w.appendChild(track);
-    w.appendChild(el("div","node", (p.carrier||p.name) + " res"));
-    w.appendChild(el("div","meta", p.format === "edifact" ? "EDIFACT" : "Type B"));
+    w.appendChild(el("div","node", peerLabel(p)));
+    w.appendChild(el("div","meta", fmtLabel(p.format)));
     t.appendChild(w);
-  }
+  });
   if (!state.peers.length) t.appendChild(el("div","empty","No links configured"));
 }
 
