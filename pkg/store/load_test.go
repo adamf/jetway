@@ -62,6 +62,20 @@ func testLoadPNRs(t *testing.T, s Store) {
 	if none, _ := s.SoldSeats(ctx, "WN", "27NOV"); len(none) != 0 {
 		t.Errorf("SoldSeats on a day with no flights: %+v", none)
 	}
+	// A cancelled segment leaves the live flight list and stays on the
+	// flight's history: the cancelled flight's passenger list is everyone
+	// who was ever on it.
+	gone, _ := s.GetPNR(ctx, "LD0001")
+	gone.Segments[0].Status = "XX"
+	gone.Status = pnr.StatusCancelled
+	if err := s.UpdatePNR(ctx, gone, gone.Version, []Event{{Type: "cancelled"}}); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := s.FindPNRsByFlight(ctx, "WN2554", "26NOV", 100)
+	ever, _ := s.FindPNRsEverOnFlight(ctx, "WN2554", "26NOV", 100)
+	if len(live) != 24 || len(ever) != 25 {
+		t.Errorf("after one cancellation: %d live, %d ever on the flight; want 24 and 25", len(live), len(ever))
+	}
 	// A locator already held fails the whole batch and stores nothing.
 	again := loadFixture(3, "LE")
 	again[1].RecordLocator = "LD0007"

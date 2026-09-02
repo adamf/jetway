@@ -5,6 +5,12 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.41 — The cancelled flight's passenger list
+- `Store.FindPNRsEverOnFlight`: every record that ever held a segment on a
+  flight, cancelled segments and cancelled records included. The live
+  lookup correctly forgets a passenger once their segment is XX; the
+  flight's history should not.
+
 ## v0.1.40 — Records retire by partition
 - Records and their events are partitioned by `purge_at`, the day a record
   may be retired: its last flight plus `Postgres.RetireGrace` (three days

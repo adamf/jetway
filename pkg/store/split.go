@@ -81,6 +81,9 @@ func (s Split) LoadPNRs(ctx context.Context, recs []*pnr.PNR, actor string) erro
 func (s Split) FindPNRsByFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error) {
 	return s.Records.FindPNRsByFlight(ctx, flightKey, wireDate, limit)
 }
+func (s Split) FindPNRsEverOnFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error) {
+	return s.Records.FindPNRsEverOnFlight(ctx, flightKey, wireDate, limit)
+}
 func (s Split) FindPNRsStale(ctx context.Context, before time.Time, limit int) ([]*pnr.PNR, error) {
 	return s.Records.FindPNRsStale(ctx, before, limit)
 }

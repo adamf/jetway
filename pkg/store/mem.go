@@ -623,6 +623,15 @@ func (s *Mem) LoadPNRs(ctx context.Context, recs []*pnr.PNR, actor string) error
 }
 
 func (s *Mem) FindPNRsByFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error) {
+	return s.findOnFlight(flightKey, wireDate, limit, pnrOnFlight)
+}
+
+// FindPNRsEverOnFlight implements Store.
+func (s *Mem) FindPNRsEverOnFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error) {
+	return s.findOnFlight(flightKey, wireDate, limit, pnrEverOnFlight)
+}
+
+func (s *Mem) findOnFlight(flightKey, wireDate string, limit int, match func(*pnr.PNR, string, string) bool) ([]*pnr.PNR, error) {
 	if flightKey == "" {
 		return nil, nil
 	}
@@ -633,7 +642,7 @@ func (s *Mem) FindPNRsByFlight(ctx context.Context, flightKey, wireDate string, 
 	defer s.mu.RUnlock()
 	var out []*pnr.PNR
 	for _, p := range s.pnrs {
-		if !pnrOnFlight(p, flightKey, wireDate) {
+		if !match(p, flightKey, wireDate) {
 			continue
 		}
 		out = append(out, clonePNR(p))

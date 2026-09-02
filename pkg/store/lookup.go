@@ -39,6 +39,13 @@ type Lookup interface {
 	// that misses half its holdings is worse than useless.
 	FindPNRsByFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error)
 
+	// FindPNRsEverOnFlight is FindPNRsByFlight without the forgetting: every
+	// record that ever held a segment on the flight, cancelled records and
+	// cancelled segments included. It is the cancelled flight's passenger
+	// list -- who was on it and what became of them -- which the live
+	// lookup, correctly, no longer shows.
+	FindPNRsEverOnFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error)
+
 	// SoldSeats sums the seats held per flight, date, class and status across
 	// every live record of a carrier, for one wire date or all of them: what
 	// an inventory rebuilds itself from when it starts.
@@ -99,6 +106,23 @@ func SegmentOnFlight(seg *pnr.Segment, flightKey, wireDate string) bool {
 }
 
 // pnrOnFlight reports whether any segment of a record is a live holding.
+// pnrEverOnFlight is pnrOnFlight with cancellation ignored.
+func pnrEverOnFlight(p *pnr.PNR, flightKey, wireDate string) bool {
+	for i := range p.Segments {
+		seg := &p.Segments[i]
+		if seg.Type != pnr.SegmentAir {
+			continue
+		}
+		if NormaliseFlightKey(seg.Carrier+seg.FlightNum) != NormaliseFlightKey(flightKey) {
+			continue
+		}
+		if wireDate == "" || strings.EqualFold(seg.WireDate, wireDate) {
+			return true
+		}
+	}
+	return false
+}
+
 func pnrOnFlight(p *pnr.PNR, flightKey, wireDate string) bool {
 	if p.Status == pnr.StatusCancelled {
 		return false

@@ -955,6 +955,15 @@ func (s *Postgres) FindPNRByExternalLocator(ctx context.Context, owner, value st
 }
 
 func (s *Postgres) FindPNRsByFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error) {
+	return s.findOnFlight(ctx, flightKey, wireDate, limit, false)
+}
+
+// FindPNRsEverOnFlight implements Store.
+func (s *Postgres) FindPNRsEverOnFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error) {
+	return s.findOnFlight(ctx, flightKey, wireDate, limit, true)
+}
+
+func (s *Postgres) findOnFlight(ctx context.Context, flightKey, wireDate string, limit int, ever bool) ([]*pnr.PNR, error) {
 	carrier, number := splitFlightKey(flightKey)
 	if carrier == "" || number == "" {
 		return nil, nil
@@ -991,15 +1000,15 @@ func (s *Postgres) FindPNRsByFlight(ctx context.Context, flightKey, wireDate str
 	// a flight than are really on it -- which is the class of quiet wrong
 	// answer these lookups exist to remove. Page until the rows run out.
 	sql := fmt.Sprintf(
-		`SELECT state, version FROM pnr WHERE (%s) AND status <> $%d AND node=$%d
+		`SELECT state, version FROM pnr WHERE (%s) AND (status <> $%d OR $%d) AND node=$%d
 		 ORDER BY updated_at DESC, id DESC LIMIT $%d OFFSET $%d`,
-		where.String(), np+1, np+2, np+3, np+4)
+		where.String(), np+1, np+2, np+3, np+4, np+5)
 
 	const page = 500
 	var out []*pnr.PNR
 	for offset := 0; len(out) < limit; offset += page {
 		rows, err := s.pool.Query(ctx, sql, append(append([]any{}, args...),
-			string(pnr.StatusCancelled), s.node, page, offset)...)
+			string(pnr.StatusCancelled), ever, s.node, page, offset)...)
 		if err != nil {
 			return nil, err
 		}
@@ -1011,7 +1020,11 @@ func (s *Postgres) FindPNRsByFlight(ctx context.Context, flightKey, wireDate str
 				rows.Close()
 				return nil, err
 			}
-			if pnrOnFlight(p, flightKey, wireDate) {
+			match := pnrOnFlight
+			if ever {
+				match = pnrEverOnFlight
+			}
+			if match(p, flightKey, wireDate) {
 				out = append(out, p)
 				if len(out) >= limit {
 					break
