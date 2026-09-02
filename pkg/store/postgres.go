@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/adamf/jetway/pkg/metrics"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +45,15 @@ type Postgres struct {
 type partitionCache struct {
 	mu   sync.Mutex
 	have map[string]bool
+	// pending is a creation in flight, closed when it finishes, so a
+	// thousand writes on the first second of a day wait for one attempt
+	// rather than each queueing on the catalogue.
+	pending map[string]chan struct{}
+	// failed is when a creation last failed. A partition that cannot be
+	// made -- the default partition already holds rows of its day, or the
+	// catalogue is slow -- is not tried again for a while, and the writes
+	// go to the default partition, which RetireBefore also clears.
+	failed map[string]time.Time
 }
 
 // purgeAt is the day a record may be retired: the departure of its last air
@@ -80,42 +91,83 @@ func locatorHeld(ctx context.Context, tx pgx.Tx, node, locator string) (bool, er
 	return held, err
 }
 
+// partitionRetry is how long a partition that could not be made is left
+// alone before the next write tries again.
+const partitionRetry = 5 * time.Minute
+
+// partitionCreateTimeout bounds one attempt at the catalogue. It is
+// detached from the writer's own deadline: a booking has a second, the
+// catalogue may need to scan a default partition for longer than that,
+// and the booking must not be what aborts it.
+const partitionCreateTimeout = 2 * time.Minute
+
 // ensurePartitions makes sure a daily partition exists for each purge day
-// given, on both partitioned tables. Creation takes an advisory lock so two
-// processes writing the same first record of a day do not race the
-// catalogue.
+// given, on both partitioned tables, and never stops a write to do it. One
+// attempt runs at a time per day, on its own deadline; a writer waits for
+// it only as long as its own context allows. If the partition cannot be
+// made the row lands in the default partition, which is what the default
+// partition is for, and the attempt is not repeated for partitionRetry.
+// Creation takes an advisory lock so two processes writing the same first
+// record of a day do not race the catalogue.
 func (s *Postgres) ensurePartitions(ctx context.Context, days ...time.Time) error {
 	for _, d := range days {
 		day := d.UTC().Truncate(24 * time.Hour)
 		key := day.Format("20060102")
 		s.parts.mu.Lock()
-		have := s.parts.have[key]
-		s.parts.mu.Unlock()
-		if have {
+		if s.parts.have[key] || time.Since(s.parts.failed[key]) < partitionRetry {
+			s.parts.mu.Unlock()
 			continue
 		}
-		err := s.tx(ctx, func(tx pgx.Tx) error {
-			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('jetway_pnr_partitions'))`); err != nil {
-				return err
-			}
-			from, to := day.Format("2006-01-02"), day.AddDate(0, 0, 1).Format("2006-01-02")
-			for _, table := range []string{"pnr", "pnr_event"} {
-				q := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s_p_%s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')`,
-					table, key, table, from, to)
-				if _, err := tx.Exec(ctx, q); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("store: partition for %s: %w", key, err)
+		wait, running := s.parts.pending[key]
+		if !running {
+			wait = make(chan struct{})
+			s.parts.pending[key] = wait
+			go s.createPartitions(key, day, wait)
 		}
-		s.parts.mu.Lock()
-		s.parts.have[key] = true
 		s.parts.mu.Unlock()
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			// The writer's deadline is nearer than the catalogue's; write
+			// into the default partition and let the attempt finish.
+		}
 	}
 	return nil
+}
+
+func (s *Postgres) createPartitions(key string, day time.Time, done chan struct{}) {
+	ctx, cancel := context.WithTimeout(context.Background(), partitionCreateTimeout)
+	defer cancel()
+	err := s.tx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('jetway_pnr_partitions'))`); err != nil {
+			return err
+		}
+		from, to := day.Format("2006-01-02"), day.AddDate(0, 0, 1).Format("2006-01-02")
+		for _, table := range []string{"pnr", "pnr_event"} {
+			q := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s_p_%s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')`,
+				table, key, table, from, to)
+			if _, err := tx.Exec(ctx, q); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	s.parts.mu.Lock()
+	delete(s.parts.pending, key)
+	if err == nil {
+		s.parts.have[key] = true
+		delete(s.parts.failed, key)
+	} else {
+		s.parts.failed[key] = time.Now()
+	}
+	s.parts.mu.Unlock()
+	close(done)
+	if err != nil {
+		metrics.Counter("jetway_store_partition_failures_total", "daily partitions that could not be created; rows go to the default partition",
+			metrics.Labels{"day": key})
+		slog.Warn("store: partition could not be created; writing to the default partition",
+			"day", key, "err", err, "retry_in", partitionRetry.String())
+	}
 }
 
 // Retired is what RetireBefore removed.
@@ -245,7 +297,7 @@ func OpenPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 		pool.Close()
 		return nil, fmt.Errorf("store: ping: %w", err)
 	}
-	return &Postgres{pool: pool, parts: &partitionCache{have: map[string]bool{}}}, nil
+	return &Postgres{pool: pool, parts: &partitionCache{have: map[string]bool{}, pending: map[string]chan struct{}{}, failed: map[string]time.Time{}}}, nil
 }
 
 func (s *Postgres) Close() error {

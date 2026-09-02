@@ -5,6 +5,16 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.54 — A write survives a partition that cannot be made
+- Daily partition creation runs once per day per process on its own
+  two-minute deadline; a writer waits only as long as its own context
+  allows, and a partition that cannot be made (the default partition
+  already holds rows of that day, or the catalogue is slow) sends the row
+  to the default partition and is not retried for five minutes.
+  `jetway_store_partition_failures_total{day}` counts it. Found on the
+  recorded day, where every booking died on the first record of a day
+  whose 1.4 million filled rows sat in the default partition.
+
 ## v0.1.53 — Inventory metrics and a fair ingress
 - `jetway_inventory_decisions_total{carrier,status}` counts sell answers;
   `Inventory.Publish` adds per-carrier sold, waitlisted and full-cabin
