@@ -4,7 +4,7 @@ This is the deployment a senior SRE would build for jetway carrying real
 airline traffic: a carrier's reservations and departure-control host, or a
 message switch, with the availability the airline business expects from
 its Type B and EDIFACT plumbing. It is written against what jetway is
-today (v0.1.40) and says where the software has to change before it can
+today (v0.1.47) and says where the software has to change before it can
 be run this way. wholesky is the load generator that proves each claim
 below; the numbers quoted are the ones it measured.
 
@@ -81,8 +81,9 @@ instance's partners reconnect rather than hang, and session affinity by
 client IP so a partner that opens several sessions lands on one instance
 (jetway's `by_hello` and source-IP resolvers both assume a peer's sessions
 share a process). The health check is TCP to the link port plus HTTP
-`/healthz`; jetway needs a `/readyz` that turns red when the spool cannot
-flush, which it does not have yet (section 9).
+`/healthz` for liveness and `/readyz` for readiness, which fails when the
+store is unreachable and should also fail when the spool cannot flush or
+the lease is not held (section 9).
 
 **Database.** Cloud SQL for PostgreSQL 17 (Enterprise Plus for the
 sub-second failover and 35-day PITR), regional HA: primary in one zone
