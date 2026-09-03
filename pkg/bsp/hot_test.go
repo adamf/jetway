@@ -2,6 +2,7 @@ package bsp
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -358,5 +359,56 @@ func TestExchangeCarriesTheOriginalIssue(t *testing.T) {
 	g := back.Offices[0].Transactions[0]
 	if g.OriginalDocument != "1252400123400" || g.OriginalLocation != "LON" || !g.OriginalIssued.Equal(tx.OriginalIssued) || g.OriginalAgent != "91234562" || len(g.Payments) != 2 || g.Payments[0].Type != "EX" {
 		t.Errorf("back: %+v", g)
+	}
+}
+
+// The agent's side of the exchange: the same sale as a RET, laid out to
+// chapter 5, round-trips back to the transaction.
+func TestRETRoundTripsTheSale(t *testing.T) {
+	src := sampleFile()
+	tx := src.Offices[0].Transactions[0]
+	tx.Compute()
+	tx.Currency = "GBP2"
+	ret := &RET{PeriodEnd: time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC), System: "GDSL", Country: "GB",
+		Processed: time.Date(2026, 11, 22, 23, 15, 0, 0, time.UTC), Sequence: 1, Transactions: []Transaction{tx}}
+	var buf bytes.Buffer
+	if err := ret.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	ids := ""
+	for i, l := range lines {
+		if len(l) != RETRecordLen {
+			t.Errorf("record %d is %d characters", i+1, len(l))
+		}
+		ids += l[:1]
+	}
+	// Header, basic, two amounts records (four taxes fit one; the sample
+	// has four, so one), itinerary (two segments in one), fare
+	// calculation, one payment, additional, trailer.
+	if ids != "12567 89Z" && ids != "1256789Z" {
+		t.Errorf("record ids %q", ids)
+	}
+	l := lines[1]
+	if l[1:7] != "000001" || l[7:15] != "91234562" || l[22:28] != "261120" || l[31:45] != "1252400123456 " || l[46:50] != "TKTT" || l[50:53] != "125" || l[54:67] != "SMITH/JOHN MR" || l[118:120] != "GB" || l[212:216] != "1405" {
+		t.Errorf("IT02: %q", l)
+	}
+	if lines[2][7:18] != "00000347800" || lines[2][18:22] != "GBP2" || lines[2][22:30] != "GB      " || lines[2][30:41] != "00000001300" || lines[2][142:147] != "00100" || lines[2][147:158] != "00000003435" {
+		t.Errorf("IT05: %q", lines[2])
+	}
+	if lines[len(lines)-1][0] != 'Z' || lines[len(lines)-1][1:12] != fmt.Sprintf("%011d", len(lines)) {
+		t.Errorf("trailer: %q", lines[len(lines)-1])
+	}
+	back, err := ParseRET(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.System != "GDSL" || back.Country != "GB" || !back.PeriodEnd.Equal(ret.PeriodEnd) || len(back.Transactions) != 1 {
+		t.Fatalf("header: %+v", back)
+	}
+	g := back.Transactions[0]
+	if g.Document != tx.Document || g.Code != tx.Code || g.Agent != tx.Agent || g.Total != tx.Total || g.Fare != tx.Fare || len(g.Taxes) != 4 || g.CommissionRate != 100 || g.CommissionAmount != 3435 ||
+		len(g.Segments) != 2 || g.Segments[1].Flight != "0112" || !g.Segments[1].Departs.Equal(tx.Segments[1].Departs) || len(g.Payments) != 1 || g.Payments[0].Amount != 347800 || g.Passenger != tx.Passenger || g.Locator != tx.Locator {
+		t.Errorf("back\n want %+v\n got  %+v", tx, g)
 	}
 }

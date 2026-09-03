@@ -411,7 +411,7 @@ where this is wrong, that is the single most useful contribution available.
 | `pkg/baggage` | BSM, BPM and BUM bag messages: tags issued, bags loaded, a bag rushed without its passenger |
 | `pkg/fare` | Fares filed per market and class with rules and taxes, and the pricing that sells each segment under the cheapest fare whose rules the trip meets |
 | `pkg/inventory` | A carrier's seat inventory: capacity per cabin from the schedule, sold and waitlisted per flight, rebuilt from the book of record; answers sells and broadcasts availability; an EMSR-b revenue management controller sets the nested authorisations from a demand forecast; bid-price control over connecting itineraries |
-| `pkg/bsp` | Settlement: the BSP HOT file an airline receives for its agents' sales, to IATA's public DISH 23 handbook, written and read |
+| `pkg/bsp` | Settlement: the BSP HOT file an airline receives for its agents' sales and the RET a reporting system sends the plan, to IATA's public DISH 23 handbook, written and read |
 | `pkg/prorate` | Interline proration: a through fare divided between coupons by mileage, with the interline service charge, for billing between the carrier that flew and the carrier that sold |
 | `pkg/dcs` | Departure control: the manifest, check-in, seating, bag tagging, boarding, close; bag reconciliation at the door; through check-in for another carrier's connecting passengers; an aircraft substitution that re-seats the cabin; PFS, PTM, PSM, ETL, LDM, CPM; load control and the loadsheet |
 | `pkg/aftn` | The Aeronautical Fixed Telecommunication Network envelope (ICAO Annex 10 Vol II): priority, eight-letter addressee indicators, origin, ZCZC/NNNN |
