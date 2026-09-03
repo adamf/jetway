@@ -117,6 +117,14 @@ Two passengers on two airlines: American DFW–LHR and British Airways LHR–JFK
 one asked over EDIFACT and one over Type B, each answering separately and each
 returning its own locator.
 
+![Record detail with the fare card: base, taxes and total in the filing's currency, and each passenger's fare basis and amount](docs/images/fare.jpg)
+
+Between the itinerary and the documents sits the fare: what the record was
+priced at when it was booked, base and taxes in the filing's currency, and
+each passenger's fare basis and amount. The tariff is the caller's --
+`pkg/fare` is the structure of a filing and carries no fare of its own -- and
+the fare basis rides on every segment, which is what a ticket needs.
+
 Below the itinerary is everything issued against it. Two flight tickets, a
 coupon per segment. An **EMD-A** for excess baggage, stapled to a named flight
 coupon — when that coupon is flown, the value coupon is lifted with it. An
