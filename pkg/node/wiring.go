@@ -58,6 +58,13 @@ func (n *Node) buildIngress() ([]ingress.Ingress, map[string]*ingress.TCP, error
 			if err != nil {
 				return nil, nil, err
 			}
+			if cfg.Routing.Relay {
+				// A switch's readers relay what they read onto other links;
+				// waiting on a full one would stall the reading (see
+				// transport.Outbox.NoWait). Refusals go to the router's
+				// redelivery, and the queue is deep enough for a bank.
+				t.NoWait, t.OutboxDepth = true, RelayOutboxDepth
+			}
 			if err := t.Listen(); err != nil {
 				return nil, nil, err
 			}
@@ -179,6 +186,11 @@ func (n *Node) registerPeer(p config.Peer) error {
 	return nil
 }
 
+// RelayOutboxDepth is how many frames a relaying node queues per link
+// before refusing a send: eight times a subscriber's, because a switch's
+// links -- a trunk above all -- carry many subscribers' traffic at once.
+const RelayOutboxDepth = 4096
+
 // dialLink builds the persistent link this node holds open to a peer: it
 // dials the peer's listener, says who it is, and reads what comes back as
 // that peer's traffic through the same handler every listener uses, so a
@@ -197,6 +209,13 @@ func (n *Node) dialLink(p config.Peer) (egress.Sender, error) {
 		Hello:  transport.Hello{Peer: n.Config.Identity.Designator, Role: p.Egress.Role, Format: p.Format},
 		Framer: framer,
 		Log:    n.Log.With("link", name),
+		NoWait: n.Config.Routing.Relay,
+		OutboxDepth: func() int {
+			if n.Config.Routing.Relay {
+				return RelayOutboxDepth
+			}
+			return 0
+		}(),
 		OnMessage: func(ctx context.Context, _ string, raw []byte) error {
 			_, err := handler(ctx, ingress.Message{Peer: name, Transport: "link_dial", Remote: p.Egress.Addr, Raw: raw})
 			return err

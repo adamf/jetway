@@ -85,3 +85,45 @@ func TestReaderNeverWaitsOnAPeerThatStoppedReading(t *testing.T) {
 	}
 	close(stuck)
 }
+
+// A relay's outbox never makes its caller wait: full means ErrCongested
+// now, and room means accepted again, with nothing marked as stopped.
+func TestOutboxNoWaitRefusesAFullQueueAtOnce(t *testing.T) {
+	release := make(chan struct{})
+	taken := make(chan struct{}, 8)
+	o := NewOutbox(2, func(raw []byte) error { taken <- struct{}{}; <-release; return nil }, func(error) {})
+	o.NoWait = true
+	defer o.Close()
+	// The writer takes one frame and blocks in the write; two more fill the queue.
+	if err := o.Send([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	<-taken
+	for i := 0; i < 2; i++ {
+		if err := o.Send([]byte("x")); err != nil {
+			t.Fatalf("send %d: %v", i, err)
+		}
+	}
+	start := time.Now()
+	if err := o.Send([]byte("x")); err != ErrCongested {
+		t.Fatalf("full queue: %v", err)
+	}
+	if time.Since(start) > 100*time.Millisecond {
+		t.Fatalf("a no-wait send waited %v", time.Since(start))
+	}
+	if o.Congested() {
+		t.Fatal("a momentarily full queue is not a stopped peer")
+	}
+	release <- struct{}{}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if err := o.Send([]byte("x")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the queue never took a frame again")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+}

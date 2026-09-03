@@ -62,8 +62,17 @@ func newLink(peer, format string, conn net.Conn, framer Framer, log *slog.Logger
 // connection would never see them, and a frame split across the two would
 // come out as garbage and close the link. Nil r starts a new reader.
 func newLinkReading(peer, format string, conn net.Conn, r *bufio.Reader, framer Framer, log *slog.Logger) *Link {
+	return newLinkDepth(peer, format, conn, r, framer, log, OutboxDepth)
+}
+
+// newLinkDepth is newLinkReading with the outbox depth chosen: a trunk
+// between switches queues more than a subscriber's circuit.
+func newLinkDepth(peer, format string, conn net.Conn, r *bufio.Reader, framer Framer, log *slog.Logger, depth int) *Link {
+	if depth <= 0 {
+		depth = OutboxDepth
+	}
 	l := &Link{Peer: peer, Format: format, conn: conn, r: r, framer: framer, log: log}
-	l.out = NewOutbox(OutboxDepth, func(raw []byte) error {
+	l.out = NewOutbox(depth, func(raw []byte) error {
 		if err := conn.SetWriteDeadline(time.Now().Add(30 * time.Second)); err != nil {
 			return err
 		}
@@ -296,6 +305,10 @@ type Client struct {
 	// certificate or the circuit -- which is what a real link does. The hello
 	// exists only for the demo handshake server.
 	SkipHello bool
+	// NoWait and OutboxDepth shape the link's outbox (see Outbox.NoWait): a
+	// relaying node sets NoWait and a deeper queue.
+	NoWait      bool
+	OutboxDepth int
 
 	mu   sync.Mutex
 	link *Link
@@ -353,7 +366,8 @@ func (c *Client) session(ctx context.Context) error {
 			return err
 		}
 	}
-	l := newLink(c.Hello.Peer, c.Hello.Format, conn, c.Framer, c.Log)
+	l := newLinkDepth(c.Hello.Peer, c.Hello.Format, conn, nil, c.Framer, c.Log, c.OutboxDepth)
+	l.out.NoWait = c.NoWait
 	c.mu.Lock()
 	c.link = l
 	c.mu.Unlock()

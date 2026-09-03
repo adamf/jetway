@@ -44,6 +44,14 @@ var (
 type Outbox struct {
 	// Peer labels the link's metrics: queue depth and congestion per peer.
 	Peer string
+	// NoWait makes a full queue an immediate ErrCongested rather than a
+	// wait. A node that relays -- a switch -- sets it on every link: its
+	// readers answer what they read by sending on other links, and two
+	// switches joined by a trunk each waiting on the other's full queue is
+	// the deadlock the queue exists to prevent, one level up. A relay's
+	// congestion belongs to the store-and-forward router, which retries,
+	// not to the reader, which must keep reading.
+	NoWait bool
 
 	write func(raw []byte) error
 	q     chan []byte
@@ -113,11 +121,13 @@ func (o *Outbox) Send(raw []byte) error {
 		return o.closedErr()
 	default:
 	}
-	if o.congested.Load() {
+	if o.congested.Load() || o.NoWait {
 		select {
 		case o.q <- raw:
 			return nil
 		default:
+			metrics.Counter("jetway_outbox_congested_total", "sends refused because the peer stopped reading",
+				metrics.Labels{"peer": o.Peer})
 			return ErrCongested
 		}
 	}

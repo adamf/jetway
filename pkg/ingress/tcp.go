@@ -47,6 +47,12 @@ func sentinelFramer(f config.Framing) (framer, error) {
 // by the network they came from. That is what makes this usable with a real
 // carrier, whose front end will not speak a bespoke hello.
 type TCP struct {
+	// NoWait and OutboxDepth shape every session's outbox (see
+	// transport.Outbox.NoWait): a relaying node sets NoWait and a deeper
+	// queue, so a reader never waits on a peer's window.
+	NoWait      bool
+	OutboxDepth int
+
 	rateLimit float64
 	burst     int
 	// shared caps the ingress as a whole. Each peer is paced by its own
@@ -130,9 +136,12 @@ func (b *bucket) wait(ctx context.Context) {
 // writer goroutine so the read loop never waits on the peer's window (see
 // transport.Outbox). A failed write closes the connection and so ends the
 // read loop, and the peer redials.
-func newSession(conn net.Conn, f framer, log *slog.Logger, peer string) *session {
+func newSession(conn net.Conn, f framer, log *slog.Logger, peer string, noWait bool, depth int) *session {
 	s := &session{conn: conn, framer: f}
-	s.out = transport.NewOutbox(transport.OutboxDepth, func(raw []byte) error {
+	if depth <= 0 {
+		depth = transport.OutboxDepth
+	}
+	s.out = transport.NewOutbox(depth, func(raw []byte) error {
 		if err := conn.SetWriteDeadline(time.Now().Add(30 * time.Second)); err != nil {
 			return err
 		}
@@ -142,6 +151,7 @@ func newSession(conn net.Conn, f framer, log *slog.Logger, peer string) *session
 		conn.Close()
 	})
 	s.out.Peer = peer
+	s.out.NoWait = noWait
 	return s
 }
 
@@ -275,7 +285,7 @@ func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 		return
 	}
 
-	sess := newSession(conn, t.framer, t.log, peer)
+	sess := newSession(conn, t.framer, t.log, peer, t.NoWait, t.OutboxDepth)
 	sess.limit = t.limitFor(peer)
 	defer sess.out.Close()
 	t.mu.Lock()
