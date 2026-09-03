@@ -333,8 +333,12 @@ day this document was written; the rest are open.
    criterion. ~~The live half exists:~~ wholesky's `cmd/skycheck` asks a
    running world for `/invariants.json`, which federates every shard's
    inventory, and exits non-zero on an oversold cabin or an unreachable
-   shard. Conservation and convergence still run only in-process, because
-   they need the wire quiet. Not yet a staging topology or a pipeline step.
+   shard. ~~And the pipeline step:~~ wholesky's `gate` workflow boots a
+   world at warp 240 on every push, flies it past the night, and fails the
+   build on an oversold cabin, a silent shard, or a sky that did not move
+   or sell. Conservation and convergence still run only in-process, because
+   they need the wire quiet. Still open: a staging instance of the
+   production topology rather than a single box.
 
 ## 10. Cost, roughly
 
