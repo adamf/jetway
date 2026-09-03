@@ -33,7 +33,7 @@ type MATIP struct {
 	mu       sync.RWMutex
 	sessions map[string]*matip.Session
 	ln       net.Listener
-	inflight sync.WaitGroup
+	inflight inflight
 }
 
 // NewMATIP builds a MATIP listener.
@@ -255,11 +255,7 @@ func (m *MATIP) Peers() []string {
 
 // Drain waits for in-flight work, then closes every session.
 func (m *MATIP) Drain(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() { m.inflight.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-ctx.Done():
+	if err := m.inflight.Wait(ctx); err != nil {
 		m.log.Warn("drain deadline reached with work still in flight")
 	}
 	return m.Close()

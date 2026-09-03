@@ -5,6 +5,13 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.56 — A drain that tolerates a frame arriving as it starts
+- The ingresses' in-flight counter is no longer a `sync.WaitGroup`, which
+  forbids `Add` while a `Wait` is in progress at zero; a frame can arrive
+  on any link at the moment a drain begins, and the race detector caught
+  it on the multi-machine test. An atomic counter with a polling wait
+  replaces it.
+
 ## v0.1.55 — Look before locking the catalogue
 - Before creating a daily partition the store checks, under a share lock,
   whether the default partition already holds rows of that day. Creating

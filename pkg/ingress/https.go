@@ -37,7 +37,7 @@ type HTTPS struct {
 	srv      *http.Server
 	ln       net.Listener
 	mu       sync.RWMutex
-	inflight sync.WaitGroup
+	inflight inflight
 }
 
 // NewHTTPS builds an HTTPS ingress.
@@ -201,11 +201,7 @@ func addrOf(r *http.Request) net.Addr {
 
 // Drain waits for in-flight requests, then stops the server.
 func (h *HTTPS) Drain(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() { h.inflight.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-ctx.Done():
+	if err := h.inflight.Wait(ctx); err != nil {
 		h.log.Warn("drain deadline reached with requests still in flight")
 	}
 	if h.srv != nil {

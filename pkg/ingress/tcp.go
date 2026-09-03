@@ -68,7 +68,7 @@ type TCP struct {
 	sessions map[string]*session
 	ln       net.Listener
 	// inflight tracks handlers still running, so shutdown can drain.
-	inflight sync.WaitGroup
+	inflight inflight
 }
 
 type session struct {
@@ -385,11 +385,7 @@ func (t *TCP) Peers() []string {
 // store-and-forward link means a partner believes a message was delivered that
 // this process never finished writing.
 func (t *TCP) Drain(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() { t.inflight.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-ctx.Done():
+	if err := t.inflight.Wait(ctx); err != nil {
 		t.log.Warn("drain deadline reached with work still in flight")
 	}
 	return t.Close()

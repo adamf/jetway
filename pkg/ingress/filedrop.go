@@ -34,7 +34,7 @@ type FileDrop struct {
 	// sizes remembers what each file measured last sweep, so a file still
 	// being uploaded is not read half-written.
 	sizes    map[string]fileState
-	inflight sync.WaitGroup
+	inflight inflight
 	mu       sync.Mutex
 	closed   bool
 }
@@ -177,12 +177,7 @@ func (f *FileDrop) archive(path string) {
 
 // Drain waits for in-flight files.
 func (f *FileDrop) Drain(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() { f.inflight.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-ctx.Done():
-	}
+	_ = f.inflight.Wait(ctx)
 	return f.Close()
 }
 
