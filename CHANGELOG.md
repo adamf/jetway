@@ -5,6 +5,20 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.61 — Inter-airline through check-in
+- `pkg/iatci`: the IATCI dialogue between two departure-control systems,
+  DCQCKI request and DCRCKA response, built and parsed element by element
+  from the PADIS release 01.1 structures as publicly mirrored (LOR, FDQ,
+  PPD, PRD, PSD, PBD, PSI, PAP; FDR, RAD, ERD, WAD, FSD, PFD). Inferred,
+  closely: the members-only implementation guide was not consulted.
+- `dcs.Station.ThroughCheckIn` accepts another carrier's connecting
+  passengers on our flight by locator and surname, seats them, records the
+  inbound connection and the connecting bags, and refuses per passenger
+  with the IATCI error codes.
+- The gateway answers a DCQCKI through `Gateway.ThroughCheckIn` (a
+  `dcs.Station` fits) and sends one with `RequestThroughCheckIn`; answers
+  reach `ThroughCheckInResponses`. Without a handler it says so (702).
+
 ## v0.1.60 — The archive export
 - `GET /api/admin/export` streams every record a node holds as
   newline-delimited JSON, oldest first, and `jetwayctl export --out` writes

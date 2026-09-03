@@ -17,6 +17,7 @@ import (
 	"github.com/adamf/jetway/pkg/dcs"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/mvt"
+	"github.com/adamf/jetway/pkg/iatci"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnl"
 	"github.com/adamf/jetway/pkg/pnr"
@@ -98,6 +99,11 @@ type decoded struct {
 	// TicketControl is set for TKCREQ and TKCRES: what a partner says has
 	// become of a coupon on a document.
 	TicketControl *padis.TicketControl
+	// ThroughCheckIn and ThroughCheckInResponse are the IATCI dialogue, one
+	// side each: a request another DCS makes of ours, or the answer to one
+	// ours made.
+	ThroughCheckIn         *iatci.CheckInRequest
+	ThroughCheckInResponse *iatci.CheckInResponse
 
 	peer *Peer
 	// self is the receiving node's designator.
@@ -206,6 +212,26 @@ func (g *Gateway) decodeEDIFACT(peer *Peer, raw []byte, opts IngestOptions) (*de
 	d.Kind = d.Edifact.ID().Type
 	d.Test = ic.TestIndicator()
 	d.Interchange = ic
+
+	// Through check-in is between two departure-control systems and touches
+	// no record here; it branches before the record grammar too.
+	if iatci.IsCheckIn(d.Edifact) {
+		req, err := iatci.ParseDCQCKI(d.Edifact)
+		if err != nil {
+			return nil, fmt.Errorf("gateway: %w", err)
+		}
+		d.ThroughCheckIn = req
+		d.NeedsReply = true
+		return d, nil
+	}
+	if iatci.IsCheckInResponse(d.Edifact) {
+		res, err := iatci.ParseDCRCKA(d.Edifact)
+		if err != nil {
+			return nil, fmt.Errorf("gateway: %w", err)
+		}
+		d.ThroughCheckInResponse = res
+		return d, nil
+	}
 
 	// Ticket control is about a document, not a booking, so it branches before
 	// the record grammar. Feeding it through would produce a message of

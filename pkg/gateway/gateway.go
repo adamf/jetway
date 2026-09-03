@@ -26,6 +26,7 @@ import (
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/fare"
 	"github.com/adamf/jetway/pkg/metrics"
+	"github.com/adamf/jetway/pkg/iatci"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/queue"
@@ -159,6 +160,12 @@ type Gateway struct {
 	// does not answer requests, which is the right behaviour for a distribution
 	// system that only originates them.
 	Responder Responder
+	// ThroughCheckIn is the departure-control system that accepts another
+	// carrier's connecting passengers when a DCQCKI arrives; nil answers
+	// every request as not supported. ThroughCheckInResponses hears the
+	// answers to requests this node made.
+	ThroughCheckIn          ThroughCheckInHandler
+	ThroughCheckInResponses func(ctx context.Context, peer *Peer, res *iatci.CheckInResponse)
 
 	// Now, when set, replaces the wall clock. Every timestamp this gateway
 	// stamps -- records, events, messages, references -- comes through it, so
@@ -593,6 +600,12 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 
 	if dec.TicketControl != nil {
 		return g.applyTicketControl(ctx, peer, msg, dec, res)
+	}
+	if dec.ThroughCheckIn != nil {
+		return g.applyThroughCheckIn(ctx, peer, msg, dec, res)
+	}
+	if dec.ThroughCheckInResponse != nil {
+		return g.applyThroughCheckInResponse(ctx, peer, msg, dec, res)
 	}
 
 	// A partner telling us what they made of something we sent.

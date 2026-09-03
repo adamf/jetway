@@ -415,6 +415,7 @@ where this is wrong, that is the single most useful contribution available.
 | `pkg/aftn` | The Aeronautical Fixed Telecommunication Network envelope (ICAO Annex 10 Vol II): priority, eight-letter addressee indicators, origin, ZCZC/NNNN |
 | `pkg/ats` | ICAO air traffic services messages (Doc 4444 Appendix 3): FPL, DEP, ARR, DLA, CNL, CHG |
 | `pkg/acars` | ARINC 620 OOOI reports -- out, off, on, in -- as a datalink provider forwards them to the airline |
+| `pkg/iatci` | Inter-airline through check-in: the DCQCKI/DCRCKA dialogue by which one carrier's DCS checks a connecting passenger in on another's flight |
 | `pkg/irops` | Irregular operations: the engine that works the schedule-change queue, rebooking a cancelled flight's passengers onto the next seat over the same city pair |
 | `pkg/ingress` | MATIP, HTTPS, TCP and file-drop listeners, and peer identity |
 | `pkg/egress` | Outbound delivery with backoff and restart recovery |
@@ -428,7 +429,7 @@ where this is wrong, that is the single most useful contribution available.
 
 The whole `pkg/...` tree is importable, in two layers. The codec packages
 (`typeb`, `edifact`, `airimp`, `padis`, `avs`, `ssim`, `ndc`, `matip`, `pnr`,
-`rescode`, `avail`, `pnl`, `baggage`, `mvt`, `dcs`, `aftn`, `ats`, `acars`) depend on nothing above them and on each other only through
+`rescode`, `avail`, `pnl`, `baggage`, `mvt`, `dcs`, `aftn`, `ats`, `acars`, `iatci`) depend on nothing above them and on each other only through
 the canonical model — import one to parse a format and take nothing else. The
 application packages (`gateway`, `store`, `node`, `queue`, `ingress`, `egress`,
 `transport`, `config`, `demo`) are the running system, importable as a library:
