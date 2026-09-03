@@ -249,6 +249,9 @@ type Flight struct {
 	// Load and Loadsheet are produced at close.
 	Load      *Load  `json:"load,omitempty"`
 	Loadsheet string `json:"loadsheet,omitempty"`
+	// Reconciliation is the bag reconciliation taken at the door; nil until
+	// the flight closes.
+	Reconciliation *Reconciliation `json:"reconciliation,omitempty"`
 	// Cancelled marks a flight that closed because it will not fly, with
 	// the reason the operator gave.
 	Cancelled    bool   `json:"cancelled,omitempty"`

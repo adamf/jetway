@@ -799,3 +799,23 @@ func (s *Mem) FindPNRsDueBy(ctx context.Context, deadline time.Time, limit int) 
 	}
 	return out, nil
 }
+
+// ExportPNRs implements Exporter: every record, by id.
+func (s *Mem) ExportPNRs(ctx context.Context, fn func(*pnr.PNR) error) error {
+	s.mu.RLock()
+	all := make([]*pnr.PNR, 0, len(s.pnrs))
+	for _, p := range s.pnrs {
+		all = append(all, clonePNR(p))
+	}
+	s.mu.RUnlock()
+	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+	for _, p := range all {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := fn(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}

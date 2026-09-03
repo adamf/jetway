@@ -97,6 +97,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("POST /api/admin/retire", s.retire)
+	mux.HandleFunc("GET /api/admin/export", s.export)
 	if s.Metrics {
 		mux.HandleFunc("GET /metrics", s.metrics)
 	}
@@ -784,4 +785,34 @@ func (s *Server) splitRecord(w http.ResponseWriter, r *http.Request) {
 		"parent": res.Parent, "child": res.Child,
 		"advised": res.Advised, "unadvised": res.Unadvised,
 	})
+}
+
+// export streams every record this node holds as newline-delimited JSON,
+// one record a line, oldest first. It is the weekly archive: the live book
+// purges at retirement, the regulator asks four years later, and a PITR
+// window does not answer that.
+func (s *Server) export(w http.ResponseWriter, r *http.Request) {
+	ex, ok := s.Store.(store.Exporter)
+	if !ok {
+		http.Error(w, `{"error":"this node's store does not export"}`, http.StatusNotImplemented)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	enc := json.NewEncoder(w)
+	n := 0
+	flusher, _ := w.(http.Flusher)
+	err := ex.ExportPNRs(r.Context(), func(p *pnr.PNR) error {
+		if err := enc.Encode(p); err != nil {
+			return err
+		}
+		n++
+		if n%1000 == 0 && flusher != nil {
+			flusher.Flush()
+		}
+		return nil
+	})
+	if err != nil && r.Context().Err() == nil {
+		s.Log.Warn("export ended early", "records", n, "err", err)
+	}
+	s.Log.Info("records exported", "records", n)
 }

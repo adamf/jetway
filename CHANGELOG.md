@@ -5,6 +5,15 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.60 — The archive export
+- `GET /api/admin/export` streams every record a node holds as
+  newline-delimited JSON, oldest first, and `jetwayctl export --out` writes
+  it to a file: the weekly logical export the production plan takes before
+  retirement drops the day, and a restore drill's input. `store.Exporter`
+  is implemented by both backends.
+- `dcs.Flight.Reconciliation` keeps the door's bag reconciliation on the
+  flight, so a console can show it after the fact.
+
 ## v0.1.59 — Bag reconciliation at the door, and three production remainders
 - `CloseFlight` reconciles the hold against the cabin: every bag the
   sortation system reported loaded must belong to a boarded passenger.

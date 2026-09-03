@@ -62,6 +62,8 @@ func main() {
 		err = cmdShow(os.Args[2:])
 	case "replay":
 		err = cmdReplay(os.Args[2:])
+	case "export":
+		err = cmdExport(os.Args[2:])
 	case "retire":
 		err = cmdRetire(os.Args[2:])
 	case "status":
@@ -435,5 +437,42 @@ func cmdRetire(args []string) error {
 	}
 	fmt.Printf("retired before %s: %d partitions dropped, %d records deleted, %d queue items cleared\n",
 		t.UTC().Format(time.RFC3339), out.Partitions, out.Records, out.QueueItems)
+	return nil
+}
+
+// cmdExport streams the node's records as newline-delimited JSON to a file
+// or stdout: jetwayctl export --out records.ndjson. It is the archive the
+// production plan takes weekly, and a restore drill's input.
+func cmdExport(args []string) error {
+	fs := flag.NewFlagSet("export", flag.ContinueOnError)
+	out := fs.String("out", "", "file to write; stdout when empty")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	resp, err := http.Get(base() + "/api/admin/export")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("export: %s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	var w io.Writer = os.Stdout
+	if *out != "" {
+		f, err := os.Create(*out)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		w = f
+	}
+	n, err := io.Copy(w, resp.Body)
+	if err != nil {
+		return err
+	}
+	if *out != "" {
+		fmt.Fprintf(os.Stderr, "exported %d bytes to %s\n", n, *out)
+	}
 	return nil
 }

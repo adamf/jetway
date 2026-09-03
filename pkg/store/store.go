@@ -186,6 +186,13 @@ type Retirer interface {
 	RetireBefore(ctx context.Context, cutoff time.Time) (Retired, error)
 }
 
+// Exporter streams every record a system holds, oldest first, for the
+// archive a regulator asks about years after the live book has purged it.
+// fn returning an error stops the export with that error.
+type Exporter interface {
+	ExportPNRs(ctx context.Context, fn func(*pnr.PNR) error) error
+}
+
 // LegRevenue is one leg's share of the priced records that hold it, in the
 // minor units of the records' currency.
 type LegRevenue struct {

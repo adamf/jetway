@@ -1314,3 +1314,30 @@ func (s *Postgres) queryPNRs(ctx context.Context, sql string, args ...any) ([]*p
 	}
 	return out, rows.Err()
 }
+
+// ExportPNRs implements Exporter for this node's view, streaming rows in id
+// order rather than loading the book: a carrier's book is millions of
+// records and the archive is taken weekly.
+func (s *Postgres) ExportPNRs(ctx context.Context, fn func(*pnr.PNR) error) error {
+	rows, err := s.pool.Query(ctx, `SELECT state, version FROM pnr WHERE node=$1 ORDER BY id`, s.node)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var state []byte
+		var version int64
+		if err := rows.Scan(&state, &version); err != nil {
+			return err
+		}
+		var p pnr.PNR
+		if err := json.Unmarshal(state, &p); err != nil {
+			return err
+		}
+		p.Version = version
+		if err := fn(&p); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}

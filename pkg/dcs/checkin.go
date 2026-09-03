@@ -584,6 +584,7 @@ func (s *Station) CloseFlight(ctx context.Context, k Key, opts CloseOptions) (*C
 		}
 	}
 	cl.Reconciliation = rec
+	f.Reconciliation = &rec
 	t, ok := s.fleet().Type(f.Equipment)
 	if !ok {
 		t = s.fleet().Default()
