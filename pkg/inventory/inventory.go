@@ -433,3 +433,19 @@ func awaitingDecision(status string) bool {
 	}
 	return rescode.ActionCode(status).NeedsReply()
 }
+
+// SoldByClass is what a cabin has sold, class by class: the booked-to-date
+// a forecaster adds its expected pickup to. Classes with nothing sold are
+// absent.
+func (inv *Inventory) SoldByClass(carrier, flightNum, wireDate, board, compartment string) map[string]int {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
+	prefix := poolKey(carrier, flightNum, wireDate, board, compartment) + "/"
+	out := map[string]int{}
+	for k, n := range inv.soldClass {
+		if strings.HasPrefix(k, prefix) && n > 0 {
+			out[strings.TrimPrefix(k, prefix)] += n
+		}
+	}
+	return out
+}

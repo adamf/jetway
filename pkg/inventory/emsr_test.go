@@ -124,3 +124,20 @@ func TestControllerDrivesTheInventory(t *testing.T) {
 		t.Fatalf("K after the forecast eased: %s", got)
 	}
 }
+
+// A forecaster adds its pickup to what is booked: the inventory says what
+// each class has sold, and nothing about classes that have not.
+func TestSoldByClassReportsTheBookedToDate(t *testing.T) {
+	inv := New("WN", b737())
+	for i := 0; i < 3; i++ {
+		decide(t, inv, seg("2554", "K", "HN", 1))
+	}
+	decide(t, inv, seg("2554", "Y", "HN", 2))
+	got := inv.SoldByClass("WN", "2554", "26NOV", "BNA", "Y")
+	if got["K"] != 3 || got["Y"] != 2 || len(got) != 2 {
+		t.Errorf("sold by class: %v", got)
+	}
+	if n := len(inv.SoldByClass("WN", "9999", "26NOV", "BNA", "Y")); n != 0 {
+		t.Errorf("an unsold flight reports %d classes", n)
+	}
+}
