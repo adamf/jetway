@@ -66,7 +66,10 @@ func TestReaderNeverWaitsOnAPeerThatStoppedReading(t *testing.T) {
 			t.Fatalf("client send %d: %v", i, err)
 		}
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	// The read loop waits once, for SendTimeout, before the outbox declares
+	// the peer congested and sends fail fast; the deadline allows that wait
+	// and a slow runner besides.
+	deadline := time.Now().Add(SendTimeout + 15*time.Second)
 	for received.Load() < n && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
