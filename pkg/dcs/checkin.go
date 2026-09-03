@@ -2,6 +2,7 @@ package dcs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -429,6 +430,13 @@ type CloseOptions struct {
 	// Cargo and Mail are the dead load, in kilos.
 	Cargo int `json:"cargo,omitempty"`
 	Mail  int `json:"mail,omitempty"`
+	// RequireReconciled refuses to close while a loaded bag has no boarded
+	// passenger, with ErrUnreconciledBags naming them; the caller pulls the
+	// bags (BSM DEL to sortation, then BagOffloaded) and closes again.
+	// Without it the closure still reports the reconciliation and the
+	// unaccompanied bags are marked offloaded, as the load must not count
+	// them.
+	RequireReconciled bool `json:"require_reconciled,omitempty"`
 	// Force closes a flight whose check-in is still open, closing check-in
 	// first. Boarding is not implied: accepted passengers who have not
 	// boarded are offloaded, which is what closing the door means.
@@ -455,7 +463,77 @@ type Closure struct {
 
 	Loadsheet string `json:"loadsheet"`
 	Load      *Load  `json:"load"`
+
+	// Reconciliation is the bag reconciliation at the door: every bag the
+	// sortation system reported loaded must belong to a passenger who
+	// boarded. A loaded bag whose passenger did not fly is a hold item the
+	// aircraft cannot depart with; a boarded passenger's bag that was never
+	// loaded travels later as a rush bag. The practice is BRS; the rule is
+	// security regulation in most jurisdictions.
+	Reconciliation Reconciliation `json:"reconciliation"`
 }
+
+// BagRef names one bag and whose it is.
+type BagRef struct {
+	Tag         string `json:"tag"`
+	PassengerID int    `json:"passenger_id"`
+	Surname     string `json:"surname"`
+	Status      Status `json:"passenger_status"`
+	Position    string `json:"position,omitempty"`
+}
+
+// Reconciliation is the result of matching loaded bags to boarded
+// passengers.
+type Reconciliation struct {
+	// Loaded is how many bags the hold reports; Boarded how many belong to
+	// passengers who boarded.
+	Loaded  int `json:"loaded"`
+	Boarded int `json:"boarded"`
+	// Unaccompanied are loaded bags whose passenger did not board: they
+	// must come off before the door closes.
+	Unaccompanied []BagRef `json:"unaccompanied,omitempty"`
+	// NotLoaded are boarded passengers' bags the hold never reported:
+	// short-shipped, to follow as rush bags.
+	NotLoaded []BagRef `json:"not_loaded,omitempty"`
+}
+
+// Clear reports whether the flight may depart: no loaded bag without its
+// passenger on board.
+func (r Reconciliation) Clear() bool { return len(r.Unaccompanied) == 0 }
+
+// reconcile matches the hold against the cabin.
+func reconcile(f *Flight) Reconciliation {
+	var r Reconciliation
+	for _, p := range f.Passengers {
+		for _, b := range p.Bags {
+			ref := BagRef{Tag: b.Tag, PassengerID: p.ID, Surname: p.Surname, Status: p.Status, Position: b.Position}
+			if b.Loaded {
+				r.Loaded++
+				if p.Status == StatusBoarded {
+					r.Boarded++
+				} else {
+					r.Unaccompanied = append(r.Unaccompanied, ref)
+				}
+			} else if p.Status == StatusBoarded && !b.Offloaded {
+				r.NotLoaded = append(r.NotLoaded, ref)
+			}
+		}
+	}
+	return r
+}
+
+// UnreconciledError is CloseFlight refusing to close a door with a loaded
+// bag whose passenger is not on board.
+type UnreconciledError struct{ Bags []BagRef }
+
+func (e *UnreconciledError) Error() string {
+	return fmt.Sprintf("dcs: %d loaded bag(s) without a boarded passenger", len(e.Bags))
+}
+
+// ErrUnreconciledBags is the sentinel errors.Is matches for UnreconciledError.
+var ErrUnreconciledBags = errors.New("dcs: loaded bags without boarded passengers")
+
+func (e *UnreconciledError) Is(target error) bool { return target == ErrUnreconciledBags }
 
 // CloseFlight is the door closing: no-shows are declared, unboarded
 // passengers offloaded, the load computed, the messages built. After this
@@ -487,6 +565,25 @@ func (s *Station) CloseFlight(ctx context.Context, k Key, opts CloseOptions) (*C
 			cl.Offloaded = append(cl.Offloaded, p)
 		}
 	}
+	rec := reconcile(f)
+	if opts.RequireReconciled && !rec.Clear() {
+		// Undo nothing: the offloads above stand, the door stays open.
+		return nil, &UnreconciledError{Bags: rec.Unaccompanied}
+	}
+	// A loaded bag whose passenger did not fly comes off the aircraft, so
+	// the load never counts it.
+	for _, p := range f.Passengers {
+		if p.Status == StatusBoarded {
+			continue
+		}
+		for i := range p.Bags {
+			if p.Bags[i].Loaded {
+				p.Bags[i].Loaded = false
+				p.Bags[i].Offloaded = true
+			}
+		}
+	}
+	cl.Reconciliation = rec
 	t, ok := s.fleet().Type(f.Equipment)
 	if !ok {
 		t = s.fleet().Default()

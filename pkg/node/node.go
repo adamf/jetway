@@ -161,6 +161,11 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Optio
 				if cfg.Lease.Enabled && !n.Holding() {
 					return fmt.Errorf("standing by: %s is held elsewhere", cfg.Identity.Designator)
 				}
+				if n.Spool != nil {
+					if err := spoolReady(n.Spool, SpoolReadyAge); err != nil {
+						return err
+					}
+				}
 				_, err := st.ListPNRs(ctx, 1)
 				return err
 			},
@@ -426,3 +431,28 @@ func (n *Node) LivePeers() []string {
 }
 
 func fmtErr(what string, err error) error { return fmt.Errorf("node: %s: %w", what, err) }
+
+// SpoolReadyAge is how old the spool's oldest unflushed entry may be before
+// the node reports not ready: the store is not keeping up, and a load
+// balancer should send partners' new sessions to a node whose is.
+var SpoolReadyAge = 30 * time.Second
+
+// backlog is what the readiness rule asks of a spool.
+type backlog interface {
+	Oldest() (time.Duration, bool, error)
+}
+
+// spoolReady is the readiness rule for the write-ahead spool.
+func spoolReady(sp backlog, maxAge time.Duration) error {
+	if sp == nil {
+		return nil
+	}
+	age, ok, err := sp.Oldest()
+	if err != nil {
+		return fmt.Errorf("spool: %w", err)
+	}
+	if ok && age > maxAge {
+		return fmt.Errorf("spool backlog: oldest entry %s old, store not keeping up", age.Round(time.Second))
+	}
+	return nil
+}

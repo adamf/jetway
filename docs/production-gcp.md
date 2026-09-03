@@ -301,12 +301,12 @@ day this document was written; the rest are open.
    third of the term; standbys poll and take over when it lapses or is
    released, and are not ready meanwhile. A holder that is asked to stop
    drains its links first and releases after (v0.1.51).
-2. ~~Readiness.~~ `/readyz` now fails when the store cannot be reached
-   (`store.Pinger`), distinct from `/healthz`; a `Ready` hook takes further
-   checks. Still to add: the spool's backlog age and the lease.
-3. ~~Drain on SIGTERM.~~ `jetwayd` already drains its ingresses and the
-   HTTP server on SIGTERM with a timeout. Still to add: releasing the lease
-   first and waiting for the outboxes to empty.
+2. ~~Readiness.~~ `/readyz` fails when the store cannot be reached
+   (`store.Pinger`), while standing by for a lease, and when the spool's
+   oldest unflushed entry is older than `node.SpoolReadyAge` (30 s).
+3. ~~Drain on SIGTERM.~~ `jetwayd` drains its ingresses -- in-flight
+   handlers, then every session's outbox -- and the HTTP server on SIGTERM
+   with a timeout, and releases the lease after.
 4. ~~Spool on by default,~~ bounded by `spool.max_entries`, with
    `jetway_spool_depth` and `jetway_spool_oldest_seconds` for the alert.
 5. ~~Retire as an operation.~~ `POST /api/admin/retire` and `jetwayctl
@@ -326,7 +326,7 @@ day this document was written; the rest are open.
    each peer's reader so the partner's own circuit pushes back;
    `total_rate_limit` caps the ingress as a whole. A peer is paced to its
    own share before it reaches the shared bucket, so a flooding peer cannot
-   take the others' share. Still open: a different share per peer.
+   take the others' share; `peers[].rate_limit` gives a peer its own.
 9. **Load test as a release gate.** wholesky at warp 1 against a staging
    instance of the production topology, with the invariant suite (no
    oversell, message conservation, interline convergence) as the pass

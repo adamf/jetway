@@ -54,6 +54,8 @@ type TCP struct {
 	// others': the shared bucket only bites when the sum of the shares is
 	// more than the node should take.
 	shared *bucket
+	// peerLimits are per-peer overrides of rateLimit/burst; see SetPeerLimit.
+	peerLimits map[string]peerLimit
 
 	name     string
 	addr     string
@@ -274,7 +276,7 @@ func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 	}
 
 	sess := newSession(conn, t.framer, t.log, peer)
-	sess.limit = newBucket(t.rateLimit, t.burst)
+	sess.limit = t.limitFor(peer)
 	defer sess.out.Close()
 	t.mu.Lock()
 	if prev := t.sessions[peer]; prev != nil {
@@ -388,7 +390,64 @@ func (t *TCP) Drain(ctx context.Context) error {
 	if err := t.inflight.Wait(ctx); err != nil {
 		t.log.Warn("drain deadline reached with work still in flight")
 	}
+	// Answers already queued for partners should reach them before the
+	// sockets close: a reply that dies in an outbox is a partner
+	// retransmitting a request this process already applied.
+	if err := t.waitOutboxes(ctx); err != nil {
+		t.log.Warn("drain deadline reached with answers still queued")
+	}
 	return t.Close()
+}
+
+// waitOutboxes returns when every session's outbox is empty or ctx ends.
+func (t *TCP) waitOutboxes(ctx context.Context) error {
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		pending := 0
+		t.mu.Lock()
+		for _, s := range t.sessions {
+			pending += s.out.Depth()
+		}
+		t.mu.Unlock()
+		if pending == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
+}
+
+// SetPeerLimit gives one peer its own reader pace, overriding the ingress's
+// rate_limit for that peer. A big partner and a small one on the same
+// ingress do not want the same share.
+func (t *TCP) SetPeerLimit(peer string, rate float64, burst int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.peerLimits == nil {
+		t.peerLimits = map[string]peerLimit{}
+	}
+	t.peerLimits[peer] = peerLimit{rate: rate, burst: burst}
+}
+
+type peerLimit struct {
+	rate  float64
+	burst int
+}
+
+// limitFor is the bucket a new session for peer gets: its own if configured,
+// the ingress's otherwise.
+func (t *TCP) limitFor(peer string) *bucket {
+	t.mu.Lock()
+	l, ok := t.peerLimits[peer]
+	t.mu.Unlock()
+	if ok {
+		return newBucket(l.rate, l.burst)
+	}
+	return newBucket(t.rateLimit, t.burst)
 }
 
 func (t *TCP) Close() error {

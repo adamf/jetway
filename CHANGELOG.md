@@ -5,6 +5,21 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.59 — Bag reconciliation at the door, and three production remainders
+- `CloseFlight` reconciles the hold against the cabin: every bag the
+  sortation system reported loaded must belong to a boarded passenger.
+  `Closure.Reconciliation` names unaccompanied bags (loaded, passenger did
+  not fly) and short-shipped ones (boarded, never loaded);
+  `CloseOptions.RequireReconciled` holds the door with
+  `ErrUnreconciledBags` until they are pulled. Unaccompanied bags come off
+  the load either way.
+- `/readyz` fails when the spool's oldest unflushed entry is older than
+  `node.SpoolReadyAge` (30 s): the store is not keeping up.
+- An ingress drain waits for every session's outbox to empty before
+  closing the sockets, so answers already queued reach their partners.
+- `peers[].rate_limit` and `burst` pace one peer's reader instead of the
+  ingress's share.
+
 ## v0.1.58 — Frames in the hello's burst are kept; congestion clears when the writer has caught up
 - The link server read a peer's hello through a buffered reader and then
   started a fresh one on the connection, so frames sent in the same burst

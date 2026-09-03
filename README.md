@@ -411,7 +411,7 @@ where this is wrong, that is the single most useful contribution available.
 | `pkg/baggage` | BSM and BPM bag messages: tags issued, bags loaded |
 | `pkg/fare` | Fares filed per market and class with rules and taxes, and the pricing that sells each segment under the cheapest fare whose rules the trip meets |
 | `pkg/inventory` | A carrier's seat inventory: capacity per cabin from the schedule, sold and waitlisted per flight, rebuilt from the book of record; answers sells and broadcasts availability |
-| `pkg/dcs` | Departure control: the manifest, check-in, seating, bag tagging, boarding, close; PFS, PTM, PSM, ETL, LDM, CPM; load control and the loadsheet |
+| `pkg/dcs` | Departure control: the manifest, check-in, seating, bag tagging, boarding, close; bag reconciliation at the door; PFS, PTM, PSM, ETL, LDM, CPM; load control and the loadsheet |
 | `pkg/aftn` | The Aeronautical Fixed Telecommunication Network envelope (ICAO Annex 10 Vol II): priority, eight-letter addressee indicators, origin, ZCZC/NNNN |
 | `pkg/ats` | ICAO air traffic services messages (Doc 4444 Appendix 3): FPL, DEP, ARR, DLA, CNL, CHG |
 | `pkg/acars` | ARINC 620 OOOI reports -- out, off, on, in -- as a datalink provider forwards them to the airline |

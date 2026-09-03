@@ -125,6 +125,13 @@ func (n *Node) ReloadPeers(peers []config.Peer) (added int, err error) {
 }
 
 func (n *Node) registerPeer(p config.Peer) error {
+	if p.RateLimit > 0 {
+		for _, in := range n.listeners {
+			if l, ok := in.(interface{ SetPeerLimit(string, float64, int) }); ok {
+				l.SetPeerLimit(p.Name, p.RateLimit, p.Burst)
+			}
+		}
+	}
 	gw, router, tcps, log := n.Gateway, n.Router, n.tcp, n.Log
 
 	// Replies on an inbound link go back down whichever TCP listener currently

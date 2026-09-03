@@ -289,6 +289,10 @@ type Peer struct {
 	// Defaults to Carrier.
 	EDIFACTID string `yaml:"edifact_id"`
 	Egress    Egress `yaml:"egress"`
+	// RateLimit and Burst, when set, pace this peer's reader instead of the
+	// ingress's rate_limit: a partner's own share of the ingress.
+	RateLimit float64 `yaml:"rate_limit"`
+	Burst     int     `yaml:"burst"`
 }
 
 // Demo runs the simulated carrier fleet in this process.
