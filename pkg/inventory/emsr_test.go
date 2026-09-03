@@ -3,6 +3,9 @@ package inventory
 import (
 	"math"
 	"testing"
+	"time"
+
+	"github.com/adamf/jetway/pkg/avail"
 )
 
 // Two classes, checked against the normal table rather than against the
@@ -139,5 +142,32 @@ func TestSoldByClassReportsTheBookedToDate(t *testing.T) {
 	}
 	if n := len(inv.SoldByClass("WN", "9999", "26NOV", "BNA", "Y")); n != 0 {
 		t.Errorf("an unsold flight reports %d classes", n)
+	}
+}
+
+// A forecaster may ask the inventory what it has sold while the inventory
+// asks it for the ladder: the ladder is fetched before the lock, so a
+// decision and an availability answer both complete. Asked under the lock,
+// every decision deadlocked and no booking in the world settled.
+func TestForecasterMayReadSoldByClassWithoutDeadlock(t *testing.T) {
+	inv := New("WN", b737())
+	ctl := &Controller{Capacity: b737(), Forecast: func(carrier, flight, date, board, comp string, seats int) []ClassDemand {
+		sold := inv.SoldByClass(carrier, flight, date, board, comp)
+		return []ClassDemand{{Class: "Y", Fare: 300, Mean: 20 + float64(sold["Y"]), StdDev: 5}, {Class: "K", Fare: 90, Mean: 50 + float64(sold["K"]), StdDev: 10}}
+	}}
+	inv.Levels = ctl.Levels
+	done := make(chan string, 1)
+	go func() {
+		got := decide(t, inv, seg("2554", "K", "HN", 1))
+		inv.Availability([]avail.Key{avail.NewKey("WN", "2554", time.Date(2025, 11, 26, 0, 0, 0, 0, time.UTC), "BNA", "DCA", "K")}, time.Now())
+		done <- got
+	}()
+	select {
+	case got := <-done:
+		if got != "KK" {
+			t.Errorf("K should sell: %s", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a forecaster reading SoldByClass deadlocked the inventory")
 	}
 }

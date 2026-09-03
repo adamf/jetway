@@ -145,15 +145,27 @@ func (inv *Inventory) cabin(carrier, flight, date, board, class string) (key, co
 	return poolKey(carrier, flight, date, board, comp), comp, comps[comp], true
 }
 
+// ladderFor asks revenue management for a cabin's ladder. It is called
+// before the inventory's lock is taken, never under it: a forecaster is
+// entitled to ask the inventory what it has sold (SoldByClass), and did,
+// and a ladder asked for under the lock deadlocked every decision.
+func (inv *Inventory) ladderFor(carrier, flight, date, board, class string) []Level {
+	if inv.Levels == nil {
+		return nil
+	}
+	_, comp, _, ok := inv.cabin(carrier, flight, date, board, class)
+	if !ok {
+		return nil
+	}
+	return inv.Levels(carrier, flight, date, board, comp)
+}
+
 // classOpen reports how many seats the class may still sell under the
 // ladder: its authorisation less what is sold in it and every class below
 // it. Without a ladder, or for a class not on it, the cabin's own count
-// decides and this returns -1.
-func (inv *Inventory) classOpen(carrier, flight, date, board, comp, class string) int {
-	if inv.Levels == nil {
-		return -1
-	}
-	ladder := inv.Levels(carrier, flight, date, board, comp)
+// decides and this returns -1. The ladder comes from ladderFor, asked
+// before the lock.
+func (inv *Inventory) classOpen(ladder []Level, carrier, flight, date, board, comp, class string) int {
 	if len(ladder) == 0 {
 		return -1
 	}
@@ -176,6 +188,13 @@ func (inv *Inventory) classOpen(carrier, flight, date, board, comp, class string
 
 // Decide implements gateway.Responder: a status per segment awaiting one.
 func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer) (map[string]string, error) {
+	// Revenue management's ladders first, outside the lock (see ladderFor).
+	ladders := map[string][]Level{}
+	for _, s := range p.Segments {
+		if s.Type == pnr.SegmentAir && awaitingDecision(s.Status) && (inv.Carrier == "" || s.Carrier == inv.Carrier) {
+			ladders[s.Key()] = inv.ladderFor(s.Carrier, s.FlightNum, s.WireDate, s.Board, s.Class)
+		}
+	}
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
 	out := map[string]string{}
@@ -206,7 +225,7 @@ func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer
 		// closed class is unable, not waitlisted, because the seats exist
 		// and are being held for a higher fare.
 		if inv.sold[key]+s.Seats <= seats {
-			if open := inv.classOpen(s.Carrier, s.FlightNum, s.WireDate, s.Board, comp, s.Class); open >= 0 && s.Seats > open {
+			if open := inv.classOpen(ladders[s.Key()], s.Carrier, s.FlightNum, s.WireDate, s.Board, comp, s.Class); open >= 0 && s.Seats > open {
 				out[s.Key()] = "UC"
 				continue
 			}
@@ -325,19 +344,22 @@ func (inv *Inventory) SetOverride(carrier, flight, wireDate, board, class, statu
 // Availability reports what the carrier would grant per key: the seats left
 // in the class's cabin, and open, waitlist or closed accordingly.
 func (inv *Inventory) Availability(keys []avail.Key, asOf time.Time) []avail.Entry {
+	ladders := make([][]Level, len(keys))
+	for i, k := range keys {
+		ladders[i] = inv.ladderFor(k.Carrier, k.FlightNum, availWire(k), k.Board, k.Class)
+	}
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
 	out := make([]avail.Entry, 0, len(keys))
-	for _, k := range keys {
+	for i, k := range keys {
 		if inv.Carrier != "" && k.Carrier != inv.Carrier {
 			continue
 		}
 		e := avail.Entry{Key: k, Source: avail.SourceAVS, AsOf: asOf}
-		date, err := time.Parse("2006-01-02", k.Date)
-		if err != nil {
+		wire := availWire(k)
+		if wire == "" {
 			continue
 		}
-		wire := pnr.FormatDate(date)
 		if inv.ClosedClasses[k.Class] {
 			e.Status = avail.Closed
 			out = append(out, e)
@@ -362,7 +384,7 @@ func (inv *Inventory) Availability(keys []avail.Key, asOf time.Time) []avail.Ent
 			continue
 		}
 		left := seats - inv.sold[key]
-		if open := inv.classOpen(k.Carrier, k.FlightNum, wire, k.Board, comp, k.Class); open >= 0 && open < left {
+		if open := inv.classOpen(ladders[i], k.Carrier, k.FlightNum, wire, k.Board, comp, k.Class); open >= 0 && open < left {
 			left = open
 			if left <= 0 {
 				// Closed by the ladder while the cabin has seats: not a
@@ -448,4 +470,14 @@ func (inv *Inventory) SoldByClass(carrier, flightNum, wireDate, board, compartme
 		}
 	}
 	return out
+}
+
+// availWire is an availability key's date as the wire writes it, DDMMM,
+// or "" when the key's date does not parse.
+func availWire(k avail.Key) string {
+	date, err := time.Parse("2006-01-02", k.Date)
+	if err != nil {
+		return ""
+	}
+	return pnr.FormatDate(date)
 }
