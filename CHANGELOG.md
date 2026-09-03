@@ -5,6 +5,12 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.57 — The console shows the fare
+- A record's pricing is on its detail: total, base and taxes in the
+  filing's currency, each passenger's fare bases and amount, and the fare
+  basis on every segment. Records had carried prices since v0.1.42; the
+  console had not shown them.
+
 ## v0.1.56 — A drain that tolerates a frame arriving as it starts
 - The ingresses' in-flight counter is no longer a `sync.WaitGroup`, which
   forbids `Add` while a `Wait` is in progress at zero; a frame can arrive

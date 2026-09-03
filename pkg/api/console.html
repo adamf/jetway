@@ -1214,6 +1214,39 @@ function renderSplitCard(box, p){
   c.appendChild(b); box.appendChild(c);
 }
 
+// renderFareCard shows what the record was priced at: the itinerary's
+// total in its currency, base and taxes, and each passenger's fare bases
+// and amount. Amounts are stored in minor units; the console shows them
+// the way a ticket does.
+function renderFareCard(box, p){
+  const pr = p.pricing;
+  if (!pr || !pr.total) return;
+  const money = (n) => (pr.currency||"") + " " + (n/100).toFixed(2);
+  const c = el("div","card");
+  const h = el("h2",null,"Fare");
+  h.appendChild(el("span","count", money(pr.total)));
+  c.appendChild(h);
+  const b = el("div","body");
+  const kv = el("dl","kv");
+  const put = (k,v) => { kv.appendChild(el("dt",null,k)); kv.appendChild(el("dd",null,v)); };
+  put("Base", money(pr.base));
+  put("Taxes", money(pr.taxes));
+  put("Total", money(pr.total));
+  if (pr.priced_at) put("Priced", new Date(pr.priced_at).toLocaleString());
+  b.appendChild(kv);
+  for (const px of (pr.passengers||[])){
+    const pax = (p.passengers||[]).find(x => x.ref === px.ref);
+    const row = el("div","seg");
+    row.appendChild(el("span","badge", px.type||"ADT"));
+    row.appendChild(el("span",null, pax ? pax.surname + "/" + pax.given : "passenger " + px.ref));
+    const bases = el("span","badge", (px.bases||[]).join(" "));
+    bases.style.marginLeft = "auto"; row.appendChild(bases);
+    row.appendChild(el("span","badge", money(px.total)));
+    b.appendChild(row);
+  }
+  c.appendChild(b); box.appendChild(c);
+}
+
 function renderTicketCard(box, p){
   // Flight tickets only. An EMD is a document, not a ticket, and a record
   // carrying only a baggage document is not ticketed.
@@ -1355,12 +1388,14 @@ function renderRecordCards(box, d, p){
     row.appendChild(el("span",null, `${s.carrier}${s.flight_num} ${s.class} ${s.wire_date} ${s.board}–${s.off}`));
     const n = el("span","badge", s.seats + (s.seats === 1 ? " seat" : " seats"));
     n.style.marginLeft = "auto"; row.appendChild(n);
+    if (s.fare_basis) row.appendChild(el("span","badge", s.fare_basis));
     if (s.carrier_locator) row.appendChild(el("span","badge", s.carrier_locator));
     sb.appendChild(row);
   }
   if (!(p.segments||[]).length) sb.appendChild(el("div","empty","No segments"));
   sc.appendChild(sb); box.appendChild(sc);
 
+  renderFareCard(box, p);
   renderTicketCard(box, p);
   renderEMDCard(box, p);
   renderSplitCard(box, p);
