@@ -24,9 +24,14 @@ func TestTicketAdviceRoundTripsIntoTheCarriersRecord(t *testing.T) {
 	tk := pnr.Ticket{Number: pnr.TicketNumber{AirlineCode: "125", Serial: "2400123456"}, PaxRef: 2, IssuedBy: "1G",
 		Coupons: []pnr.Coupon{{Number: 1, SegmentRef: 1, Status: pnr.CouponOpen}, {Number: 2, SegmentRef: 2, Status: pnr.CouponOpen}}}
 	text := BuildTicketAdvice(rec, "BA", tk)
-	for _, want := range []string{"1SMITH/ANNMRS", "SSR TKNE BA HK1 LHRJFK0117Y16DEC /1252400123456C1/-1SMITH/ANNMRS", "SSR TKNE BA HK1 JFKLHR0112Y23DEC /1252400123456C2/-1SMITH/ANNMRS", "RL 1G/ABC123", "RL BA/XYZ789"} {
+	for _, want := range []string{"1SMITH/ANNMRS", "SSR TKNE BA HK1 LHRJFK0117Y16DEC /1252400123456C1", "SSR TKNE BA HK1 JFKLHR0112Y23DEC /1252400123456C2", "RL 1G/ABC123", "RL BA/XYZ789"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in\n%s", want, text)
+		}
+	}
+	for _, l := range strings.Split(text, "\n") {
+		if len(l) > 63 {
+			t.Errorf("a Type B line may carry 63 characters; %d: %q", len(l), l)
 		}
 	}
 	// The carrier's copy of the record: the same people and flights, no

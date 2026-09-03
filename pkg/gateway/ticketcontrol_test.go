@@ -238,25 +238,39 @@ func TestUnknownCouponStatusIsRefused(t *testing.T) {
 	}
 }
 
-func TestTicketNotAdvisedBecomesADivergence(t *testing.T) {
-	gw, _ := cancelNode(t) // BA stays a teletype link here
+// A carrier on a teletype link hears its ticket the way reservations
+// systems have always told it: an SSR TKNE per coupon in an AIRIMP
+// message, with the document number, on a line a Type B message may
+// carry. Nothing diverges, because the carrier now knows.
+func TestTeletypeCarrierIsAdvisedOfTheTicket(t *testing.T) {
+	gw, sent := cancelNode(t) // BA stays a teletype link here
 	ctx := context.Background()
 	interlineRecord(t, gw, "TKC006")
 
+	before := sent.count("BA")
 	if _, err := gw.IssueTickets(ctx, "TKC006", IssueOptions{AirlineCode: "125", IssuedBy: "adam"}); err != nil {
 		t.Fatal(err)
+	}
+	if sent.count("BA") != before+1 {
+		t.Fatalf("BA was sent %d messages for the ticket, want 1", sent.count("BA")-before)
+	}
+	sent.mu.Lock()
+	raw := string(sent.msgs["BA"][len(sent.msgs["BA"])-1])
+	sent.mu.Unlock()
+	if !strings.Contains(raw, "SSR TKNE BA HK1 ") || !strings.Contains(raw, "/1250000000011C") {
+		t.Errorf("the advice does not name the ticket: %q", raw)
+	}
+	for _, l := range strings.Split(raw, "\n") {
+		if len(strings.TrimRight(l, "\r")) > 63 {
+			t.Errorf("a Type B line over 63 characters: %q", l)
+		}
 	}
 	items, err := gw.Store.ListQueue(ctx, store.QueueFilter{Queue: store.QueueDivergence})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// BA cannot be told over teletype, and a ticket the operating carrier does
-	// not know about is a ticket that exists only here.
-	if len(items) != 1 {
-		t.Fatalf("expected one divergence for the teletype carrier, got %d", len(items))
-	}
-	if !strings.Contains(items[0].Reason, "was not told") {
-		t.Errorf("reason = %q", items[0].Reason)
+	if len(items) != 0 {
+		t.Errorf("a carrier that was told is not a divergence: %+v", items)
 	}
 	_ = time.Now
 }

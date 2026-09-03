@@ -83,7 +83,7 @@ func Apply(p *pnr.PNR, m *Message, opts ApplyOptions) []Change {
 				add("add_ssr", "%s %s%d", el.Code, el.Action, el.Count)
 			}
 			if el.Code == "TKNE" {
-				if t, c, ok := applyTKNE(p, el, s.SegmentRef); ok {
+				if t, c, ok := applyTKNE(p, el, s.SegmentRef, soleName(m)); ok {
 					add("ticket", "%s coupon %d", t, c)
 				}
 			}
@@ -418,13 +418,12 @@ func BuildTicketAdvice(p *pnr.PNR, carrier string, t pnr.Ticket) string {
 		if op != carrier && seg.Carrier != carrier {
 			continue
 		}
-		ssr := &SSR{Code: "TKNE", Carrier: carrier, Action: "HK", Count: 1,
+		// The traveller is the message's one name element, which precedes
+		// the SSRs; a name association on each SSR pushed the line past
+		// the sixty-three characters a Type B line may carry.
+		els = append(els, &SSR{Code: "TKNE", Carrier: carrier, Action: "HK", Count: 1,
 			Itinerary: seg.Board + seg.Off + seg.FlightNum + seg.Class + seg.WireDate,
-			FreeText:  "/" + t.Number.AirlineCode + t.Number.Serial + "C" + strconv.Itoa(c.Number)}
-		if pax != nil {
-			ssr.NameRef = "-1" + pax.Surname + "/" + pax.Given + pax.Title
-		}
-		els = append(els, ssr)
+			FreeText:  "/" + t.Number.AirlineCode + t.Number.Serial + "C" + strconv.Itoa(c.Number)})
 	}
 	if len(els) == 0 {
 		return ""
@@ -447,7 +446,7 @@ func BuildTicketAdvice(p *pnr.PNR, carrier string, t pnr.Ticket) string {
 // coupon from the free text, the traveller from the name association, the
 // segment from the itinerary reference. Coupons of one document merge
 // into one ticket, as they arrive one SSR at a time.
-func applyTKNE(p *pnr.PNR, el *SSR, segRef int) (string, int, bool) {
+func applyTKNE(p *pnr.PNR, el *SSR, segRef int, name *Name) (string, int, bool) {
 	num, coupon := "", 0
 	for _, f := range strings.FieldsFunc(el.FreeText, func(r rune) bool { return r == '/' || r == ' ' }) {
 		if len(f) >= 13 && isDigits(f[:13]) {
@@ -461,11 +460,20 @@ func applyTKNE(p *pnr.PNR, el *SSR, segRef int) (string, int, bool) {
 		return "", 0, false
 	}
 	tn := pnr.TicketNumber{AirlineCode: num[:3], Serial: num[3:]}
+	// The traveller: the SSR's own name association when it carries one,
+	// else the message's single name element, else the record's only
+	// passenger.
 	paxRef := 0
+	surname, givenTitle := "", ""
 	if m := nameRe.FindStringSubmatch(el.NameRef); m != nil {
-		given, title := pnr.SplitTitle(m[3])
+		surname, givenTitle = m[2], m[3]
+	} else if name != nil && len(name.Givens) == 1 {
+		surname, givenTitle = name.Surname, name.Givens[0]
+	}
+	if surname != "" {
+		given, title := pnr.SplitTitle(givenTitle)
 		for _, px := range p.Passengers {
-			if strings.EqualFold(px.Surname, m[2]) && strings.EqualFold(px.Given, given) && (title == "" || strings.EqualFold(px.Title, title)) {
+			if strings.EqualFold(px.Surname, surname) && strings.EqualFold(px.Given, given) && (title == "" || strings.EqualFold(px.Title, title)) {
 				paxRef = px.Ref
 				break
 			}
@@ -493,6 +501,24 @@ func applyTKNE(p *pnr.PNR, el *SSR, segRef int) (string, int, bool) {
 	p.Tickets = append(p.Tickets, pnr.Ticket{Number: tn, Type: pnr.DocTicket, PaxRef: paxRef, IssuedBy: el.Carrier,
 		Coupons: []pnr.Coupon{{Number: coupon, SegmentRef: segRef, Status: pnr.CouponOpen}}})
 	return num, coupon, true
+}
+
+// soleName is the message's one name element when it names one traveller,
+// which is then the traveller every SSR in the message is about.
+func soleName(m *Message) *Name {
+	var found *Name
+	for _, e := range m.Elements {
+		if n, ok := e.(*Name); ok {
+			if found != nil {
+				return nil
+			}
+			found = n
+		}
+	}
+	if found != nil && len(found.Givens) != 1 {
+		return nil
+	}
+	return found
 }
 
 func isDigits(s string) bool {
