@@ -114,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/message/{id}", s.getMessage)
 	mux.HandleFunc("POST /api/message/{id}/replay", s.replay)
 	mux.HandleFunc("POST /api/pnr/{locator}/ticket", s.issueTickets)
+	mux.HandleFunc("POST /api/pnr/{locator}/refund", s.refund)
 	mux.HandleFunc("POST /api/pnr/{locator}/cancel", s.cancelRecord)
 	mux.HandleFunc("POST /api/pnr/{locator}/emd", s.issueEMD)
 	mux.HandleFunc("POST /api/pnr/{locator}/split", s.splitRecord)
@@ -642,6 +643,26 @@ func (s *Server) workQueueItem(w http.ResponseWriter, r *http.Request) {
 // stock code, the two-letter designator is a different namespace, and there is
 // no reliable mapping between them. Guessing one would put a booking on
 // somebody else's stock.
+// refund returns the value of a record's open coupons to the purchaser.
+func (s *Server) refund(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	by := r.URL.Query().Get("by")
+	if by == "" {
+		by = "console"
+	}
+	rec, err := s.Gateway.Refund(ctx, r.PathValue("locator"), gateway.RefundOptions{By: by, Reason: r.URL.Query().Get("reason")})
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, store.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		writeErr(w, status, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pnr": rec, "tickets": rec.Tickets})
+}
+
 func (s *Server) issueTickets(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("airline_code")
 	if code == "" {

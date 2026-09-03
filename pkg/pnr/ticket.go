@@ -267,6 +267,23 @@ type Ticket struct {
 	// Conjunction lists the further documents an itinerary of more than four
 	// coupons spills onto, in order.
 	Conjunction []TicketNumber `json:"conjunction,omitempty"`
+	// RefundedAt is when the document's open coupons were refunded, nil
+	// while it stands. Settlement dates the refund transaction by it.
+	RefundedAt *time.Time `json:"refunded_at,omitempty"`
+}
+
+// Refunded reports whether the document has been refunded: at least one
+// coupon refunded and none still open for use.
+func (t Ticket) Refunded() bool {
+	if t.RefundedAt == nil {
+		return false
+	}
+	for _, c := range t.Coupons {
+		if c.Status == CouponOpen {
+			return false
+		}
+	}
+	return true
 }
 
 // Covers reports whether the ticket has a usable coupon for a segment.
