@@ -133,6 +133,16 @@ type Connection struct {
 	Dest    string `json:"dest,omitempty"`
 	Class   string `json:"class,omitempty"`
 	Bags    int    `json:"bags,omitempty"`
+	// Seat and Sequence are what the other flight's departure control gave
+	// the passenger when the connection was through-checked, and Carrier the
+	// carrier that did so when it is not this one: the through check-in the
+	// IATCI dialogue carries, recorded so the passenger boards both.
+	Carrier  string `json:"carrier,omitempty"`
+	Seat     string `json:"seat,omitempty"`
+	Sequence int    `json:"sequence,omitempty"`
+	// Refused is why the other carrier would not accept the passenger, when
+	// it would not; empty otherwise.
+	Refused string `json:"refused,omitempty"`
 }
 
 // SSR is one special service request carried on the name list.

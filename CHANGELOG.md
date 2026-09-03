@@ -5,6 +5,14 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.62 — Through check-in answers find their way back
+- A DCRCKA is addressed to the UNB sender of the request, so through a
+  switch it reaches the requesting carrier rather than the network; a
+  DCQCKI is addressed to the receiving carrier whatever link carries it.
+- `dcs.Connection` carries the seat, sequence, carrier and any refusal the
+  other flight's departure control answered with; `Station.RecordOnward`
+  writes them.
+
 ## v0.1.61 — Inter-airline through check-in
 - `pkg/iatci`: the IATCI dialogue between two departure-control systems,
   DCQCKI request and DCRCKA response, built and parsed element by element

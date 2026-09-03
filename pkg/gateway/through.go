@@ -62,9 +62,16 @@ func (g *Gateway) answerThroughCheckIn(ctx context.Context, peer *Peer, msg *sto
 	if dec.Interchange != nil {
 		ref = dec.Interchange.ControlRef()
 	}
+	// The answer goes back to whoever asked, by the UNB sender of the
+	// request: through a switch the link peer is the network, not the
+	// carrier, and the recipient is what the switch routes on.
+	to := dec.EdifactSender
+	if to == "" {
+		to = peer.Carrier
+	}
 	ic, err := iatci.BuildDCRCKA(out, padis.BuildOptions{
 		Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
-		Recipient:  edifact.Party{ID: peer.Carrier, Qualifier: "ZZ"},
+		Recipient:  edifact.Party{ID: to, Qualifier: "ZZ"},
 		ControlRef: g.nextControlRef(), MessageRef: "1", Now: g.now(),
 	})
 	if err != nil {
@@ -85,9 +92,14 @@ func (g *Gateway) RequestThroughCheckIn(ctx context.Context, peer *Peer, req *ia
 	if req.Requestor == "" {
 		req.Requestor = g.Identity.Designator
 	}
+	// Addressed to the receiving carrier, whatever link carries it there.
+	to := peer.Carrier
+	if to == "" {
+		to = req.Outbound.Carrier
+	}
 	ic, err := iatci.BuildDCQCKI(req, padis.BuildOptions{
 		Sender:     edifact.Party{ID: g.Identity.Designator, Qualifier: "ZZ"},
-		Recipient:  edifact.Party{ID: peer.Carrier, Qualifier: "ZZ"},
+		Recipient:  edifact.Party{ID: to, Qualifier: "ZZ"},
 		ControlRef: g.nextControlRef(), MessageRef: "1", Now: g.now(),
 	})
 	if err != nil {

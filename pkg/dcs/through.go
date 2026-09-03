@@ -203,3 +203,25 @@ func (r ThroughRequest) Describe() string {
 	return fmt.Sprintf("through check-in from %s/%s: %d pax off %s onto %s %s %s",
 		r.Requestor, r.Station, len(r.Passengers), r.Inbound.Flight, r.Key.Flight, r.Key.Date, r.Key.Board)
 }
+
+// RecordOnward writes what another carrier's departure control answered for
+// a passenger's onward connection: the seat and sequence it gave, or the
+// refusal. The passenger is found by id on the flight.
+func (s *Station) RecordOnward(ctx context.Context, k Key, passengerID int, seat string, sequence int, refused string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.flights[k]
+	if !ok {
+		return ErrFlightNotFound
+	}
+	p := f.passenger(passengerID)
+	if p == nil {
+		return ErrPassengerNotFound
+	}
+	if p.Onward == nil {
+		return ErrNotFound
+	}
+	p.Onward.Seat, p.Onward.Sequence, p.Onward.Refused = seat, sequence, refused
+	f.Revision++
+	return s.store().SaveFlight(ctx, f)
+}
