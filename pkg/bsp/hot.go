@@ -474,7 +474,7 @@ func transactionRecords(t *Transaction, trnn int, cur string) [][]byte {
 		put(rec, 58, 62, s.Destination, false)
 		put(rec, 63, 65, s.Carrier, false)
 		put(rec, 66, 66, s.Cabin, false)
-		put(rec, 67, 71, s.Flight, true)
+		put(rec, 67, 71, s.Flight, false)
 		put(rec, 72, 73, s.Class, false)
 		if !s.Departs.IsZero() {
 			put(rec, 74, 80, strings.ToUpper(s.Departs.Format("02Jan06")), false)
