@@ -36,6 +36,8 @@ type Hello struct {
 
 // Link is one open, bidirectional session with a peer.
 type Link struct {
+	// r is the reader the handshake left mid-stream; see newLinkReading.
+	r      *bufio.Reader
 	Peer   string
 	Format string
 
@@ -51,7 +53,16 @@ type Link struct {
 // newLink wires a connection to its outbox. A write failure closes the
 // connection, which ends the read loop, which is how both sides learn.
 func newLink(peer, format string, conn net.Conn, framer Framer, log *slog.Logger) *Link {
-	l := &Link{Peer: peer, Format: format, conn: conn, framer: framer, log: log}
+	return newLinkReading(peer, format, conn, nil, framer, log)
+}
+
+// newLinkReading builds a link that continues reading through r, the
+// buffered reader a handshake already used on conn. Frames a peer sends in
+// the same burst as its hello sit in that buffer; a fresh reader on the
+// connection would never see them, and a frame split across the two would
+// come out as garbage and close the link. Nil r starts a new reader.
+func newLinkReading(peer, format string, conn net.Conn, r *bufio.Reader, framer Framer, log *slog.Logger) *Link {
+	l := &Link{Peer: peer, Format: format, conn: conn, r: r, framer: framer, log: log}
 	l.out = NewOutbox(OutboxDepth, func(raw []byte) error {
 		if err := conn.SetWriteDeadline(time.Now().Add(30 * time.Second)); err != nil {
 			return err
@@ -95,7 +106,10 @@ func (l *Link) Close() error {
 
 // serve reads frames until the connection ends.
 func (l *Link) serve(ctx context.Context, h Handler) {
-	r := bufio.NewReaderSize(l.conn, 64<<10)
+	r := l.r
+	if r == nil {
+		r = bufio.NewReaderSize(l.conn, 64<<10)
+	}
 	for {
 		if ctx.Err() != nil {
 			return
@@ -205,7 +219,7 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	l := newLink(hello.Peer, hello.Format, conn, s.Framer, s.Log)
+	l := newLinkReading(hello.Peer, hello.Format, conn, r, s.Framer, s.Log)
 	s.mu.Lock()
 	if prev := s.links[hello.Peer]; prev != nil {
 		prev.Close()

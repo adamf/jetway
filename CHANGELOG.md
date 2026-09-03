@@ -5,6 +5,18 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.58 — Frames in the hello's burst are kept; congestion clears when the writer has caught up
+- The link server read a peer's hello through a buffered reader and then
+  started a fresh one on the connection, so frames sent in the same burst
+  as the hello were silently lost, and a frame split across the two came
+  out as garbage and closed the link. The link now reads on through the
+  handshake's reader. Found as a one-in-ten failure of the outbox test.
+- An outbox marked congested stays so until its queue is empty, not half
+  drained. Clearing at half left a slowly draining peer flapping, and each
+  flap cost the next sender -- usually a read loop -- a full SendTimeout
+  wait; on the recorded day that was the switch stalling five seconds at
+  a time on every link to a slow distribution system.
+
 ## v0.1.57 — The console shows the fare
 - A record's pricing is on its detail: total, base and taxes in the
   filing's currency, each passenger's fare bases and amount, and the fare

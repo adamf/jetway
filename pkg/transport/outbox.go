@@ -80,7 +80,13 @@ func NewOutbox(depth int, write func(raw []byte) error, onFail func(err error)) 
 					}
 					return
 				}
-				if o.congested.Load() && len(o.q) <= cap(o.q)/2 {
+				// Congestion clears only when the writer has caught up
+				// completely. Clearing at half left a slowly draining peer
+				// flapping between congested and not, and every flap cost
+				// the next sender -- a read loop, usually -- a full
+				// SendTimeout wait; the Linux kernel accepting a frame at a
+				// time from a peer that had stopped reading was enough.
+				if o.congested.Load() && len(o.q) == 0 {
 					o.congested.Store(false)
 				}
 				metrics.Gauge("jetway_outbox_depth", "frames waiting to be written on a link",
