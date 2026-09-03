@@ -92,8 +92,13 @@ func locatorHeld(ctx context.Context, tx pgx.Tx, node, locator string) (bool, er
 }
 
 // partitionRetry is how long a partition that could not be made is left
-// alone before the next write tries again.
-const partitionRetry = 5 * time.Minute
+// alone before the next write tries again; partitionOccupiedRetry is the
+// wait when the default partition holds rows of the day, which only
+// retirement can change.
+const (
+	partitionRetry         = 5 * time.Minute
+	partitionOccupiedRetry = time.Hour
+)
 
 // partitionCreateTimeout bounds one attempt at the catalogue. It is
 // detached from the writer's own deadline: a booking has a second, the
@@ -135,30 +140,55 @@ func (s *Postgres) ensurePartitions(ctx context.Context, days ...time.Time) erro
 	return nil
 }
 
+// errOccupiedDefault is why a daily partition cannot be created: rows of
+// its day already sit in the default partition, and the catalogue refuses
+// a partition whose range they fall in.
+var errOccupiedDefault = errors.New("the default partition holds rows of that day")
+
 func (s *Postgres) createPartitions(key string, day time.Time, done chan struct{}) {
 	ctx, cancel := context.WithTimeout(context.Background(), partitionCreateTimeout)
 	defer cancel()
-	err := s.tx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('jetway_pnr_partitions'))`); err != nil {
-			return err
-		}
-		from, to := day.Format("2006-01-02"), day.AddDate(0, 0, 1).Format("2006-01-02")
-		for _, table := range []string{"pnr", "pnr_event"} {
-			q := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s_p_%s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')`,
-				table, key, table, from, to)
-			if _, err := tx.Exec(ctx, q); err != nil {
+	from, to := day.Format("2006-01-02"), day.AddDate(0, 0, 1).Format("2006-01-02")
+	// Creating a partition makes the catalogue scan the default partition
+	// for rows of the new range, under a lock that stops every reader of
+	// the table for as long as the scan takes. Look first, under a share
+	// lock: if the default partition already holds rows of the day the
+	// creation cannot succeed, and there is no reason to stop the world
+	// to find that out.
+	var occupied bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM ONLY pnr_default WHERE purge_at >= $1::date AND purge_at < $2::date)
+		OR EXISTS (SELECT 1 FROM ONLY pnr_event_default WHERE purge_at >= $1::date AND purge_at < $2::date)`, from, to).Scan(&occupied)
+	if err == nil && occupied {
+		err = errOccupiedDefault
+	}
+	if err == nil {
+		err = s.tx(ctx, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('jetway_pnr_partitions'))`); err != nil {
 				return err
 			}
-		}
-		return nil
-	})
+			for _, table := range []string{"pnr", "pnr_event"} {
+				q := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s_p_%s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')`,
+					table, key, table, from, to)
+				if _, err := tx.Exec(ctx, q); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	retry := partitionRetry
+	if errors.Is(err, errOccupiedDefault) {
+		// Only retirement empties the default partition; asking again in
+		// five minutes would scan it again for nothing.
+		retry = partitionOccupiedRetry
+	}
 	s.parts.mu.Lock()
 	delete(s.parts.pending, key)
 	if err == nil {
 		s.parts.have[key] = true
 		delete(s.parts.failed, key)
 	} else {
-		s.parts.failed[key] = time.Now()
+		s.parts.failed[key] = time.Now().Add(retry - partitionRetry)
 	}
 	s.parts.mu.Unlock()
 	close(done)
@@ -166,7 +196,7 @@ func (s *Postgres) createPartitions(key string, day time.Time, done chan struct{
 		metrics.Counter("jetway_store_partition_failures_total", "daily partitions that could not be created; rows go to the default partition",
 			metrics.Labels{"day": key})
 		slog.Warn("store: partition could not be created; writing to the default partition",
-			"day", key, "err", err, "retry_in", partitionRetry.String())
+			"day", key, "err", err, "retry_in", retry.String())
 	}
 }
 

@@ -5,6 +5,14 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.55 — Look before locking the catalogue
+- Before creating a daily partition the store checks, under a share lock,
+  whether the default partition already holds rows of that day. Creating
+  a partition scans the default partition under a lock that stops every
+  reader; on the recorded day that stalled every query for two minutes
+  every five. An occupied day is not retried for an hour, since only
+  retirement can change it.
+
 ## v0.1.54 — A write survives a partition that cannot be made
 - Daily partition creation runs once per day per process on its own
   two-minute deadline; a writer waits only as long as its own context

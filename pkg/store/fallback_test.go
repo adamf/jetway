@@ -66,4 +66,11 @@ func TestWriteSurvivesAPartitionThatCannotBeMade(t *testing.T) {
 	if !failed {
 		t.Fatal("the failed day should be remembered")
 	}
+	// And no partition was attempted: the occupied default partition was
+	// seen under a share lock, not discovered by a create that would have
+	// stopped every reader while the catalogue scanned it.
+	var made int
+	if err := pg.pool.QueryRow(ctx, `SELECT count(*) FROM pg_inherits WHERE inhparent='pnr'::regclass AND inhrelid::regclass::text = $1`, "pnr_p_"+purgeDay.Format("20060102")).Scan(&made); err != nil || made != 0 {
+		t.Fatalf("no partition should exist for the occupied day: %d %v", made, err)
+	}
 }
