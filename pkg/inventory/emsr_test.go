@@ -1,11 +1,13 @@
 package inventory
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
 
 	"github.com/adamf/jetway/pkg/avail"
+	"github.com/adamf/jetway/pkg/pnr"
 )
 
 // Two classes, checked against the normal table rather than against the
@@ -169,5 +171,58 @@ func TestForecasterMayReadSoldByClassWithoutDeadlock(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("a forecaster reading SoldByClass deadlocked the inventory")
+	}
+}
+
+// Bid-price control: two legs each open to a K passenger on its own, but
+// a connecting passenger paying a through fare below the two legs' bid
+// prices is refused, while a local K passenger on either leg still sells,
+// and an unpriced connecting record is left to the ladders.
+func TestBidPriceControlRefusesAThroughFareBelowTheDisplacement(t *testing.T) {
+	cap := func(carrier, flight, date, board string) (map[string]int, bool) {
+		if carrier == "WN" && (flight == "10" || flight == "20") {
+			return map[string]int{"Y": 100}, true
+		}
+		return nil, false
+	}
+	inv := New("WN", cap)
+	ctl := &Controller{Capacity: cap, Forecast: func(carrier, flight, date, board, comp string, seats int) []ClassDemand {
+		// Full-fare demand alone nearly fills the cabin: K is shut on both
+		// legs and M has a handful of seats, so the cheapest open class is
+		// M at 20000 and the bid price per leg 20000.
+		return []ClassDemand{{Class: "Y", Fare: 40000, Mean: 95, StdDev: 3}, {Class: "M", Fare: 20000, Mean: 20, StdDev: 3}, {Class: "K", Fare: 9000, Mean: 40, StdDev: 5}}
+	}}
+	inv.Levels = ctl.Levels
+	inv.Network = ctl
+	leg := func(ref int, flight, board, off string) pnr.Segment {
+		return pnr.Segment{Ref: ref, Type: pnr.SegmentAir, Carrier: "WN", FlightNum: flight, WireDate: "26NOV", Board: board, Off: off, Class: "M", Status: "HN", Seats: 1}
+	}
+	// A connecting M passenger paying a through fare of 30000 for two legs
+	// each worth 20000 at the margin: refused on both.
+	through := &pnr.PNR{Segments: []pnr.Segment{leg(1, "10", "BNA", "MDW"), leg(2, "20", "MDW", "LGA")},
+		Passengers: []pnr.Passenger{{Ref: 1, Surname: "THRU", Given: "A"}},
+		Pricing:    &pnr.Pricing{Passengers: []pnr.PassengerPricing{{Ref: 1, Segments: []int64{15000, 15000}}}}}
+	out, err := inv.Decide(context.Background(), through, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out[through.Segments[0].Key()] != "UC" || out[through.Segments[1].Key()] != "UC" {
+		t.Errorf("a through fare below the bid prices should be refused: %v", out)
+	}
+	// The same passenger paying 45000 clears the bar.
+	through.Pricing.Passengers[0].Segments = []int64{25000, 20000}
+	out, _ = inv.Decide(context.Background(), through, nil)
+	if out[through.Segments[0].Key()] != "KK" || out[through.Segments[1].Key()] != "KK" {
+		t.Errorf("a through fare covering the bid prices should sell: %v", out)
+	}
+	// A local M passenger on one leg is a leg decision, no bid test.
+	local := &pnr.PNR{Segments: []pnr.Segment{leg(1, "10", "BNA", "MDW")}}
+	if out, _ := inv.Decide(context.Background(), local, nil); out[local.Segments[0].Key()] != "KK" {
+		t.Errorf("a local passenger sells on the ladder: %v", out)
+	}
+	// An unpriced connecting record cannot be valued: the ladders decide.
+	unpriced := &pnr.PNR{Segments: []pnr.Segment{leg(1, "10", "BNA", "MDW"), leg(2, "20", "MDW", "LGA")}}
+	if out, _ := inv.Decide(context.Background(), unpriced, nil); out[unpriced.Segments[0].Key()] != "KK" {
+		t.Errorf("unpriced record: %v", out)
 	}
 }

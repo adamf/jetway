@@ -77,6 +77,11 @@ type Inventory struct {
 	// Levels, when set, is the class ladder revenue management publishes
 	// per cabin; nil sells every class to the last seat.
 	Levels Levels
+	// Network, when set, adds bid-price control over the ladders: a record
+	// asking for two or more of this carrier's legs at once is accepted
+	// only when its fare for them covers the sum of the legs' bid prices
+	// (see network.go). Unpriced records are left to the ladders alone.
+	Network *Controller
 
 	mu         sync.Mutex
 	sold       map[string]int // carrier/flight/date/board/compartment
@@ -190,14 +195,43 @@ func (inv *Inventory) classOpen(ladder []Level, carrier, flight, date, board, co
 func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer) (map[string]string, error) {
 	// Revenue management's ladders first, outside the lock (see ladderFor).
 	ladders := map[string][]Level{}
-	for _, s := range p.Segments {
+	fares := map[string]map[string]float64{}
+	var asked []*pnr.Segment
+	for i := range p.Segments {
+		s := &p.Segments[i]
 		if s.Type == pnr.SegmentAir && awaitingDecision(s.Status) && (inv.Carrier == "" || s.Carrier == inv.Carrier) {
 			ladders[s.Key()] = inv.ladderFor(s.Carrier, s.FlightNum, s.WireDate, s.Board, s.Class)
+			asked = append(asked, s)
+			if inv.Network != nil {
+				if _, comp, _, ok := inv.cabin(s.Carrier, s.FlightNum, s.WireDate, s.Board, s.Class); ok {
+					l, f := inv.Network.LadderFares(s.Carrier, s.FlightNum, s.WireDate, s.Board, comp)
+					ladders[s.Key()], fares[s.Key()] = l, f
+				}
+			}
 		}
 	}
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
 	out := map[string]string{}
+	// Bid-price control for a connecting itinerary: the record's fare for
+	// this carrier's legs must cover what the legs' last seats are worth.
+	displaced := false
+	if inv.Network != nil && len(asked) >= 2 {
+		if fare, ok := itineraryFare(p, asked); ok {
+			var bid float64
+			for _, s := range asked {
+				key, comp, _, ok := inv.cabin(s.Carrier, s.FlightNum, s.WireDate, s.Board, s.Class)
+				if !ok {
+					continue
+				}
+				_ = comp
+				if b, ok := inv.bidPrice(ladders[s.Key()], fares[s.Key()], key); ok {
+					bid += b * float64(max(s.Seats, 1))
+				}
+			}
+			displaced = bid > 0 && fare < bid
+		}
+	}
 	for _, s := range p.Segments {
 		if s.Type != pnr.SegmentAir || (inv.Carrier != "" && s.Carrier != inv.Carrier) {
 			continue
@@ -210,7 +244,10 @@ func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer
 			inv.commit(s, forced)
 			continue
 		}
-		if inv.ClosedClasses[s.Class] {
+		if inv.ClosedClasses[s.Class] || displaced {
+			// Displaced: the through fare does not cover the seats it
+			// would take from higher-paying local passengers. Unable, not
+			// waitlisted; the seats exist and are being held.
 			out[s.Key()] = "UC"
 			continue
 		}
