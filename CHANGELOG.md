@@ -5,6 +5,14 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.65 — An aircraft substitution at departure control
+- `Station.ChangeEquipment` rebuilds an open flight's cabin from a new
+  aircraft type: every accepted or boarded passenger keeps their seat if
+  the new cabin has it in the same compartment, is re-seated in their
+  compartment if not, and goes to standby -- denied boarding, with an
+  alert -- when the smaller aircraft has no seat left. Boarded first, then
+  by sequence. A closed flight cannot change aircraft.
+
 ## v0.1.64 — Advance passenger information
 - `pkg/paxlst`: the UN/EDIFACT PAXLST an airline sends a border control
   agency, built and parsed to the public WCO/IATA/ICAO implementation guide
