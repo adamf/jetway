@@ -28,6 +28,7 @@ import (
 	"github.com/adamf/jetway/pkg/iatci"
 	"github.com/adamf/jetway/pkg/metrics"
 	"github.com/adamf/jetway/pkg/padis"
+	"github.com/adamf/jetway/pkg/paxlst"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/queue"
 	"github.com/adamf/jetway/pkg/ssim"
@@ -166,6 +167,9 @@ type Gateway struct {
 	// answers to requests this node made.
 	ThroughCheckIn          ThroughCheckInHandler
 	ThroughCheckInResponses func(ctx context.Context, peer *Peer, res *iatci.CheckInResponse)
+	// APIS hears advance passenger information lists sent to this node,
+	// when it stands for a border control agency.
+	APIS func(ctx context.Context, peer *Peer, list *paxlst.Message)
 
 	// Now, when set, replaces the wall clock. Every timestamp this gateway
 	// stamps -- records, events, messages, references -- comes through it, so
@@ -606,6 +610,9 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 	}
 	if dec.ThroughCheckInResponse != nil {
 		return g.applyThroughCheckInResponse(ctx, peer, msg, dec, res)
+	}
+	if dec.PAXLST != nil {
+		return g.applyPAXLST(ctx, peer, msg, dec, res)
 	}
 
 	// A partner telling us what they made of something we sent.

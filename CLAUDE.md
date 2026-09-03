@@ -24,6 +24,7 @@ about which layer is which.
 | `pkg/acars` | **Inferred, closely.** ARINC 620 is sold; OAG publishes the element table and verbatim OOOI examples this package is built and tested against. |
 | `pkg/dcs` load control | **Method specified, data representative.** The AHM 560/565 index arithmetic is the published method; `DefaultFleet` is rounded type-class data, not any operator's. |
 | `pkg/fare` | **Structure inferred, data none.** Fare basis, rules, taxes and pricing follow how ATPCO filings and tickets work; the filings themselves are licensed and the package carries no fare. Callers supply a tariff. |
+| `pkg/paxlst` | **Specified.** The WCO/IATA/ICAO PAXLST implementation guide is public; the package follows its segment tables and is tested against its worked examples verbatim. SSR DOCS layout is inferred from published entry formats. |
 | `pkg/iatci` | **Inferred, closely.** DCQCKI/DCRCKA and their segments follow the PADIS release 01.1 structures as mirrored publicly by EDI schema vendors, element by element; the IATCI Implementation Guide (members only) was not consulted, so usage is this package's profile. |
 | `pkg/inventory` | **Method specified.** Serial nested class authorisations are the textbook leg-based inventory control; the numbers are the caller's. |
 

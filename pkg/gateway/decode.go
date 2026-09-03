@@ -19,6 +19,7 @@ import (
 	"github.com/adamf/jetway/pkg/iatci"
 	"github.com/adamf/jetway/pkg/mvt"
 	"github.com/adamf/jetway/pkg/padis"
+	"github.com/adamf/jetway/pkg/paxlst"
 	"github.com/adamf/jetway/pkg/pnl"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/ssim"
@@ -104,6 +105,9 @@ type decoded struct {
 	// ours made.
 	ThroughCheckIn         *iatci.CheckInRequest
 	ThroughCheckInResponse *iatci.CheckInResponse
+	// PAXLST is an advance passenger information list, when this node is
+	// the agency it was sent to.
+	PAXLST *paxlst.Message
 
 	peer *Peer
 	// self is the receiving node's designator.
@@ -212,6 +216,16 @@ func (g *Gateway) decodeEDIFACT(peer *Peer, raw []byte, opts IngestOptions) (*de
 	d.Kind = d.Edifact.ID().Type
 	d.Test = ic.TestIndicator()
 	d.Interchange = ic
+
+	// A passenger list for a border agency is about a flight, not a record.
+	if paxlst.IsPAXLST(d.Edifact) {
+		pl, err := paxlst.Parse(d.Edifact)
+		if err != nil {
+			return nil, fmt.Errorf("gateway: %w", err)
+		}
+		d.PAXLST = pl
+		return d, nil
+	}
 
 	// Through check-in is between two departure-control systems and touches
 	// no record here; it branches before the record grammar too.
