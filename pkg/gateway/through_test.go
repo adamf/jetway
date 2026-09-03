@@ -14,8 +14,8 @@ import (
 func TestThroughCheckInMapsWireToStationAndBack(t *testing.T) {
 	req := &iatci.CheckInRequest{
 		Requestor: "BA", RequestorStation: "LHR",
-		Inbound:  iatci.Flight{Carrier: "BA", Number: "0117", Date: time.Date(2025, 12, 16, 8, 30, 0, 0, time.UTC), Board: "LHR", Off: "JFK"},
-		Outbound: iatci.Flight{Carrier: "AA", Number: "0100", Date: time.Date(2025, 12, 16, 14, 0, 0, 0, time.UTC), Board: "JFK", Off: "DFW"},
+		Inbound:    iatci.Flight{Carrier: "BA", Number: "0117", Date: time.Date(2025, 12, 16, 8, 30, 0, 0, time.UTC), Board: "LHR", Off: "JFK"},
+		Outbound:   iatci.Flight{Carrier: "AA", Number: "0100", Date: time.Date(2025, 12, 16, 14, 0, 0, 0, time.UTC), Board: "JFK", Off: "DFW"},
 		Passengers: []iatci.Passenger{{Ref: "P1", Surname: "SMITH", Given: "JANE", Locator: "ABC123", SeatWant: "14C", Pieces: 2, Weight: 31}},
 	}
 	tr := throughRequestOf(req)
