@@ -268,3 +268,36 @@ func TestNetworkBidPricesSolveTheTwoLegExample(t *testing.T) {
 		t.Error("an unbounded programme must say so")
 	}
 }
+
+// The network's own bid prices, when the controller has them, replace the
+// ladder's displacement cost: the same through passenger the ladders
+// refuse sells when the programme says the legs are cheap, and one the
+// ladders would sell is refused when the programme says they are dear.
+func TestControllerBidPricesOverrideTheLadders(t *testing.T) {
+	cap := func(carrier, flight, date, board string) (map[string]int, bool) {
+		return map[string]int{"Y": 100}, true
+	}
+	inv := New("WN", cap)
+	price := 1000.0
+	ctl := &Controller{Capacity: cap, Forecast: func(carrier, flight, date, board, comp string, seats int) []ClassDemand {
+		return []ClassDemand{{Class: "Y", Fare: 40000, Mean: 95, StdDev: 3}, {Class: "M", Fare: 20000, Mean: 20, StdDev: 3}, {Class: "K", Fare: 9000, Mean: 40, StdDev: 5}}
+	}, BidPrice: func(carrier, flight, date, board, comp string) (float64, bool) { return price, true }}
+	inv.Levels = ctl.Levels
+	inv.Network = ctl
+	leg := func(ref int, flight, board, off string) pnr.Segment {
+		return pnr.Segment{Ref: ref, Type: pnr.SegmentAir, Carrier: "WN", FlightNum: flight, WireDate: "26NOV", Board: board, Off: off, Class: "M", Status: "HN", Seats: 1}
+	}
+	through := &pnr.PNR{Segments: []pnr.Segment{leg(1, "10", "BNA", "MDW"), leg(2, "20", "MDW", "LGA")},
+		Passengers: []pnr.Passenger{{Ref: 1, Surname: "THRU", Given: "A"}},
+		Pricing:    &pnr.Pricing{Passengers: []pnr.PassengerPricing{{Ref: 1, Segments: []int64{15000, 15000}}}}}
+	out, _ := inv.Decide(context.Background(), through, nil)
+	if out[through.Segments[0].Key()] != "KK" {
+		t.Errorf("legs worth 1000 each under the programme: 30000 should sell, got %v", out)
+	}
+	price = 25000
+	through.Pricing.Passengers[0].Segments = []int64{25000, 20000}
+	out, _ = inv.Decide(context.Background(), through, nil)
+	if out[through.Segments[0].Key()] != "UC" {
+		t.Errorf("legs worth 25000 each: 45000 should be refused, got %v", out)
+	}
+}

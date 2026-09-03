@@ -97,6 +97,12 @@ type Forecast func(carrier, flightNum, wireDate, board, compartment string, seat
 type Controller struct {
 	Capacity Capacity
 	Forecast Forecast
+	// BidPrice, when set, values a cabin's marginal seat for network
+	// control in place of the ladder's displacement cost: the caller's
+	// network programme (NetworkBidPrices) supplies the leg duals, and
+	// the additive ladder heuristic is the fallback whenever it answers
+	// false. It is consulted before the inventory lock is taken.
+	BidPrice func(carrier, flightNum, wireDate, board, compartment string) (float64, bool)
 }
 
 // Levels is the ladder for a cabin now, or nil when the flight or the

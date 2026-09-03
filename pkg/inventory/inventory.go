@@ -196,6 +196,7 @@ func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer
 	// Revenue management's ladders first, outside the lock (see ladderFor).
 	ladders := map[string][]Level{}
 	fares := map[string]map[string]float64{}
+	netBids := map[string]float64{}
 	var asked []*pnr.Segment
 	for i := range p.Segments {
 		s := &p.Segments[i]
@@ -206,6 +207,11 @@ func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer
 				if _, comp, _, ok := inv.cabin(s.Carrier, s.FlightNum, s.WireDate, s.Board, s.Class); ok {
 					l, f := inv.Network.LadderFares(s.Carrier, s.FlightNum, s.WireDate, s.Board, comp)
 					ladders[s.Key()], fares[s.Key()] = l, f
+					if inv.Network.BidPrice != nil {
+						if b, ok := inv.Network.BidPrice(s.Carrier, s.FlightNum, s.WireDate, s.Board, comp); ok {
+							netBids[s.Key()] = b
+						}
+					}
 				}
 			}
 		}
@@ -225,6 +231,10 @@ func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer
 					continue
 				}
 				_ = comp
+				if b, ok := netBids[s.Key()]; ok {
+					bid += b * float64(max(s.Seats, 1))
+					continue
+				}
 				if b, ok := inv.bidPrice(ladders[s.Key()], fares[s.Key()], key); ok {
 					bid += b * float64(max(s.Seats, 1))
 				}
