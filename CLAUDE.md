@@ -28,6 +28,7 @@ about which layer is which.
 | `pkg/iatci` | **Inferred, closely.** DCQCKI/DCRCKA and their segments follow the PADIS release 01.1 structures as mirrored publicly by EDI schema vendors, element by element; the IATCI Implementation Guide (members only) was not consulted, so usage is this package's profile. |
 | `pkg/inventory` | **Method specified.** Serial nested class authorisations are the textbook leg-based inventory control, and EMSR-b (Belobaba; Talluri and van Ryzin ch. 2) sets them from a forecast; the numbers are the caller's. The EMSR-b tests check against the normal table, not the code. |
 | `pkg/bsp` | **Specified.** IATA publishes the BSP Data Interchange Specifications Handbook (DISH 23) free; the HOT records follow its chapter 6 layouts column by column, amounts are signed by its over-punch table and add up by its section 6.7, all tested against the handbook's own figures. Net reporting, card data and tax on commission are left to bilateral schemes and not implemented. |
+| `pkg/prorate` | **Method public, provisos not.** Straight rate proration by mileage is the arithmetic every prorate manual starts from; the Prorate Manual's minima, factors and special agreements are sold and not reproduced. The service charge rate is the caller's. |
 
 When you implement something in the inferred category, say so in the package
 doc, make it an extensible `Profile`, and keep unrecognised input verbatim.
