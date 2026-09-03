@@ -307,3 +307,8 @@ func recordAttempt(peer string, err error) {
 	metrics.Counter("jetway_egress_attempts_total", "outbound delivery attempts",
 		metrics.Labels{"peer": peer, "result": result})
 }
+
+// FramerFor is the framer a framing configuration names, for callers that
+// hold a link of their own -- the node's dialled links -- rather than an
+// egress built here.
+func FramerFor(f config.Framing) (transport.Framer, error) { return framerFor(f) }

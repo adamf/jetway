@@ -14,6 +14,7 @@ import (
 	"github.com/adamf/jetway/pkg/metrics"
 	"github.com/adamf/jetway/pkg/spool"
 	"github.com/adamf/jetway/pkg/store"
+	"github.com/adamf/jetway/pkg/transport"
 )
 
 func openStore(ctx context.Context, cfg *config.Config, log *slog.Logger) (store.Store, error) {
@@ -162,7 +163,13 @@ func (n *Node) registerPeer(p config.Peer) error {
 		TTYAddress: p.TTYAddress, Addresses: p.Addresses, CONTRL: p.CONTRL,
 		ICAO: p.ICAO, AFTN: p.AFTN,
 	})
-	s, err := egress.BuildWith(p, sessions, router, log)
+	var s egress.Sender
+	var err error
+	if p.Egress.Type == "link_dial" {
+		s, err = n.dialLink(p)
+	} else {
+		s, err = egress.BuildWith(p, sessions, router, log)
+	}
 	if err != nil {
 		return err
 	}
@@ -170,6 +177,36 @@ func (n *Node) registerPeer(p config.Peer) error {
 	log.Info("peer configured", "name", p.Name, "carrier", p.Carrier,
 		"format", p.Format, "egress", s.Describe())
 	return nil
+}
+
+// dialLink builds the persistent link this node holds open to a peer: it
+// dials the peer's listener, says who it is, and reads what comes back as
+// that peer's traffic through the same handler every listener uses, so a
+// message that arrives down a trunk is captured, decoded and routed like
+// one that arrived on a circuit the peer dialled. The link is started with
+// the listeners, when this node holds the lease.
+func (n *Node) dialLink(p config.Peer) (egress.Sender, error) {
+	framer, err := egress.FramerFor(p.Egress.Framing)
+	if err != nil {
+		return nil, err
+	}
+	handler := n.Handler()
+	name := p.Name
+	c := &transport.Client{
+		Addr:   p.Egress.Addr,
+		Hello:  transport.Hello{Peer: n.Config.Identity.Designator, Role: p.Egress.Role, Format: p.Format},
+		Framer: framer,
+		Log:    n.Log.With("link", name),
+		OnMessage: func(ctx context.Context, _ string, raw []byte) error {
+			_, err := handler(ctx, ingress.Message{Peer: name, Transport: "link_dial", Remote: p.Egress.Addr, Raw: raw})
+			return err
+		},
+	}
+	n.links[name] = c
+	return egress.SenderFunc{
+		Fn:   func(ctx context.Context, raw []byte) error { return c.Send(ctx, name, raw) },
+		Desc: "link to " + p.Egress.Addr,
+	}, nil
 }
 
 // makeHandler builds the function every ingress calls.

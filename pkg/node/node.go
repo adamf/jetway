@@ -28,6 +28,7 @@ import (
 	"github.com/adamf/jetway/pkg/queue"
 	"github.com/adamf/jetway/pkg/spool"
 	"github.com/adamf/jetway/pkg/store"
+	"github.com/adamf/jetway/pkg/transport"
 )
 
 // Node is an assembled gateway: store, links, queues, sweeper and console.
@@ -62,6 +63,11 @@ type Node struct {
 	// in one process -- which is what the load harness builds -- must not share
 	// each other's sessions.
 	matip map[string]*ingress.MATIP
+	// links are the circuits this node holds open itself (link_dial
+	// egress): a trunk to another switch, or a carrier's link to its
+	// switch. They come up with the listeners and count as live peers
+	// while connected.
+	links map[string]*transport.Client
 }
 
 // Options are the knobs the scenario suite needs and jetwayd does not.
@@ -95,7 +101,7 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Optio
 	}
 
 	n := &Node{Config: cfg, Log: log, Store: st, Bus: gateway.NewBus(400),
-		matip: map[string]*ingress.MATIP{}}
+		matip: map[string]*ingress.MATIP{}, links: map[string]*transport.Client{}}
 
 	if cfg.Spool.Enabled {
 		if n.Spool, err = spool.Open(cfg.Spool.Dir); err != nil {
@@ -232,6 +238,15 @@ func (n *Node) bindListeners(ctx context.Context) {
 			}
 		}()
 		n.Log.Info("ingress listening", "name", in.Name(), "addr", in.Addr())
+	}
+	for name, c := range n.links {
+		name, c := name, c
+		go func() {
+			if err := c.Run(ctx); err != nil && ctx.Err() == nil {
+				n.Log.Error("link stopped", "peer", name, "err", err)
+			}
+		}()
+		n.Log.Info("link dialling", "peer", name, "addr", c.Addr, "role", c.Hello.Role)
 	}
 }
 
@@ -423,6 +438,11 @@ func (n *Node) LivePeers() []string {
 	}
 	for _, m := range n.matip {
 		add(m.Peers())
+	}
+	for name, c := range n.links {
+		if c.Connected() {
+			add([]string{name})
+		}
 	}
 	// The router's peer list is configuration, not liveness: senders are
 	// registered at boot and never unregistered, so including them here made

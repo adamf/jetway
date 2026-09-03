@@ -229,10 +229,18 @@ type MATIP struct {
 
 // Egress is how replies and requests reach a peer.
 type Egress struct {
-	// Type is "tcp_dial", "tcp_accept", "https_post", "filedrop" or "via".
+	// Type is "tcp_dial", "tcp_accept", "link_dial", "https_post",
+	// "filedrop" or "via".
 	//
 	// "tcp_accept" means the peer connects to us and we reply on that session,
 	// which is the common arrangement when we host the listener.
+	//
+	// "link_dial" means we hold the circuit open to the peer: a persistent
+	// framed link this node dials, identifies itself on with the hello, and
+	// reads as well as writes, so what the peer sends down it is ingested
+	// as that peer's traffic. It is how one switch trunks to another, and
+	// how a carrier node reaches its switch when the switch hosts the
+	// listener. Where tcp_dial is a one-way delivery, link_dial is a link.
 	//
 	// "via" means this peer is reached through another peer's link, named in
 	// Via. This is how the real network is wired: a carrier does not hold a
@@ -245,6 +253,10 @@ type Egress struct {
 	// egress type "via".
 	Via  string `yaml:"via"`
 	Addr string `yaml:"addr"`
+	// Role is what a link_dial announces itself as in the hello: "switch"
+	// for a trunk between switches, "carrier" for a carrier's link to its
+	// switch. Default "node".
+	Role string `yaml:"role"`
 	URL  string `yaml:"url"`
 	Dir  string `yaml:"dir"`
 
@@ -595,6 +607,20 @@ func (e *Egress) validate(peer string) error {
 		if err := e.Framing.validate("peer " + peer + " egress"); err != nil {
 			return err
 		}
+	case "link_dial":
+		if e.Addr == "" {
+			return fmt.Errorf("config: peer %q egress needs an addr", peer)
+		}
+		if err := e.Framing.validate("peer " + peer + " egress"); err != nil {
+			return err
+		}
+		if e.Role == "" {
+			e.Role = "node"
+		}
+	case "via":
+		if e.Via == "" {
+			return fmt.Errorf("config: peer %q egress needs the peer it is reached via", peer)
+		}
 	case "https_post":
 		if e.URL == "" {
 			return fmt.Errorf("config: peer %q egress needs a url", peer)
@@ -604,7 +630,7 @@ func (e *Egress) validate(peer string) error {
 			return fmt.Errorf("config: peer %q egress needs a dir", peer)
 		}
 	default:
-		return fmt.Errorf("config: peer %q: egress.type must be tcp_accept, tcp_dial, https_post or filedrop, got %q",
+		return fmt.Errorf("config: peer %q: egress.type must be tcp_accept, tcp_dial, link_dial, via, https_post or filedrop, got %q",
 			peer, e.Type)
 	}
 	if e.Retry.MaxAttempts == 0 {

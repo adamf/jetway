@@ -373,6 +373,13 @@ func (c *Client) session(ctx context.Context) error {
 	return nil
 }
 
+// Connected reports whether the link is up right now.
+func (c *Client) Connected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.link != nil
+}
+
 // Send writes a message on the current link.
 func (c *Client) Send(ctx context.Context, peer string, raw []byte) error {
 	c.mu.Lock()

@@ -419,7 +419,7 @@ where this is wrong, that is the single most useful contribution available.
 | `pkg/iatci` | Inter-airline through check-in: the DCQCKI/DCRCKA dialogue by which one carrier's DCS checks a connecting passenger in on another's flight |
 | `pkg/irops` | Irregular operations: the engine that works the schedule-change queue, rebooking a cancelled flight's passengers onto the next seat over the same city pair |
 | `pkg/ingress` | MATIP, HTTPS, TCP and file-drop listeners, and peer identity |
-| `pkg/egress` | Outbound delivery with backoff and restart recovery |
+| `pkg/egress` | Outbound delivery with backoff and restart recovery; `link_dial` holds a bidirectional framed link open to another node, which is how one switch trunks to another |
 | `pkg/spool` | Durable write-ahead buffer for inbound messages |
 | `pkg/config` | Deployment configuration |
 | `pkg/metrics` | Prometheus exposition, no client library |

@@ -804,6 +804,16 @@ func (g *Gateway) relay(ctx context.Context, from *Peer, msg *store.Message, dec
 			forUs = true
 			continue
 		}
+		if normaliseAddress(addr) == origin {
+			// Wherever the origin's link is from here -- the arrival link,
+			// or another switch across a trunk -- a message is not carried
+			// back to the address it came from. Across a trunk that copy
+			// would come back to the sender's own switch, which would
+			// deliver it to them: a loop of one bounce, but a bounce.
+			g.trace(msg.ID, "relay", "skipping "+addr+": it is the message's own origin")
+			reflected++
+			continue
+		}
 		if p := g.PeerByAddress(addr); p != nil && p.Name == from.Name {
 			if normaliseAddress(addr) == origin {
 				// Addressed back to where it came from. Never reflect it.
