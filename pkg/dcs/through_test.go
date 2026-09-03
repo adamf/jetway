@@ -61,6 +61,11 @@ func TestThroughCheckInAcceptsWhatIsListedAndRefusesTheRest(t *testing.T) {
 	if third.Granted || third.Outcomes[0].Reason != ThroughRefusedNotFound {
 		t.Fatalf("nobody of that name is left to accept: %+v", third.Outcomes)
 	}
+	// The requesting carrier's own locator means nothing here; the name does.
+	foreign, _ := s.ThroughCheckIn(ctx, ThroughRequest{Key: testKey, Passengers: []ThroughPassenger{{Ref: "P9", Surname: "OKAFOR", Locator: "ZZ9ZZ9"}}})
+	if !foreign.Granted || !foreign.Outcomes[0].Accepted {
+		t.Fatalf("a name under a foreign locator is still the passenger: %+v", foreign.Outcomes)
+	}
 	// A flight not under control refuses the whole party with the flight code.
 	none, _ := s.ThroughCheckIn(ctx, ThroughRequest{Key: Key{Flight: "BA0999", Date: "16DEC", Board: "LHR"}, Passengers: req.Passengers})
 	if none.Granted || len(none.Outcomes) != 2 || none.Outcomes[1].Reason != ThroughRefusedFlight {

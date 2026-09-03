@@ -100,25 +100,14 @@ func (s *Station) ThroughCheckIn(ctx context.Context, req ThroughRequest) (*Thro
 	}
 	for _, tp := range req.Passengers {
 		out := ThroughOutcome{Ref: tp.Ref, Surname: tp.Surname, Given: tp.Given}
-		// Find the one passenger of that name under that locator who is not
-		// yet accepted, so a party's second name does not resolve to the
-		// first name already seated.
-		pid := 0
-		for _, p := range fl.Passengers {
-			if tp.Locator != "" && p.Locator != strings.ToUpper(tp.Locator) {
-				continue
-			}
-			if !strings.EqualFold(p.Surname, tp.Surname) {
-				continue
-			}
-			if tp.Given != "" && p.Given != "" && !strings.EqualFold(p.Given, tp.Given) {
-				continue
-			}
-			if p.Status != StatusListed && p.Status != StatusStandby {
-				continue
-			}
-			pid = p.ID
-			break
+		// Find the one passenger of that name who is not yet accepted, so a
+		// party's second name does not resolve to the first name already
+		// seated. The locator narrows the search when it is ours; the
+		// requesting carrier usually holds its own, not ours, and a name
+		// that matches under no locator is still the passenger.
+		pid := findListed(fl, tp.Locator, tp.Surname, tp.Given)
+		if pid == 0 && tp.Locator != "" {
+			pid = findListed(fl, "", tp.Surname, tp.Given)
 		}
 		if pid == 0 {
 			out.Reason, out.Text = ThroughRefusedNotFound, "passenger not on the name list"
@@ -224,4 +213,25 @@ func (s *Station) RecordOnward(ctx context.Context, k Key, passengerID int, seat
 	p.Onward.Seat, p.Onward.Sequence, p.Onward.Refused = seat, sequence, refused
 	f.Revision++
 	return s.store().SaveFlight(ctx, f)
+}
+
+// findListed is the id of the first listed or standby passenger matching a
+// locator (when given), surname and given name (when both sides have one).
+func findListed(fl *Flight, locator, surname, given string) int {
+	for _, p := range fl.Passengers {
+		if locator != "" && p.Locator != strings.ToUpper(locator) {
+			continue
+		}
+		if !strings.EqualFold(p.Surname, surname) {
+			continue
+		}
+		if given != "" && p.Given != "" && !strings.EqualFold(p.Given, given) {
+			continue
+		}
+		if p.Status != StatusListed && p.Status != StatusStandby {
+			continue
+		}
+		return p.ID
+	}
+	return 0
 }

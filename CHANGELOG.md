@@ -5,6 +5,12 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.63 — Through check-in matches the name when the locator is not ours
+- `Station.ThroughCheckIn` falls back from locator-and-surname to surname
+  and given name: the requesting carrier holds its own locator for the
+  booking, not the receiving carrier's, and the first end-to-end run
+  refused every passenger for it.
+
 ## v0.1.62 — Through check-in answers find their way back
 - A DCRCKA is addressed to the UNB sender of the request, so through a
   switch it reaches the requesting carrier rather than the network; a
