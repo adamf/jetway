@@ -2,6 +2,7 @@ package airimp
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,7 +73,7 @@ func Apply(p *pnr.PNR, m *Message, opts ApplyOptions) []Change {
 				Code: el.Code, Carrier: el.Carrier, Status: string(el.Action),
 				Count: el.Count, Text: el.FreeText, Sensitive: el.Sensitive(),
 			}
-			if seg := p.SegmentByKey(itineraryKey(el.Itinerary)); seg != nil {
+			if seg := segmentByItinerary(p, el.Itinerary); seg != nil {
 				s.SegmentRef = seg.Ref
 			}
 			if i := updateSSR(p, s); i >= 0 {
@@ -80,6 +81,11 @@ func Apply(p *pnr.PNR, m *Message, opts ApplyOptions) []Change {
 			} else {
 				p.SSRs = append(p.SSRs, s)
 				add("add_ssr", "%s %s%d", el.Code, el.Action, el.Count)
+			}
+			if el.Code == "TKNE" {
+				if t, c, ok := applyTKNE(p, el, s.SegmentRef); ok {
+					add("ticket", "%s coupon %d", t, c)
+				}
 			}
 
 		case *OSI:
@@ -329,6 +335,32 @@ func updateSSR(p *pnr.PNR, s pnr.SSR) int {
 
 // itineraryKey converts an SSR itinerary reference (LHRJFK0175Y15JUN) into the
 // segment key form, so an SSR can be tied to the segment it applies to.
+// segmentByItinerary finds the held segment an SSR's itinerary reference
+// (LHRJFK0175Y15JUN) names: board, off, flight, class and date, with the
+// flight compared without leading zeros. It does not compare the carrier,
+// which the reference does not carry -- matching on the segment's full
+// key, carrier included, never matched anything, so no SSR ever knew its
+// segment.
+func segmentByItinerary(p *pnr.PNR, itin string) *pnr.Segment {
+	key := itineraryKey(itin)
+	if key == "" {
+		return nil
+	}
+	parts := strings.Split(key, "|")
+	flight, class, date, board, off := strings.TrimLeft(parts[1], "0"), parts[2], parts[3], parts[4], parts[5]
+	for i := range p.Segments {
+		s := &p.Segments[i]
+		if s.Type != pnr.SegmentAir || strings.TrimLeft(s.FlightNum, "0") != flight || s.Class != class || s.Board != board || s.Off != off {
+			continue
+		}
+		if !strings.EqualFold(s.WireDate, date) && !strings.EqualFold(pnr.FormatDate(s.Depart), date) {
+			continue
+		}
+		return s
+	}
+	return nil
+}
+
 func itineraryKey(itin string) string {
 	if len(itin) < 12 {
 		return ""
@@ -351,6 +383,125 @@ func contactType(text string) string {
 		return "phone"
 	}
 	return "other"
+}
+
+// BuildTicketAdvice tells a carrier the ticket numbers issued against its
+// segments: one SSR TKNE per coupon, each with the flight it covers, the
+// document number and coupon, and the traveller it belongs to, plus the
+// record locators. This is how a carrier on a teletype link learns that a
+// booking is ticketed; ticket control (TKCREQ) is the EDIFACT equivalent.
+// The element's shape -- itinerary reference, then /document number and
+// coupon, then the name association -- is the one reservations systems
+// print; the AIRIMP manual is not free, so it is this package's profile.
+func BuildTicketAdvice(p *pnr.PNR, carrier string, t pnr.Ticket) string {
+	var els []Element
+	var pax *pnr.Passenger
+	for i := range p.Passengers {
+		if p.Passengers[i].Ref == t.PaxRef {
+			pax = &p.Passengers[i]
+		}
+	}
+	for _, c := range t.Coupons {
+		var seg *pnr.Segment
+		for i := range p.Segments {
+			if p.Segments[i].Ref == c.SegmentRef {
+				seg = &p.Segments[i]
+			}
+		}
+		if seg == nil || seg.Type != pnr.SegmentAir {
+			continue
+		}
+		op := seg.OperatingCarrier
+		if op == "" {
+			op = seg.Carrier
+		}
+		if op != carrier && seg.Carrier != carrier {
+			continue
+		}
+		ssr := &SSR{Code: "TKNE", Carrier: carrier, Action: "HK", Count: 1,
+			Itinerary: seg.Board + seg.Off + seg.FlightNum + seg.Class + seg.WireDate,
+			FreeText:  "/" + t.Number.AirlineCode + t.Number.Serial + "C" + strconv.Itoa(c.Number)}
+		if pax != nil {
+			ssr.NameRef = "-1" + pax.Surname + "/" + pax.Given + pax.Title
+		}
+		els = append(els, ssr)
+	}
+	if len(els) == 0 {
+		return ""
+	}
+	if pax != nil {
+		els = append([]Element{&Name{Count: 1, Surname: pax.Surname, Givens: []string{pax.Given + pax.Title}, Infant: pax.Infant}}, els...)
+	}
+	if p.RecordLocator != "" {
+		els = append(els, &Locator{Carrier: p.Origin.Party, Value: p.RecordLocator})
+	}
+	for _, l := range p.Locators {
+		if l.Owner == carrier && l.Value != "" {
+			els = append(els, &Locator{Carrier: l.Owner, Value: l.Value})
+		}
+	}
+	return Build("SS", els...)
+}
+
+// applyTKNE records the ticket an SSR TKNE names: the document number and
+// coupon from the free text, the traveller from the name association, the
+// segment from the itinerary reference. Coupons of one document merge
+// into one ticket, as they arrive one SSR at a time.
+func applyTKNE(p *pnr.PNR, el *SSR, segRef int) (string, int, bool) {
+	num, coupon := "", 0
+	for _, f := range strings.FieldsFunc(el.FreeText, func(r rune) bool { return r == '/' || r == ' ' }) {
+		if len(f) >= 13 && isDigits(f[:13]) {
+			num = f[:13]
+			if rest := f[13:]; len(rest) >= 2 && rest[0] == 'C' {
+				coupon, _ = strconv.Atoi(rest[1:])
+			}
+		}
+	}
+	if num == "" {
+		return "", 0, false
+	}
+	tn := pnr.TicketNumber{AirlineCode: num[:3], Serial: num[3:]}
+	paxRef := 0
+	if m := nameRe.FindStringSubmatch(el.NameRef); m != nil {
+		given, title := pnr.SplitTitle(m[3])
+		for _, px := range p.Passengers {
+			if strings.EqualFold(px.Surname, m[2]) && strings.EqualFold(px.Given, given) && (title == "" || strings.EqualFold(px.Title, title)) {
+				paxRef = px.Ref
+				break
+			}
+		}
+	}
+	if paxRef == 0 && len(p.Passengers) == 1 {
+		paxRef = p.Passengers[0].Ref
+	}
+	if coupon == 0 {
+		coupon = 1
+	}
+	for i := range p.Tickets {
+		t := &p.Tickets[i]
+		if t.Number != tn {
+			continue
+		}
+		for _, c := range t.Coupons {
+			if c.Number == coupon {
+				return num, coupon, true
+			}
+		}
+		t.Coupons = append(t.Coupons, pnr.Coupon{Number: coupon, SegmentRef: segRef, Status: pnr.CouponOpen})
+		return num, coupon, true
+	}
+	p.Tickets = append(p.Tickets, pnr.Ticket{Number: tn, Type: pnr.DocTicket, PaxRef: paxRef, IssuedBy: el.Carrier,
+		Coupons: []pnr.Coupon{{Number: coupon, SegmentRef: segRef, Status: pnr.CouponOpen}}})
+	return num, coupon, true
+}
+
+func isDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // BuildCancel renders a cancellation for a carrier's segments.

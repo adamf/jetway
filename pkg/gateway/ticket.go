@@ -7,11 +7,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adamf/jetway/pkg/airimp"
 	"github.com/adamf/jetway/pkg/edifact"
 	"github.com/adamf/jetway/pkg/padis"
 	"github.com/adamf/jetway/pkg/pnr"
 	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/telemetry"
+	"github.com/adamf/jetway/pkg/typeb"
 )
 
 // IssueOptions controls ticket issuance.
@@ -290,6 +292,30 @@ func (g *Gateway) notifyTicketed(ctx context.Context, rec *pnr.PNR, by string) {
 	}
 }
 
+// sendTicketAdvice tells a teletype carrier the ticket issued against its
+// segments, as SSR TKNE elements in an AIRIMP message.
+func (g *Gateway) sendTicketAdvice(ctx context.Context, peer *Peer, rec *pnr.PNR, t pnr.Ticket, carrier string) error {
+	text := airimp.BuildTicketAdvice(rec, carrier, t)
+	if text == "" {
+		return fmt.Errorf("ticket %s covers no %s segment", t.Number.String(), carrier)
+	}
+	dest, err := typeb.ParseAddress(peer.TTYAddress)
+	if err != nil {
+		return fmt.Errorf("peer %s has an unusable TTY address: %w", peer.Name, err)
+	}
+	out := &typeb.Message{
+		Priority: "QU", Destinations: []typeb.Address{dest},
+		Origin: mustAddress(g.Identity.TTYAddress), OriginTime: g.nowOriginTime(),
+		Text: text,
+	}
+	raw, err := out.Encode(typeb.EncodeOptions{Charset: typeb.CharsetITA2, CRLF: true})
+	if err != nil {
+		return fmt.Errorf("encode ticket advice: %w", err)
+	}
+	_, err = g.Send(ctx, peer, raw, "AIRIMP/tkne", rec.ID, "")
+	return err
+}
+
 func segmentByRef(rec *pnr.PNR, ref int) *pnr.Segment {
 	for i := range rec.Segments {
 		if rec.Segments[i].Ref == ref {
@@ -306,10 +332,10 @@ func (g *Gateway) sendTicketControl(ctx context.Context, rec *pnr.PNR, t pnr.Tic
 		return fmt.Errorf("no link configured for carrier %q", carrier)
 	}
 	if peer.Format != store.FormatEDIFACT {
-		// Ticket control is an EDIFACT message. A teletype link has no
-		// equivalent here, and pretending otherwise would send a carrier
-		// something they cannot read.
-		return fmt.Errorf("peer %s is a teletype link and carries no ticket control", peer.Name)
+		// Ticket control is an EDIFACT message. A teletype carrier hears
+		// the same fact the way reservations systems have always told it:
+		// an SSR TKNE per coupon, with the document number.
+		return g.sendTicketAdvice(ctx, peer, rec, t, carrier)
 	}
 	ref := g.nextControlRef()
 	ic, err := padis.BuildTKCREQ(rec, t.Number, len(t.Coupons), coupons, padis.BuildOptions{
