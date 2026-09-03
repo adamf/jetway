@@ -156,7 +156,28 @@ type Transaction struct {
 	OriginalIssued   time.Time
 	OriginalLocation string
 	OriginalAgent    string
+	// RelatedDocument, when set, is the document a memo or refund relates
+	// to (BKS45), with the reason the memo was raised (RMIC) and the
+	// coupon it concerns. A memo's own Document is the memo number.
+	RelatedDocument string
+	RelatedIssued   time.Time
+	RelatedCoupon   int
+	MemoReason      string
 }
+
+// Memo reason codes (RMIC) this package names; the plans' own lists are
+// longer and agreed locally.
+const (
+	MemoFareDifference = "FARE" // the fare collected fell short of the fare due
+	MemoCommission     = "COMM" // commission taken beyond the agreed rate
+	MemoTaxDifference  = "TAX"  // taxes collected fell short
+	MemoNotReported    = "NREP" // a document issued and never reported
+	MemoRefundRecall   = "RFND" // a refund made on a document already refunded
+	MemoCommissionOwed = "COMR" // commission due to the agent and not paid (credit)
+	MemoOvercollection = "OVER" // more collected than due (credit)
+	MemoCourtesyCredit = "CRED" // a credit agreed between the parties
+	MemoNoReasonGiven  = ""
+)
 
 // Tax is one tax, fee or charge on a document.
 type Tax struct {
@@ -473,6 +494,24 @@ func transactionRecords(t *Transaction, trnn int, cur string) [][]byte {
 	put(rec, 133, 136, cur, false)
 	out = append(out, rec)
 
+	if t.RelatedDocument != "" {
+		rec = doc("BKS", 45)
+		// The related record carries the remittance period, not the
+		// date of issue, in columns 14-19; the caller's issue date stands
+		// in for it, which is the same day for a memo raised in period.
+		put(rec, 26, 39, t.RelatedDocument, false)
+		if cd, err := CheckDigit(t.RelatedDocument); err == nil {
+			put(rec, 40, 40, strconv.Itoa(cd), false)
+		}
+		put(rec, 55, 59, t.MemoReason, false)
+		if t.RelatedCoupon > 0 {
+			put(rec, 60, 63, fmt.Sprintf("%04d", t.RelatedCoupon), false)
+		}
+		if !t.RelatedIssued.IsZero() {
+			put(rec, 64, 69, yymmdd(t.RelatedIssued), false)
+		}
+		out = append(out, rec)
+	}
 	if t.OriginalDocument != "" {
 		rec = doc("BKS", 46)
 		put(rec, 41, 54, t.OriginalDocument, false)
@@ -651,6 +690,12 @@ func Parse(r io.Reader) (*File, error) {
 			}
 			tx.CommissionRate = atoi(get(line, 50, 54))
 			tx.CommissionAmount = -getAmount(line, 55, 65)
+		case "BKS45":
+			if tx == nil {
+				continue
+			}
+			tx.RelatedDocument, tx.MemoReason, tx.RelatedCoupon = get(line, 26, 39), get(line, 55, 59), atoi(get(line, 60, 63))
+			tx.RelatedIssued = parseYYMMDD(get(line, 64, 69), "")
 		case "BKS46":
 			if tx == nil {
 				continue

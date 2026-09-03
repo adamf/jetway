@@ -412,3 +412,41 @@ func TestRETRoundTripsTheSale(t *testing.T) {
 		t.Errorf("back\n want %+v\n got  %+v", tx, g)
 	}
 }
+
+// An agency debit memo: its own document number, the ticket it relates to
+// and the reason in the related-document record, the amount the agent owes
+// signed positive and remitted in full.
+func TestMemoCarriesTheRelatedDocument(t *testing.T) {
+	f := sampleFile()
+	memo := Transaction{Code: TransADM, Issued: time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC), Document: "1254000000077", Agent: "91234562",
+		ReportingSystem: "GDSL", Coupons: "", Passenger: "SMITH/JOHN MR", Fare: 5000, Total: 5000,
+		RelatedDocument: "1252400123456", RelatedIssued: time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC), RelatedCoupon: 1, MemoReason: MemoFareDifference,
+		Payments: []Payment{{Type: PaymentCash, Amount: 5000}}}
+	f.Offices[0].Transactions = append(f.Offices[0].Transactions, memo)
+	var buf bytes.Buffer
+	if err := f.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	var bks45 string
+	for _, l := range strings.Split(buf.String(), "\n") {
+		if strings.HasPrefix(l, "BKS") && len(l) >= 13 && l[11:13] == "45" {
+			bks45 = l
+		}
+	}
+	if bks45 == "" || bks45[25:39] != "1252400123456 " || bks45[54:59] != "FARE " || bks45[59:63] != "0001" || bks45[63:69] != "261120" {
+		t.Errorf("BKS45: %q", bks45)
+	}
+	back, err := Parse(strings.NewReader(buf.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var g *Transaction
+	for i := range back.Offices[0].Transactions {
+		if back.Offices[0].Transactions[i].Code == TransADM {
+			g = &back.Offices[0].Transactions[i]
+		}
+	}
+	if g == nil || g.RelatedDocument != "1252400123456" || g.MemoReason != MemoFareDifference || g.RelatedCoupon != 1 || !g.RelatedIssued.Equal(memo.RelatedIssued) || g.Total != 5000 || g.Payments[0].Remittance != 5000 {
+		t.Errorf("memo back: %+v", g)
+	}
+}

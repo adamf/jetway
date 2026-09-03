@@ -116,3 +116,61 @@ func TestBUMRoundTrips(t *testing.T) {
 		t.Errorf("back: %+v", back)
 	}
 }
+
+// A delayed-bag file, an on-hand file and the forward that closes them:
+// each round-trips, the on-hand matches the delayed-bag file on the tag
+// (or, tagless, on the name and the bag's colour and type), and the
+// forward names the file it answers.
+func TestTracingFilesRoundTripAndMatch(t *testing.T) {
+	ahl := &TracingFile{Kind: KindAHL, Reference: "JFKBA10231", Station: "JFK", Carrier: "BA", Surname: "SMITH", Givens: []string{"JOHN"},
+		Tags: []Tag{{Number: "0125123456", Count: 1}}, ColourType: "BK22", Routing: []string{"LHR", "JFK"},
+		Flights: []FlightLeg{{Flight: "BA0117", Date: "26NOV"}}, Contact: "+1 212 555 0100", Text: "ARRIVED WITHOUT BAG"}
+	text, err := BuildTracing(ahl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"AHL JFKBA10231\n", ".V/JFKBA", ".NM/SMITH/JOHN", ".TN/0125123456001", ".CT/BK22", ".RT/LHR/JFK", ".FD/BA0117/26NOV", ".PN/+1 212 555 0100", "ENDAHL"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in\n%s", want, text)
+		}
+	}
+	if !IsTracing(text) || IsBaggage(text) {
+		t.Error("a tracing file is tracing, not a bag message")
+	}
+	back, err := ParseTracing(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Reference != ahl.Reference || back.Station != "JFK" || back.Carrier != "BA" || back.Surname != "SMITH" || back.Tags[0].Number != "0125123456" || back.ColourType != "BK22" || len(back.Routing) != 2 || back.Flights[0].Flight != "BA0117" || back.Contact != ahl.Contact || back.Text != ahl.Text {
+		t.Errorf("back: %+v", back)
+	}
+	ohd := &TracingFile{Kind: KindOHD, Reference: "LHRBA55501", Station: "LHR", Carrier: "BA", Tags: []Tag{{Number: "0125123456"}}, ColourType: "BK22"}
+	if !Match(ahl, ohd) {
+		t.Error("the same tag matches")
+	}
+	tagless := &TracingFile{Kind: KindOHD, Reference: "LHRBA55502", Surname: "smith", ColourType: "BK22", Tags: []Tag{{Number: "0000000000"}}}
+	if !Match(ahl, tagless) {
+		t.Error("a bag with the name and the colour and type matches without its tag")
+	}
+	if Match(ahl, &TracingFile{Kind: KindOHD, Reference: "X", Tags: []Tag{{Number: "9"}}, Surname: "JONES", ColourType: "BK22"}) {
+		t.Error("another passenger's bag does not match")
+	}
+	fwd := &TracingFile{Kind: KindFWD, Reference: "LHRBA55501", Tags: ohd.Tags, ForwardTo: "JFK", Matches: ahl.Reference, Flights: []FlightLeg{{Flight: "BA0175", Date: "26NOV", City: "JFK"}}}
+	ftext, err := BuildTracing(fwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fb, err := ParseTracing(ftext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fb.Kind != KindFWD || fb.ForwardTo != "JFK" || fb.Matches != "JFKBA10231" || fb.Flights[0].City != "JFK" {
+		t.Errorf("forward back: %+v", fb)
+	}
+	if _, err := BuildTracing(&TracingFile{Kind: KindOHD, Reference: "X"}); err == nil {
+		t.Error("an on-hand file without a bag")
+	}
+	if _, err := ParseTracing("AHL X\n.NM/A\n"); err == nil {
+		t.Error("a file without its END")
+	}
+}

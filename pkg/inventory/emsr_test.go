@@ -226,3 +226,45 @@ func TestBidPriceControlRefusesAThroughFareBelowTheDisplacement(t *testing.T) {
 		t.Errorf("unpriced record: %v", out)
 	}
 }
+
+// The network programme on a two-leg example worked by hand: leg A and leg
+// B each seat 100; a local on A pays 200 (demand 60), a local on B 150
+// (demand 80), a through passenger over both 300 (demand 50). Best is 60
+// locals on A, 60 on B and 40 through, worth 33,000; a marginal seat on
+// either leg is worth 150, so both bid prices are 150 and the through fare
+// of 300 just covers them.
+func TestNetworkBidPricesSolveTheTwoLegExample(t *testing.T) {
+	bids, x, err := NetworkBidPrices(map[string]float64{"A": 100, "B": 100}, []Itinerary{
+		{Legs: []string{"A"}, Fare: 200, Demand: 60},
+		{Legs: []string{"B"}, Fare: 150, Demand: 80},
+		{Legs: []string{"A", "B"}, Fare: 300, Demand: 50},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []float64{60, 60, 40}
+	for i := range want {
+		if math.Abs(x[i]-want[i]) > 1e-6 {
+			t.Errorf("allocation %v, want %v", x, want)
+			break
+		}
+	}
+	if math.Abs(bids["A"]-150) > 1e-6 || math.Abs(bids["B"]-150) > 1e-6 {
+		t.Errorf("bid prices %v, want 150 and 150", bids)
+	}
+	// A leg with room to spare is worth nothing at the margin.
+	bids, _, _ = NetworkBidPrices(map[string]float64{"A": 1000, "B": 100}, []Itinerary{
+		{Legs: []string{"A"}, Fare: 200, Demand: 60}, {Legs: []string{"B"}, Fare: 150, Demand: 80}, {Legs: []string{"A", "B"}, Fare: 300, Demand: 50},
+	})
+	if bids["A"] != 0 || math.Abs(bids["B"]-150) > 1e-6 {
+		t.Errorf("slack leg prices at zero: %v", bids)
+	}
+	// The simplex itself, on the textbook toy: max 3x+2y, x+y<=4, x+3y<=6 -> x=4, y=0, 12; duals 3 and 0.
+	x2, y2, obj, err := Simplex([]float64{3, 2}, [][]float64{{1, 1}, {1, 3}}, []float64{4, 6})
+	if err != nil || math.Abs(obj-12) > 1e-9 || math.Abs(x2[0]-4) > 1e-9 || math.Abs(x2[1]) > 1e-9 || math.Abs(y2[0]-3) > 1e-9 || y2[1] != 0 {
+		t.Errorf("simplex: x=%v y=%v obj=%v err=%v", x2, y2, obj, err)
+	}
+	if _, _, _, err := Simplex([]float64{1}, [][]float64{{-1}}, []float64{1}); err == nil {
+		t.Error("an unbounded programme must say so")
+	}
+}
