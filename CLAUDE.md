@@ -26,7 +26,7 @@ about which layer is which.
 | `pkg/fare` | **Structure inferred, data none.** Fare basis, rules, taxes and pricing follow how ATPCO filings and tickets work; the filings themselves are licensed and the package carries no fare. Callers supply a tariff. |
 | `pkg/paxlst` | **Specified.** The WCO/IATA/ICAO PAXLST implementation guide is public; the package follows its segment tables and is tested against its worked examples verbatim. SSR DOCS layout is inferred from published entry formats. |
 | `pkg/iatci` | **Inferred, closely.** DCQCKI/DCRCKA and their segments follow the PADIS release 01.1 structures as mirrored publicly by EDI schema vendors, element by element; the IATCI Implementation Guide (members only) was not consulted, so usage is this package's profile. |
-| `pkg/inventory` | **Method specified.** Serial nested class authorisations are the textbook leg-based inventory control; the numbers are the caller's. |
+| `pkg/inventory` | **Method specified.** Serial nested class authorisations are the textbook leg-based inventory control, and EMSR-b (Belobaba; Talluri and van Ryzin ch. 2) sets them from a forecast; the numbers are the caller's. The EMSR-b tests check against the normal table, not the code. |
 
 When you implement something in the inferred category, say so in the package
 doc, make it an extensible `Profile`, and keep unrecognised input verbatim.
