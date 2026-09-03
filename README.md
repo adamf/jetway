@@ -408,7 +408,7 @@ where this is wrong, that is the single most useful contribution available.
 | `pkg/matip` | MATIP (RFC 2351): packet format and the Type B session handshake |
 | `pkg/mvt` | MVT/MVA/DIV aircraft movement messages: departures, arrivals, delays, diversions |
 | `pkg/pnl` | PNL and ADL passenger name lists: what reservations tells the airport |
-| `pkg/baggage` | BSM and BPM bag messages: tags issued, bags loaded |
+| `pkg/baggage` | BSM, BPM and BUM bag messages: tags issued, bags loaded, a bag rushed without its passenger |
 | `pkg/fare` | Fares filed per market and class with rules and taxes, and the pricing that sells each segment under the cheapest fare whose rules the trip meets |
 | `pkg/inventory` | A carrier's seat inventory: capacity per cabin from the schedule, sold and waitlisted per flight, rebuilt from the book of record; answers sells and broadcasts availability; an EMSR-b revenue management controller sets the nested authorisations from a demand forecast |
 | `pkg/bsp` | Settlement: the BSP HOT file an airline receives for its agents' sales, to IATA's public DISH 23 handbook, written and read |
