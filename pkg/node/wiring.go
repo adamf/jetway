@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -145,15 +146,27 @@ func (n *Node) registerPeer(p config.Peer) error {
 	// Replies on an inbound link go back down whichever TCP listener currently
 	// holds a session with that peer.
 	sessions := func(ctx context.Context, peer string, raw []byte) error {
+		// A listener that holds the session but could not take the frame
+		// -- congested -- says so; only when no listener holds one is the
+		// link not open. Reporting the latter for the former sent a
+		// saturated trunk's refusals to the log as a link that was down.
+		var last error
 		for _, t := range tcps {
-			if err := t.Send(ctx, peer, raw); err == nil {
+			err := t.Send(ctx, peer, raw)
+			if err == nil {
 				return nil
+			}
+			if !errors.Is(err, ingress.ErrNoSession) {
+				last = err
 			}
 		}
 		for _, m := range n.matip {
 			if err := m.Send(ctx, peer, raw); err == nil {
 				return nil
 			}
+		}
+		if last != nil {
+			return last
 		}
 		return fmt.Errorf("no open link to %q", peer)
 	}
@@ -168,7 +181,8 @@ func (n *Node) registerPeer(p config.Peer) error {
 	gw.AddPeer(&gateway.Peer{
 		Name: p.Name, Carrier: p.Carrier, Format: format,
 		TTYAddress: p.TTYAddress, Addresses: p.Addresses, CONTRL: p.CONTRL,
-		ICAO: p.ICAO, AFTN: p.AFTN,
+		ICAO: p.ICAO, AFTN: p.AFTN, Via: p.Egress.Via,
+		Trunk: p.Trunk || p.Egress.Type == "link_dial" && p.Egress.Role == "switch",
 	})
 	var s egress.Sender
 	var err error

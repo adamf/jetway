@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/adamf/jetway/pkg/config"
+	"github.com/adamf/jetway/pkg/store"
 	"github.com/adamf/jetway/pkg/transport"
 )
 
@@ -100,9 +101,10 @@ func TestTwoSwitchesTrunkTypeBBothWays(t *testing.T) {
 
 	// Switch B first, so A has an address to dial.
 	b := startSwitch(t, ctx, switchConfig("1Y", "XCHDD1Y", []config.Peer{
-		{Name: "YY", Carrier: "YY", Format: "typeb", TTYAddress: "MANRMYY", Egress: config.Egress{Type: "tcp_accept"}},
-		{Name: "1X", Carrier: "1X", Format: "typeb", TTYAddress: "XCHDD1X", Egress: config.Egress{Type: "tcp_accept"}},
+		{Name: "YY", Carrier: "YY", Format: "typeb", TTYAddress: "MANRMYY", Addresses: []string{"MANKPYY"}, Egress: config.Egress{Type: "tcp_accept"}},
+		{Name: "1X", Carrier: "1X", Format: "typeb", TTYAddress: "XCHDD1X", Trunk: true, Egress: config.Egress{Type: "tcp_accept"}},
 		{Name: "XX", Carrier: "XX", Format: "typeb", TTYAddress: "LHRRMXX", Egress: config.Egress{Type: "via", Via: "1X"}},
+		{Name: "ZZ", Carrier: "ZZ", Format: "typeb", TTYAddress: "LHRRMZZ", Egress: config.Egress{Type: "via", Via: "1X"}},
 	}))
 	bAddr := b.Addr("links")
 	if _, _, err := net.SplitHostPort(bAddr); err != nil {
@@ -111,7 +113,8 @@ func TestTwoSwitchesTrunkTypeBBothWays(t *testing.T) {
 	a := startSwitch(t, ctx, switchConfig("1X", "XCHDD1X", []config.Peer{
 		{Name: "XX", Carrier: "XX", Format: "typeb", TTYAddress: "LHRRMXX", Egress: config.Egress{Type: "tcp_accept"}},
 		{Name: "1Y", Carrier: "1Y", Format: "typeb", TTYAddress: "XCHDD1Y", Egress: config.Egress{Type: "link_dial", Addr: bAddr, Role: "switch"}},
-		{Name: "YY", Carrier: "YY", Format: "typeb", TTYAddress: "MANRMYY", Egress: config.Egress{Type: "via", Via: "1Y"}},
+		{Name: "YY", Carrier: "YY", Format: "typeb", TTYAddress: "MANRMYY", Addresses: []string{"MANKPYY"}, Egress: config.Egress{Type: "via", Via: "1Y"}},
+		{Name: "ZZ", Carrier: "ZZ", Format: "typeb", TTYAddress: "LHRRMZZ", Egress: config.Egress{Type: "tcp_accept"}},
 	}))
 
 	xx := dialCarrier(t, ctx, "XX", a.Addr("links"))
@@ -174,5 +177,41 @@ func TestTwoSwitchesTrunkTypeBBothWays(t *testing.T) {
 	}
 	if count(xx, "TO BOTH") != 0 {
 		t.Errorf("XX was sent its own message back %d times", count(xx, "TO BOTH"))
+	}
+
+	// A message for several addressees on the far switch crosses the trunk
+	// once; the far switch fans it out. And one for a subscriber on each
+	// switch is not returned down the trunk it arrived on: B serves YY,
+	// A serves XX's neighbour ZZ, and nobody bounces.
+	zz := dialCarrier(t, ctx, "ZZ", a.Addr("links"))
+	_ = zz
+	send(xx, "QU MANRMYY MANKPYY\n.LHRRMXX 121433\nONCE OVER THE TRUNK\n")
+	waitFor(yy, "ONCE OVER THE TRUNK")
+	time.Sleep(300 * time.Millisecond)
+	if n := count(yy, "ONCE OVER THE TRUNK"); n != 2 {
+		t.Errorf("YY's two addresses on B: %d deliveries, want 2", n)
+	}
+	inbound := func(n *Node, want string) int {
+		msgs, _ := n.Store.ListMessages(ctx, store.MessageFilter{Limit: 1000})
+		c := 0
+		for _, m := range msgs {
+			if m.Direction == store.Inbound && strings.Contains(string(m.Raw), want) {
+				c++
+			}
+		}
+		return c
+	}
+	if n := inbound(b, "ONCE OVER THE TRUNK"); n != 1 {
+		t.Errorf("the trunk carried the message %d times, want once", n)
+	}
+	send(xx, "QU MANRMYY LHRRMZZ\n.LHRRMXX 121434\nNO BOUNCE\n")
+	waitFor(yy, "NO BOUNCE")
+	waitFor(zz, "NO BOUNCE")
+	time.Sleep(300 * time.Millisecond)
+	if n := inbound(a, "NO BOUNCE"); n != 1 {
+		t.Errorf("switch A saw the message %d times: it came back over the trunk", n)
+	}
+	if n := inbound(b, "NO BOUNCE"); n != 1 {
+		t.Errorf("switch B saw the message %d times", n)
 	}
 }

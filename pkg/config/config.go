@@ -281,6 +281,11 @@ type Retry struct {
 type Peer struct {
 	Name    string `yaml:"name"`
 	Carrier string `yaml:"carrier"`
+	// Trunk marks the link to another switch, whichever side dialled it.
+	// A message that arrived on a trunk is never sent back down it for a
+	// subscriber that switch serves. A link_dial egress with role
+	// "switch" is a trunk without saying so.
+	Trunk bool `yaml:"trunk"`
 	// Format is "typeb" or "edifact".
 	Format     string `yaml:"format"`
 	TTYAddress string `yaml:"tty_address"`

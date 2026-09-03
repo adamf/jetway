@@ -132,6 +132,11 @@ func (b *bucket) wait(ctx context.Context) {
 	}
 }
 
+// ErrNoSession is the error Send wraps when no session with the peer is
+// open on this listener; callers holding several listeners use it to tell
+// "not here" from "here but refused".
+var ErrNoSession = errors.New("no open link to")
+
 // newSession wires the connection to its outbox: writes go through one
 // writer goroutine so the read loop never waits on the peer's window (see
 // transport.Outbox). A failed write closes the connection and so ends the
@@ -375,7 +380,7 @@ func (t *TCP) Send(ctx context.Context, peer string, raw []byte) error {
 	s := t.sessions[peer]
 	t.mu.RUnlock()
 	if s == nil {
-		return fmt.Errorf("ingress %s: no open link to %q", t.name, peer)
+		return fmt.Errorf("ingress %s: %w %q", t.name, ErrNoSession, peer)
 	}
 	return s.send(raw)
 }

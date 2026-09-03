@@ -71,6 +71,17 @@ type Peer struct {
 	// rejections, and "never" sends none.
 	CONTRL string
 
+	// Via names the peer whose link carries this peer's traffic, when it is
+	// not reached on a link of its own: a subscriber of another switch,
+	// reached over the trunk to it. Routing uses it to send one copy per
+	// link and never to return a message down the trunk it arrived on.
+	Via string
+	// Trunk marks the link to another switch. Traffic that arrived on a
+	// trunk is not sent back down it for a subscriber the other switch
+	// serves -- it is already there -- which is what keeps two switches
+	// from bouncing a message between them for ever.
+	Trunk bool
+
 	// TTYAddress is the peer's Type B address, used when Format is typeb.
 	TTYAddress string
 	// Addresses are further Type B addresses this link serves, beyond
@@ -343,6 +354,15 @@ type Delivery struct {
 func (g *Gateway) Fanout(ctx context.Context, tb *typeb.Message, raw []byte,
 	kind, pnrID, correlationID string) []Delivery {
 	out := make([]Delivery, 0, len(tb.Destinations))
+	// A subscriber's link gets a copy per addressee, which is how the
+	// network delivers: each address on the line is a delivery, and a
+	// carrier's circuit with a department per address receives one for
+	// each. A trunk is different: the switch at the other end fans out by
+	// address itself, so it receives one copy for all the addressees it
+	// serves. Sending a copy per address down a trunk multiplied a
+	// five-address broadcast into twenty-five deliveries, and that is what
+	// saturated it.
+	sentOn := map[string]string{}
 	for _, d := range tb.Destinations {
 		addr := d.String()
 		switch {
@@ -352,6 +372,12 @@ func (g *Gateway) Fanout(ctx context.Context, tb *typeb.Message, raw []byte,
 		default:
 		}
 		peer := g.PeerByAddress(addr)
+		if peer != nil && (peer.Via != "" || peer.Trunk) {
+			if id, done := sentOn[linkOf(peer)]; done {
+				out = append(out, Delivery{Address: addr, Peer: peer.Name, MessageID: id})
+				continue
+			}
+		}
 		if peer == nil {
 			// Not routable here. Recorded rather than dropped: on a real
 			// network this is the point where a message would go to the
@@ -363,10 +389,21 @@ func (g *Gateway) Fanout(ctx context.Context, tb *typeb.Message, raw []byte,
 		del := Delivery{Address: addr, Peer: peer.Name, MessageID: id}
 		if err != nil {
 			del.Err = err.Error()
+		} else if peer.Via != "" || peer.Trunk {
+			sentOn[linkOf(peer)] = id
 		}
 		out = append(out, del)
 	}
 	return out
+}
+
+// linkOf is the link a peer's traffic leaves on: its own, or the one it
+// is reached via.
+func linkOf(p *Peer) string {
+	if p.Via != "" {
+		return p.Via
+	}
+	return p.Name
 }
 
 // Peer returns a configured peer by link name.
@@ -811,6 +848,15 @@ func (g *Gateway) relay(ctx context.Context, from *Peer, msg *store.Message, dec
 			// would come back to the sender's own switch, which would
 			// deliver it to them: a loop of one bounce, but a bounce.
 			g.trace(msg.ID, "relay", "skipping "+addr+": it is the message's own origin")
+			reflected++
+			continue
+		}
+		if p := g.PeerByAddress(addr); p != nil && from.Trunk && linkOf(p) == from.Name {
+			// The other switch serves this addressee and has already
+			// delivered to it: the message came here down that trunk.
+			// Sending it back would have the other switch relay it here
+			// again, for ever.
+			g.trace(msg.ID, "relay", "skipping "+addr+": served by the switch this arrived from")
 			reflected++
 			continue
 		}
