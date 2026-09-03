@@ -316,3 +316,47 @@ func FuzzHOTRoundTrip(f *testing.F) {
 		}
 	})
 }
+
+// An exchange: the new document names the one it replaced in the
+// qualifying-issue record, and the old document's value is its form of
+// payment, so nothing new is remitted in cash.
+func TestExchangeCarriesTheOriginalIssue(t *testing.T) {
+	f := sampleFile()
+	tx := &f.Offices[0].Transactions[0]
+	tx.OriginalDocument, tx.OriginalLocation, tx.OriginalAgent = "1252400123400", "LON", "91234562"
+	tx.OriginalIssued = time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+	tx.CommissionRate, tx.CommissionAmount = 0, 0
+	tx.Payments = []Payment{{Type: PaymentExchange, Amount: 347800}}
+	var buf bytes.Buffer
+	if err := f.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	var bks46, ex, ca string
+	for _, l := range lines {
+		switch l[:3] + l[11:13] {
+		case "BKS46":
+			bks46 = l
+		case "BKP84":
+			if strings.HasPrefix(l[25:35], "EX") {
+				ex = l
+			} else {
+				ca = l
+			}
+		}
+	}
+	if bks46 == "" || bks46[40:54] != "1252400123400 " || bks46[54:57] != "LON" || bks46[57:64] != "10NOV26" || bks46[64:72] != "91234562" {
+		t.Errorf("BKS46: %q", bks46)
+	}
+	if ex == "" || ex[35:46] != "0000034780{" || ca == "" || ca[35:46] != "0000000000{" || ca[97:108] != "0000000000{" {
+		t.Errorf("payments: EX %q CA %q", ex, ca)
+	}
+	back, err := Parse(strings.NewReader(buf.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := back.Offices[0].Transactions[0]
+	if g.OriginalDocument != "1252400123400" || g.OriginalLocation != "LON" || !g.OriginalIssued.Equal(tx.OriginalIssued) || g.OriginalAgent != "91234562" || len(g.Payments) != 2 || g.Payments[0].Type != "EX" {
+		t.Errorf("back: %+v", g)
+	}
+}

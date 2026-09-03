@@ -270,6 +270,10 @@ type Ticket struct {
 	// RefundedAt is when the document's open coupons were refunded, nil
 	// while it stands. Settlement dates the refund transaction by it.
 	RefundedAt *time.Time `json:"refunded_at,omitempty"`
+	// ExchangedFrom names the document this one was issued in exchange
+	// for -- a reissue after a schedule change or a change of plans --
+	// which settlement reports as the original issue behind the new one.
+	ExchangedFrom *TicketNumber `json:"exchanged_from,omitempty"`
 }
 
 // Refunded reports whether the document has been refunded: at least one

@@ -40,10 +40,12 @@ const (
 )
 
 // Form of payment types (FPTP). There is always one CA record, even when
-// its amounts are zero.
+// its amounts are zero; an exchange carries the exchanged document's value
+// as its own form of payment, EX.
 const (
-	PaymentCash = "CA"
-	PaymentCard = "CC"
+	PaymentCash     = "CA"
+	PaymentCard     = "CC"
+	PaymentExchange = "EX"
 )
 
 // File is one HOT: a file header, one billing cycle, and the reporting
@@ -147,6 +149,13 @@ type Transaction struct {
 	// ServicingSystem is the airline or system provider code that made the
 	// reservation (SASI), three digits and a check digit.
 	ServicingSystem string
+	// OriginalDocument, when set, marks an exchange: the document this one
+	// was issued against, with where and when and by whom it was issued
+	// (BKS46, qualifying issue information).
+	OriginalDocument string
+	OriginalIssued   time.Time
+	OriginalLocation string
+	OriginalAgent    string
 }
 
 // Tax is one tax, fee or charge on a document.
@@ -464,6 +473,16 @@ func transactionRecords(t *Transaction, trnn int, cur string) [][]byte {
 	put(rec, 133, 136, cur, false)
 	out = append(out, rec)
 
+	if t.OriginalDocument != "" {
+		rec = doc("BKS", 46)
+		put(rec, 41, 54, t.OriginalDocument, false)
+		put(rec, 55, 57, t.OriginalLocation, false)
+		if !t.OriginalIssued.IsZero() {
+			put(rec, 58, 64, strings.ToUpper(t.OriginalIssued.Format("02Jan06")), false)
+		}
+		put(rec, 65, 72, t.OriginalAgent, true)
+		out = append(out, rec)
+	}
 	for _, s := range t.Segments {
 		rec = doc("BKI", 63)
 		put(rec, 41, 41, strconv.Itoa(s.Coupon), false)
@@ -632,6 +651,16 @@ func Parse(r io.Reader) (*File, error) {
 			}
 			tx.CommissionRate = atoi(get(line, 50, 54))
 			tx.CommissionAmount = -getAmount(line, 55, 65)
+		case "BKS46":
+			if tx == nil {
+				continue
+			}
+			tx.OriginalDocument, tx.OriginalLocation, tx.OriginalAgent = get(line, 41, 54), get(line, 55, 57), get(line, 65, 72)
+			if d := get(line, 58, 64); len(d) == 7 {
+				if t, err := time.Parse("02Jan06", d[:2]+strings.ToUpper(d[2:3])+strings.ToLower(d[3:5])+d[5:]); err == nil {
+					tx.OriginalIssued = t
+				}
+			}
 		case "BKI63":
 			if tx == nil {
 				continue
