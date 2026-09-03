@@ -108,7 +108,7 @@ exists, it is used, and it has found real bugs every time.
 
 ## Protocol coverage
 
-- `PNRGOV`, `PAXLST`, `TKCREQ`/`TKCRES`, `DCQCKI`/`DCRCKI` decode at the syntax
+- `PNRGOV` and `PAXLST` are built and read (`pkg/padis`, `pkg/paxlst`); `DCQCKI`/`DCRCKA` too (`pkg/iatci`). `TKCREQ`/`TKCRES` and the rest decode at the syntax
   layer and route, but do not map onto a record.
 - **`AVS`**, `CONTRL`, `SSM` and `ASM` are implemented. What is not: a partner
   cannot yet ask for a CONTRL on a *functional group*, since UCF is built but

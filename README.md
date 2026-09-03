@@ -395,7 +395,7 @@ where this is wrong, that is the single most useful contribution available.
 | `pkg/typeb` | Type B teletype envelope: priority and address lines, origin line, character repertoires |
 | `pkg/edifact` | UN/EDIFACT ISO 9735 syntax: UNA service characters, release characters, repetitions, envelope validation |
 | `pkg/airimp` | AIRIMP message grammar over Type B text, as an extensible recognizer profile |
-| `pkg/padis` | IATA PADIS message mapping over EDIFACT, as an extensible segment-handler profile |
+| `pkg/padis` | IATA PADIS message mapping over EDIFACT, as an extensible segment-handler profile; the PNRGOV push to a state, built and read against the public implementation guide |
 | `pkg/rescode` | The reservation action and status vocabulary both wire formats share |
 | `pkg/avail` | What is sellable: statuses, seat counts, provenance and age |
 | `pkg/avs` | Availability Status messages, as a per-link profile |

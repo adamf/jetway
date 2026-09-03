@@ -13,7 +13,7 @@ about which layer is which.
 | --- | --- |
 | `pkg/edifact` (ISO 9735), `pkg/edifact` CONTRL, `pkg/matip` (RFC 2351) | **Specified.** The documents are public. Conformance can be checked and is. |
 | `pkg/typeb` limits, PDM | **Specified.** IATA's Type B whitepaper is free. |
-| `pkg/padis` | **Partly.** The PNRGOV implementation guide is free and checking against it fixed four real bugs. |
+| `pkg/padis` | **Partly.** The PNRGOV implementation guide is free and checking against it fixed four real bugs; the PNRGOV push itself is **specified**, tested against the guide's worked example verbatim. PAOREQ/PAORES remain inferred. |
 | `pkg/airimp`, `pkg/avs`, `pkg/ssim` | **Inferred.** Profiles, not conformance. AIRIMP and SSIM are paywalled. |
 | `pkg/ndc` | **Specified.** Schemas and real carrier examples are public. |
 | `pkg/mvt` | **Inferred, closely.** AHM 780/781 is paid, but OAG publishes the element tables and verbatim examples this package is built and tested against. |

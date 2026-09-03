@@ -170,6 +170,17 @@ type Gateway struct {
 	// APIS hears advance passenger information lists sent to this node,
 	// when it stands for a border control agency.
 	APIS func(ctx context.Context, peer *Peer, list *paxlst.Message)
+	// PNRGOV hears passenger name record pushes sent to this node, when it
+	// stands for a state's passenger information unit.
+	PNRGOV func(ctx context.Context, peer *Peer, push *padis.GovPush)
+
+	// LocalClock places a station on its local clock: the offset from UTC
+	// on a date, and whether the station is known. A schedule message in
+	// UTC mode can only be applied to held segments, whose times are local,
+	// through it; nil leaves a UTC retime as a queue task for an agent and
+	// the segment times as they were, because moving a segment by the wrong
+	// offset is worse than not moving it.
+	LocalClock func(station string, date time.Time) (offset time.Duration, ok bool)
 
 	// Now, when set, replaces the wall clock. Every timestamp this gateway
 	// stamps -- records, events, messages, references -- comes through it, so
@@ -613,6 +624,9 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 	}
 	if dec.PAXLST != nil {
 		return g.applyPAXLST(ctx, peer, msg, dec, res)
+	}
+	if dec.PNRGOV != nil {
+		return g.applyPNRGOV(ctx, peer, msg, dec, res)
 	}
 
 	// A partner telling us what they made of something we sent.
@@ -1629,12 +1643,126 @@ func (g *Gateway) applySchedule(ctx context.Context, peer *Peer, msg *store.Mess
 			}
 		}
 	}
-	g.trace(msg.ID, "schedule", fmt.Sprintf("%d segment(s) affected", placed))
+	retimed := 0
+	if sm.Action == ssim.ActionTime {
+		for _, rec := range recs {
+			n, err := g.retime(ctx, rec, want, wireDate, sm, msg)
+			if err != nil {
+				g.Log.Error("could not retime a record", "locator", rec.RecordLocator, "err", err)
+				continue
+			}
+			retimed += n
+		}
+	}
+	g.trace(msg.ID, "schedule", fmt.Sprintf("%d segment(s) affected, %d retimed", placed, retimed))
 	g.Bus.Publish(EvTrace, map[string]any{
 		"node": g.Identity.Name, "message_id": msg.ID, "step": "schedule",
-		"detail": sm.Describe(), "affected": placed,
+		"detail": sm.Describe(), "affected": placed, "retimed": retimed,
 	})
 	return nil
+}
+
+// retime applies an ASM TIM to a record's segments on the flight: the new
+// departure and arrival go on the segment, and a confirmed holding becomes
+// TK, "confirming, advise times changed", the status the reservation
+// vocabulary has for exactly this. The task the queue already carries
+// tells an agent to advise the passenger; the record shows the new times
+// before they do. The write is optimistic like every other: on conflict
+// the record is re-read and the times applied again.
+func (g *Gateway) retime(ctx context.Context, rec *pnr.PNR, want, wireDate string, sm *ssim.Message, msg *store.Message) (int, error) {
+	if len(sm.Legs) == 0 || !sm.Period.Single() {
+		return 0, nil
+	}
+	for attempt := 0; attempt < 5; attempt++ {
+		expected := rec.Version
+		var events []store.Event
+		for i := range rec.Segments {
+			seg := &rec.Segments[i]
+			if !store.SegmentOnFlight(seg, want, wireDate) || !flightMatches(seg, want, sm) {
+				continue
+			}
+			var leg *ssim.Leg
+			for j := range sm.Legs {
+				if sm.Legs[j].Board == seg.Board {
+					leg = &sm.Legs[j]
+					break
+				}
+			}
+			if leg == nil {
+				continue
+			}
+			dep, okDep := g.scheduleTimeLocal(leg.Depart, seg.Board, seg.Depart, sm.TimeMode)
+			arr, okArr := g.scheduleTimeLocal(leg.Arrive, seg.Off, seg.Depart, sm.TimeMode)
+			if !okDep && !okArr {
+				continue
+			}
+			was := fmt.Sprintf("%s/%s", seg.DepartTime, seg.ArriveTime)
+			changed := false
+			if okDep && dep != seg.DepartTime {
+				seg.DepartTime, changed = dep, true
+			}
+			if okArr && arr != seg.ArriveTime {
+				seg.ArriveTime, changed = arr, true
+			}
+			if !changed {
+				continue
+			}
+			if seg.Status == "HK" {
+				seg.Status = "TK"
+			}
+			events = append(events, store.Event{
+				Type:      "retime",
+				Detail:    fmt.Sprintf("%s %s -> %s/%s %s", seg.Describe(), was, seg.DepartTime, seg.ArriveTime, seg.Status),
+				MessageID: msg.ID, Actor: "schedule", At: msg.At,
+			})
+		}
+		if len(events) == 0 {
+			return 0, nil
+		}
+		rec.UpdatedAt = msg.At
+		err := g.Store.UpdatePNR(ctx, rec, expected, events)
+		switch {
+		case err == nil:
+			g.Bus.Publish(EvPNR, g.pnrView(rec))
+			return len(events), nil
+		case errors.Is(err, store.ErrConflict):
+			fresh, gerr := g.Store.GetPNR(ctx, rec.RecordLocator)
+			if gerr != nil {
+				return 0, gerr
+			}
+			*rec = *fresh
+			continue
+		default:
+			return 0, err
+		}
+	}
+	return 0, store.ErrConflict
+}
+
+// scheduleTimeLocal is a schedule message's HHMM as the station's local
+// clock reads it. Local-mode messages are already there; UTC ones go
+// through LocalClock, and are unusable without it. An arrival's day-offset
+// suffix is dropped: the segment carries a time of day.
+func (g *Gateway) scheduleTimeLocal(hhmm, station string, date time.Time, mode ssim.TimeMode) (string, bool) {
+	if len(hhmm) < 4 {
+		return "", false
+	}
+	hhmm = hhmm[:4]
+	t, err := time.Parse("1504", hhmm)
+	if err != nil {
+		return "", false
+	}
+	if mode == ssim.LocalTime {
+		return hhmm, true
+	}
+	if g.LocalClock == nil {
+		return "", false
+	}
+	off, ok := g.LocalClock(station, date)
+	if !ok {
+		return "", false
+	}
+	return t.Add(off).Format("1504"), true
 }
 
 // defaultScheduleScanLimit caps the bookings one schedule change may queue.

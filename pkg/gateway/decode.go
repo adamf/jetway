@@ -108,6 +108,9 @@ type decoded struct {
 	// PAXLST is an advance passenger information list, when this node is
 	// the agency it was sent to.
 	PAXLST *paxlst.Message
+	// PNRGOV is a passenger name record push to a state, when this node is
+	// the state.
+	PNRGOV *padis.GovPush
 
 	peer *Peer
 	// self is the receiving node's designator.
@@ -224,6 +227,15 @@ func (g *Gateway) decodeEDIFACT(peer *Peer, raw []byte, opts IngestOptions) (*de
 			return nil, fmt.Errorf("gateway: %w", err)
 		}
 		d.PAXLST = pl
+		return d, nil
+	}
+	// A PNR push is about a flight's records at a state, not a record here.
+	if padis.IsPNRGOV(d.Edifact) {
+		gp, err := padis.ParsePNRGOV(d.Edifact)
+		if err != nil {
+			return nil, fmt.Errorf("gateway: %w", err)
+		}
+		d.PNRGOV = gp
 		return d, nil
 	}
 

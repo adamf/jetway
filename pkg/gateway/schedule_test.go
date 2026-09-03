@@ -204,3 +204,70 @@ func TestScheduleChangeReachesLongStandingBookings(t *testing.T) {
 	t.Fatalf("a booking made six months ago was not told its flight was cancelled; "+
 		"%d schedule tasks were queued, none of them for it", len(items))
 }
+
+// An ASM TIM in local time goes straight onto the held segments: the new
+// times, and TK -- "confirming, advise times changed" -- in place of HK, so
+// the agent's queue task says what to tell the passenger and the record
+// already shows it. A UTC-mode TIM on a node that cannot place a station's
+// clock queues the task and leaves the times alone, because moving a
+// segment by the wrong offset is worse than not moving it.
+func TestTimeChangeRetimesHeldSegments(t *testing.T) {
+	gw := scheduleNode(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	mk := func(loc string) {
+		rec := &pnr.PNR{RecordLocator: loc, Status: pnr.StatusOpen, CreatedAt: now, UpdatedAt: now,
+			Segments: []pnr.Segment{{Ref: 1, Type: pnr.SegmentAir, Carrier: "BA", FlightNum: "0117", Board: "LHR", Off: "JFK",
+				Status: "HK", Seats: 2, WireDate: "16DEC", DepartTime: "0900", ArriveTime: "1200", Depart: time.Date(now.Year()+1, 12, 16, 0, 0, 0, 0, time.UTC)}}}
+		if err := gw.Store.CreatePNR(ctx, rec, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("TIM001")
+	if _, err := gw.Ingest(ctx, "BA", scheduleMsg("ASM\nLT\nTIM\nBA0117/16DEC\nLHR 0930 JFK 1230")); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := gw.Store.GetPNR(ctx, "TIM001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seg := rec.Segments[0]
+	if seg.DepartTime != "0930" || seg.ArriveTime != "1230" || seg.Status != "TK" {
+		t.Errorf("local TIM: %+v", seg)
+	}
+	items, _ := gw.Store.ListQueue(ctx, store.QueueFilter{Queue: store.QueueScheduleChange})
+	if len(items) != 1 || items[0].Code != "schedule_tim" {
+		t.Errorf("queue: %+v", items)
+	}
+
+	// UTC without a clock for the station: queued, not moved.
+	mk("TIM002")
+	gw.Ingest(ctx, "BA", scheduleMsg("ASM\nUTC\nTIM\nBA0117/16DEC\nLHR 1000 JFK 1300"))
+	rec2, _ := gw.Store.GetPNR(ctx, "TIM002")
+	if s := rec2.Segments[0]; s.DepartTime != "0900" || s.Status != "HK" {
+		t.Errorf("UTC TIM without a station clock moved the segment: %+v", s)
+	}
+
+	// UTC with a clock: converted onto the station's local time.
+	gw.LocalClock = func(station string, _ time.Time) (time.Duration, bool) {
+		switch station {
+		case "LHR":
+			return 0, true
+		case "JFK":
+			return -5 * time.Hour, true
+		}
+		return 0, false
+	}
+	gw.Ingest(ctx, "BA", scheduleMsg("ASM\nUTC\nTIM\nBA0117/16DEC\nLHR 1000 JFK 1800"))
+	rec2, _ = gw.Store.GetPNR(ctx, "TIM002")
+	if s := rec2.Segments[0]; s.DepartTime != "1000" || s.ArriveTime != "1300" || s.Status != "TK" {
+		t.Errorf("UTC TIM with a station clock: %+v", s)
+	}
+	// The same times again change nothing and raise no second task.
+	before := rec2.Version
+	gw.Ingest(ctx, "BA", scheduleMsg("ASM\nUTC\nTIM\nBA0117/16DEC\nLHR 1000 JFK 1800"))
+	rec2, _ = gw.Store.GetPNR(ctx, "TIM002")
+	if rec2.Version != before {
+		t.Errorf("an identical TIM rewrote the record: v%d -> v%d", before, rec2.Version)
+	}
+}
