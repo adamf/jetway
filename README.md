@@ -531,8 +531,13 @@ warns; treat that warning as a blocker.
 | Endpoint | Purpose |
 | --- | --- |
 | `/healthz` | Liveness. Never touches a dependency — restarting because the database blipped makes the outage worse. |
-| `/readyz` | Readiness. 503 when the store is unusable, so a load balancer backs off. |
-| `/metrics` | Prometheus. Watch `jetway_spool_depth`, `jetway_egress_retry_queue`, and `jetway_ingress_rejected_total`. |
+| `/readyz` | Readiness. 503 when the store is unusable, while standing by for a system's lease, or when the spool's oldest entry is older than 30 s, so a load balancer backs off. |
+| `/metrics` | Prometheus. Watch `jetway_spool_depth`, `jetway_outbox_congested_total`, `jetway_egress_retry_queue`, and `jetway_ingress_rejected_total`. |
+| `POST /api/admin/retire` | Retention: drops the daily partitions before a cutoff. `jetwayctl retire --before 2025-11-27` from a scheduled job. |
+| `GET /api/admin/export` | The archive: every record the node holds as newline-delimited JSON, oldest first. `jetwayctl export --out records.ndjson` weekly, before retention drops the day; a regulator asks years later. |
+
+The full production plan -- topology, the lease, database sizing, disaster
+recovery, the alerts and load testing -- is [docs/production-gcp.md](docs/production-gcp.md).
 
 To run a simulated carrier as its own process:
 
