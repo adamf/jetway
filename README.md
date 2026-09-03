@@ -403,7 +403,7 @@ where this is wrong, that is the single most useful contribution available.
 | `pkg/store` | Append-only message log and event-sourced PNR store; in-memory and Postgres |
 | `pkg/gateway` | The pipeline, routing, response generation and seat inventory |
 | `pkg/queue` | Work queues: placement, the time-based sweeper, and the external-publisher seam |
-| `pkg/ssim` | SSM and ASM schedule messages, as an extensible profile |
+| `pkg/ssim` | SSM and ASM schedule messages, as an extensible profile; the chapter 7 schedule file read and written |
 | `pkg/ndc` | NDC order messages over HTTP: create, retrieve, cancel, and the order view |
 | `pkg/matip` | MATIP (RFC 2351): packet format and the Type B session handshake |
 | `pkg/mvt` | MVT/MVA/DIV aircraft movement messages: departures, arrivals, delays, diversions |
