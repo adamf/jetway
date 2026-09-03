@@ -21,6 +21,13 @@ type Kind string
 const (
 	KindBSM Kind = "BSM"
 	KindBPM Kind = "BPM"
+	// KindBUM is the Baggage Unaccompanied Message of the same family: a
+	// bag travelling without its passenger -- short-shipped at the door
+	// and rushed on a later flight -- announced to the station that will
+	// receive it, with the flight it rides and whose bag it is. Same
+	// element grammar as the BSM; the practice's own text for it was not
+	// available, so it is this package's profile.
+	KindBUM Kind = "BUM"
 )
 
 // FlightLeg is one flight reference: .F outbound, .I inbound, .O onward.
@@ -62,8 +69,12 @@ type Message struct {
 // IsBaggage reports whether a Type B text is a BSM or BPM.
 func IsBaggage(text string) bool {
 	first := firstLine(text)
-	return first == "BSM" || first == "BPM" ||
-		strings.HasPrefix(first, "BSM ") || strings.HasPrefix(first, "BPM ")
+	for _, k := range []string{"BSM", "BPM", "BUM"} {
+		if first == k || strings.HasPrefix(first, k+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 func firstLine(text string) string {
@@ -77,8 +88,8 @@ func firstLine(text string) string {
 
 // Build renders the message.
 func Build(m *Message) (string, error) {
-	if m.Kind != KindBSM && m.Kind != KindBPM {
-		return "", fmt.Errorf("baggage: kind must be BSM or BPM, not %q", m.Kind)
+	if m.Kind != KindBSM && m.Kind != KindBPM && m.Kind != KindBUM {
+		return "", fmt.Errorf("baggage: kind must be BSM, BPM or BUM, not %q", m.Kind)
 	}
 	if len(m.Tags) == 0 {
 		return "", fmt.Errorf("baggage: a bag message without a tag is about nothing")
@@ -138,8 +149,8 @@ func Parse(text string) (*Message, error) {
 		return nil, fmt.Errorf("baggage: message too short")
 	}
 	m := &Message{Kind: Kind(clean[0])}
-	if m.Kind != KindBSM && m.Kind != KindBPM {
-		return nil, fmt.Errorf("baggage: identifier %q is not BSM or BPM", clean[0])
+	if m.Kind != KindBSM && m.Kind != KindBPM && m.Kind != KindBUM {
+		return nil, fmt.Errorf("baggage: identifier %q is not BSM, BPM or BUM", clean[0])
 	}
 	for _, ln := range clean[1:] {
 		switch {

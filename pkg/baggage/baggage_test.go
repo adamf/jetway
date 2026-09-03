@@ -1,6 +1,9 @@
 package baggage
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The minimum BSM as the freely published reproduction of the practice
 // prints it: version, outbound flight, one tag.
@@ -90,5 +93,26 @@ func TestIsBaggage(t *testing.T) {
 	}
 	if IsBaggage("MVT\nBA117/03OCT.GABCD.LHR") {
 		t.Error("a movement is not a bag message")
+	}
+}
+
+// A rush bag's unaccompanied message: the flight it rides, the tag and the
+// passenger it belongs to, round-tripped, and recognised as baggage.
+func TestBUMRoundTrips(t *testing.T) {
+	m := &Message{Kind: KindBUM, Version: "1LHR", Outbound: &FlightLeg{Flight: "BA0119", Date: "26NOV", City: "JFK"},
+		Tags: []Tag{{Number: "0125123456", Count: 1}}, Surname: "SMITH", Givens: []string{"JOHN"}, Elements: []string{".X/RUSH BA0117"}}
+	text, err := Build(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsBaggage(text) || !strings.HasPrefix(text, "BUM\n") || !strings.Contains(text, ".F/BA0119/26NOV/JFK") || !strings.HasSuffix(text, "ENDBUM") {
+		t.Fatalf("wire:\n%s", text)
+	}
+	back, err := Parse(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Kind != KindBUM || back.Outbound.Flight != "BA0119" || back.Tags[0].Number != "0125123456" || back.Surname != "SMITH" || len(back.Elements) != 1 {
+		t.Errorf("back: %+v", back)
 	}
 }
