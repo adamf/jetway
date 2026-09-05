@@ -72,6 +72,7 @@ type Node struct {
 	// switch. They come up with the listeners and count as live peers
 	// while connected.
 	links map[string]*transport.Client
+	linksMu sync.Mutex
 	// runCtx is the context Start was given, so a link added afterwards
 	// (ReloadPeers) is dialled under it; nil before Start.
 	runMu  sync.Mutex
@@ -265,7 +266,7 @@ func (n *Node) bindListeners(ctx context.Context) {
 		}()
 		n.Log.Info("ingress listening", "name", in.Name(), "addr", in.Addr())
 	}
-	for name, c := range n.links {
+	for name, c := range n.linkClients() {
 		name, c := name, c
 		go func() {
 			if err := c.Run(ctx); err != nil && ctx.Err() == nil {
@@ -465,7 +466,7 @@ func (n *Node) LivePeers() []string {
 	for _, m := range n.matip {
 		add(m.Peers())
 	}
-	for name, c := range n.links {
+	for name, c := range n.linkClients() {
 		if c.Connected() {
 			add([]string{name})
 		}
@@ -512,4 +513,16 @@ func (n *Node) SetPeerToken(peer, token string) {
 		t.SetToken(peer, token)
 		t.CloseSession(peer)
 	}
+}
+
+// linkClients is a snapshot of the links this node holds open itself; the
+// map is written when a link is added while running.
+func (n *Node) linkClients() map[string]*transport.Client {
+	n.linksMu.Lock()
+	defer n.linksMu.Unlock()
+	out := make(map[string]*transport.Client, len(n.links))
+	for k, v := range n.links {
+		out[k] = v
+	}
+	return out
 }

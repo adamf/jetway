@@ -5,6 +5,11 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.91 — The links map under a lock
+- A link added while running wrote the node's links map while LivePeers
+  read it; the race detector caught it in a world joining another. The
+  map is snapshotted under a lock wherever it is read.
+
 ## v0.1.90 — Links added while running are dialled
 - `ReloadPeers` with a `link_dial` peer on a running node dials it at
   once, under the context Start was given, instead of waiting for a

@@ -200,7 +200,7 @@ func (n *Node) registerPeer(p config.Peer) error {
 			ctx := n.runCtx
 			n.runMu.Unlock()
 			if ctx != nil && n.holding.Load() {
-				if c := n.links[p.Name]; c != nil {
+				if c := n.linkClients()[p.Name]; c != nil {
 					go func() {
 						if err := c.Run(ctx); err != nil && ctx.Err() == nil {
 							log.Error("link stopped", "peer", p.Name, "err", err)
@@ -257,7 +257,9 @@ func (n *Node) dialLink(p config.Peer) (egress.Sender, error) {
 			return err
 		},
 	}
+	n.linksMu.Lock()
 	n.links[name] = c
+	n.linksMu.Unlock()
 	return egress.SenderFunc{
 		Fn:   func(ctx context.Context, raw []byte) error { return c.Send(ctx, name, raw) },
 		Desc: "link to " + p.Egress.Addr,
