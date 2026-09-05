@@ -387,6 +387,35 @@ func (t *TCP) SetTokens(tokens map[string]string) {
 	t.tokens = tokens
 }
 
+// SetToken sets or clears one peer's shared secret at runtime: a world
+// handing a carrier to someone's own node gives the peer a token, and
+// the next hello that names the peer has to carry it.
+func (t *TCP) SetToken(peer, token string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.tokens == nil {
+		t.tokens = map[string]string{}
+	}
+	if token == "" {
+		delete(t.tokens, peer)
+		return
+	}
+	t.tokens[peer] = token
+}
+
+// CloseSession cuts a peer's open link, if any, so the next node to
+// identify as the peer takes its place cleanly.
+func (t *TCP) CloseSession(peer string) bool {
+	t.mu.Lock()
+	sess := t.sessions[peer]
+	t.mu.Unlock()
+	if sess == nil {
+		return false
+	}
+	sess.close()
+	return true
+}
+
 // tokenFor is the secret a peer must present, if any.
 func (t *TCP) tokenFor(peer string) (string, bool) {
 	t.mu.RLock()

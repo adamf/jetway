@@ -297,3 +297,56 @@ func TestHelloTokenGatesTheLink(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// A token set at runtime gates the next hello and cuts the current link:
+// YY, admitted on its word, is dropped when the switch gives YY a token,
+// and comes back only with it.
+func TestPeerTokenSetAtRuntime(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sw := startSwitch(t, ctx, switchConfig("1X", "XCHDD1X", []config.Peer{
+		{Name: "YY", Carrier: "YY", Format: "typeb", TTYAddress: "MANRMYY", Egress: config.Egress{Type: "tcp_accept"}},
+	}))
+	addr := sw.Addr("links")
+	dialCarrier(t, ctx, "YY", addr)
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(strings.Join(sw.LivePeers(), ","), "YY") {
+		if time.Now().After(deadline) {
+			t.Fatal("YY never came up on its word")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	sw.SetPeerToken("YY", "handed")
+	// The word-only client reconnects and is refused each time; the switch
+	// stops counting it live.
+	deadline = time.Now().Add(5 * time.Second)
+	for strings.Contains(strings.Join(sw.LivePeers(), ","), "YY") {
+		if time.Now().After(deadline) {
+			t.Fatal("YY stayed live after the token was set")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	up := make(chan struct{}, 1)
+	cl := &transport.Client{Addr: addr, Framer: transport.DefaultFramer(), Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Hello:     transport.Hello{Peer: "YY", Role: "carrier", Format: "typeb", Token: "handed"},
+		OnMessage: func(context.Context, string, []byte) error { return nil },
+		OnUp: func() {
+			select {
+			case up <- struct{}{}:
+			default:
+			}
+		}}
+	go cl.Run(ctx)
+	select {
+	case <-up:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the node with the token never came up")
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for !strings.Contains(strings.Join(sw.LivePeers(), ","), "YY") {
+		if time.Now().After(deadline) {
+			t.Fatal("YY with the token is not live")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

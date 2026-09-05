@@ -476,3 +476,14 @@ func spoolReady(sp backlog, maxAge time.Duration) error {
 	}
 	return nil
 }
+
+// SetPeerToken gives a peer a shared secret on every hello-identified
+// listener of this node, or clears it with "". A link the peer holds now
+// is cut, so whoever presents the token next is the peer. It is how a
+// world hands one of its carriers to a node it does not run.
+func (n *Node) SetPeerToken(peer, token string) {
+	for _, t := range n.tcp {
+		t.SetToken(peer, token)
+		t.CloseSession(peer)
+	}
+}
