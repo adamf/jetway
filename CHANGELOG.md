@@ -5,6 +5,97 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.88 — The operations desk
+- `pkg/ops`: a carrier's operations desk in a node that runs the carrier
+  for real. The schedule loads from the SSIM chapter 7 file; a
+  `dcs.Station` opens flights from the carrier's own name lists with the
+  schedule's aircraft; the aircraft's OOOI reports from the datalink
+  provider become the MVTs (AD with the ETA, AA, delay 93 against
+  schedule) sent to the configured addresses; the towers' and the Network
+  Manager's messages are filed against the callsign. `ops:` in the
+  configuration (`schedule`, `via`, `movements_to`, `accounting_code`)
+  wires it as the gateway's Ground and the console's departure control.
+  Without it a bare `jetwayd` dialling a world as one of its carriers flew
+  aircraft nobody could see.
+
+## v0.1.87 — A peer's token at runtime
+- `Node.SetPeerToken` sets or clears a peer's link token on every
+  hello-identified listener and cuts the link the peer holds, so a world
+  can hand a carrier to someone's node without a restart.
+
+## v0.1.86 — Link tokens
+- `Peer.Token` in the configuration, `Hello.Token` on the wire: a listener
+  that identifies subscribers by hello refuses a link that names a peer
+  with a token and does not present it, before any message, counted as
+  `bad_token`. The dialling side sends the token configured for the peer.
+
+## v0.1.85 — Flow management and crew legality
+- `pkg/atfm`: the Network Manager's slot messages in ADEXP -- SAM, SRM,
+  SLC, FLS, DES and the operator's replies -- to EUROCONTROL's public ATFCM
+  Users Manual, tested against its examples verbatim; REGCAUSE with Annex
+  D's IATA correlation. The gateway hands a slot to a Ground that
+  implements `ATFMReceiver`.
+- `pkg/crew`: 14 CFR Part 117 flight time and flight duty period limits,
+  the two-hour extension and the ten-hour rest; a duty checked as planned
+  and again as the day runs late.
+
+## v0.1.84 — The network's bid prices
+- `inventory.Controller.BidPrice`: a caller's leg valuations (the network
+  programme's duals) replace the ladders' displacement cost in bid-price
+  control, consulted before the inventory lock.
+
+## v0.1.83 — Memos, tracing files, the network programme
+- `pkg/bsp`: agency debit and credit memos with BKS45 naming the related
+  document, issue date, coupon and reason.
+- `pkg/baggage`: AHL, OHD and FWD tracing files and the match between a
+  missing bag and one found, as a profile from public training material.
+- `pkg/inventory`: `Simplex` and `NetworkBidPrices`, the deterministic
+  network programme whose leg duals are bid prices; tested on a two-leg
+  example worked by hand.
+
+## v0.1.82 — The agents' side of settlement
+- `pkg/bsp` RET: the agent reporting data file of DISH 23 chapter 5,
+  written and read.
+
+## v0.1.81 — Bid-price control
+- `Inventory.Network`: a connecting itinerary is accepted only when its
+  fare covers the sum of its legs' bid prices from the EMSR-b ladders;
+  unpriced records are left to the ladders.
+
+## v0.1.80 — Exchanges
+- `Gateway.Exchange` reissues a ticket over the live itinerary; the old
+  coupons are marked exchanged, the new document carries the original
+  issue in BKS46 and the old value as its form of payment (EX).
+
+## v0.1.77 to v0.1.79 — Proration, refunds, the rush bag
+- `pkg/prorate`: straight rate proration by mileage and the interline
+  service charge.
+- `Gateway.Refund`: open coupons refunded, used ones left used; the plan
+  reports the refund reversed.
+- `baggage.KindBUM`: the unaccompanied bag message ahead of a rushed bag.
+
+## v0.1.72 to v0.1.76 — Settlement, ticket advice, deadlocks
+- `pkg/bsp` HOT: the settlement file of IATA's public DISH 23 handbook,
+  column by column, over-punch signed, tested against its figures.
+- SSR TKNE ticket advice to teletype carriers, fitted to the Type B line.
+- `Inventory.SoldByClass`; ladders fetched before the inventory lock, after
+  a forecaster reading sold counts under the lock deadlocked.
+
+## v0.1.69 to v0.1.71 — Two switches
+- `link_dial` egress: a dialled, bidirectional link held open to another
+  node; `via` routing sends the other switch's subscribers down it.
+- Relaying nodes use a non-blocking outbox (a reader on a writer's trunk
+  deadlocked); a message crosses a trunk once and is never returned down
+  the trunk it arrived on; the sessions sender reports congestion.
+
+## v0.1.66 to v0.1.68 — PNRGOV, revenue management, the SSIM file
+- `pkg/padis` PNRGOV push, tested against IATA's guide verbatim; ASM TIM
+  retimes the sold segments to TK.
+- `inventory.EMSRb` and `Controller`: nested authorisations from a demand
+  forecast by class, checked against the normal table.
+- `pkg/ssim` chapter 7 file, written and read to the layout two open
+  parsers share; a fuzzer found a newline-in-field defect.
+
 ## v0.1.65 — An aircraft substitution at departure control
 - `Station.ChangeEquipment` rebuilds an open flight's cabin from a new
   aircraft type: every accepted or boarded passenger keeps their seat if

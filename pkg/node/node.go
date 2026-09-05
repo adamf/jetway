@@ -10,6 +10,8 @@ package node
 import (
 	"context"
 	"fmt"
+	"github.com/adamf/jetway/pkg/dcs"
+	"github.com/adamf/jetway/pkg/ops"
 	"log/slog"
 	"net/http"
 	"os"
@@ -41,6 +43,8 @@ type Node struct {
 	Log     *slog.Logger
 	Store   store.Store
 	Gateway *gateway.Gateway
+	// Ops is the operations desk, when the configuration names a schedule.
+	Ops     *ops.Desk
 	Bus     *gateway.Bus
 	Queues  *queue.Manager
 	Sweeper *queue.Sweeper
@@ -122,6 +126,16 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Optio
 	}, st, n.Bus, log, opts.LocatorSecret)
 
 	n.Gateway.Avail = avail.NewCache()
+	if cfg.Ops.Schedule != "" {
+		// A carrier, not only a gateway: the operations desk answers the
+		// airport, files movements, hears the towers and the slots.
+		legs, err := ops.LoadSchedule(cfg.Ops.Schedule)
+		if err != nil {
+			return nil, err
+		}
+		n.Ops = ops.New(n.Gateway, cfg.Identity.Designator, legs, ops.Config{Via: cfg.Ops.Via, MovementsTo: cfg.Ops.MovementsTo, AccountingCode: cfg.Ops.AccountingCode}, log)
+		n.Gateway.Ground = n.Ops
+	}
 	n.Gateway.Log.Info("availability cache ready", "trust_window", n.Gateway.Avail.StaleAfter)
 
 	n.Gateway.Relay = cfg.Routing.Relay
@@ -158,8 +172,12 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Optio
 	n.Sweeper = &queue.Sweeper{Records: st, Queues: n.Queues, Log: log}
 
 	if !opts.SkipConsole {
+		var ground *dcs.Station
+		if n.Ops != nil {
+			ground = n.Ops.Station
+		}
 		n.API = &api.Server{
-			Gateway: n.Gateway, Store: st, Bus: n.Bus, Log: log,
+			Gateway: n.Gateway, Store: st, Bus: n.Bus, Log: log, Ground: ground,
 			Extend:  opts.ExtendAPI,
 			Console: cfg.HTTP.Console,
 			Metrics: cfg.HTTP.Metrics,

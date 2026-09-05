@@ -31,6 +31,7 @@ about which layer is which.
 | `pkg/iatci` | **Inferred, closely.** DCQCKI/DCRCKA and their segments follow the PADIS release 01.1 structures as mirrored publicly by EDI schema vendors, element by element; the IATCI Implementation Guide (members only) was not consulted, so usage is this package's profile. |
 | `pkg/inventory` | **Method specified.** Serial nested class authorisations are the textbook leg-based inventory control, EMSR-b (Belobaba; Talluri and van Ryzin ch. 2) sets them from a forecast, and leg bid prices -- additive from those ladders, or the duals of the deterministic network programme (Talluri and van Ryzin ch. 3) solved by a plain simplex -- give the network control over connecting itineraries; the numbers are the caller's. The EMSR-b tests check against the normal table, not the code. |
 | `pkg/bsp` | **Specified.** IATA publishes the BSP Data Interchange Specifications Handbook (DISH 23) free; the HOT records follow its chapter 6 layouts column by column, amounts are signed by its over-punch table and add up by its section 6.7, all tested against the handbook's own figures. ADM and ACM memos carry the related document in BKS45 as chapter 6 lays it out. Net reporting, card data and tax on commission are left to bilateral schemes and not implemented. |
+| `pkg/ops` | **Practice, not a document.** Deriving the MVT from the aircraft's OOOI report, opening the flight from the carrier's own PNL, and filing the slot against the callsign are what every operations system does; there is no standard for the desk itself, only for each message it handles, and those are the codec packages' standings. |
 | `pkg/prorate` | **Method public, provisos not.** Straight rate proration by mileage is the arithmetic every prorate manual starts from; the Prorate Manual's minima, factors and special agreements are sold and not reproduced. The service charge rate is the caller's. |
 
 When you implement something in the inferred category, say so in the package
@@ -139,7 +140,7 @@ Everything importable lives under `pkg/`, in two layers. The codec packages
 (`typeb`, `edifact`, `airimp`, `padis`, `avs`, `ssim`, `ndc`, `matip`, `pnr`,
 `rescode`, `avail`, `pnl`, `baggage`, `mvt`, `dcs`, `aftn`, `ats`, `atfm`, `acars`, `bsp`, `prorate`, `crew`) must not import the application packages (`gateway`,
 `store`, `node`, `queue`, `ingress`, `egress`, `transport`, `config`, `demo`,
-`api`, `metrics`, `telemetry`, `spool`, `ulid`). The application packages were
+`api`, `metrics`, `telemetry`, `spool`, `ulid`, `ops`). The application packages were
 promoted out of `internal/` on 2026-08-31 so external consumers -- the world
 simulator first among them -- can embed a node; treat their exported surface as
 API now, not as private plumbing. Only `internal/scenario` (the test harness)

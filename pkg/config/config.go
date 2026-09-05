@@ -27,9 +27,27 @@ type Config struct {
 	Routing   Routing   `yaml:"routing"`
 	Telemetry Telemetry `yaml:"telemetry"`
 	Demo      Demo      `yaml:"demo"`
+	// Ops is the carrier's operations desk: a schedule to fly, departure
+	// control at its stations, movements filed to the network. Empty for a
+	// node that is a gateway and nothing more.
+	Ops Ops `yaml:"ops"`
 	// LocatorSecret keys record locator allocation. Prefer the
 	// JETWAY_LOCATOR_SECRET environment variable to putting it in a file.
 	LocatorSecret string `yaml:"locator_secret"`
+}
+
+// Ops configures the operations desk (pkg/ops).
+type Ops struct {
+	// Schedule is the path of the carrier's SSIM chapter 7 file. Empty
+	// means no desk.
+	Schedule string `yaml:"schedule"`
+	// Via is the link name operational messages go out on: the switch.
+	Via string `yaml:"via"`
+	// MovementsTo are the Type B addresses that receive the carrier's
+	// movement messages.
+	MovementsTo []string `yaml:"movements_to"`
+	// AccountingCode is the carrier's three-digit numeric code, for bag tags.
+	AccountingCode string `yaml:"accounting_code"`
 }
 
 // Telemetry configures OpenTelemetry tracing.

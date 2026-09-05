@@ -417,6 +417,7 @@ where this is wrong, that is the single most useful contribution available.
 | `pkg/matip` | MATIP (RFC 2351): packet format and the Type B session handshake |
 | `pkg/mvt` | MVT/MVA/DIV aircraft movement messages: departures, arrivals, delays, diversions |
 | `pkg/pnl` | PNL and ADL passenger name lists: what reservations tells the airport |
+| `pkg/ops` | A carrier's operations desk in a node that runs the carrier for real: the schedule from its SSIM file, departure control at its stations as the gateway's Ground, the aircraft's OOOI reports turned into the MVTs the network reads, the towers' and the Network Manager's messages filed; `ops:` in the configuration turns a gateway into an airline |
 | `pkg/atfm` | Air traffic flow management slot messages in ADEXP: the SAM that gives a flight its calculated take-off time, SRM, SLC, FLS, DES and the operator's replies, with the regulation cause and its IATA delay code, to EUROCONTROL's public ATFCM Users Manual |
 | `pkg/crew` | Flight crew legality: flight time and flight duty period limits by report time and segments, the two-hour extension and the ten-hour rest, from 14 CFR Part 117 as published; a duty checked as planned and again as the day runs late |
 | `pkg/baggage` | BSM, BPM and BUM bag messages: tags issued, bags loaded, a bag rushed without its passenger; AHL, OHD and FWD tracing files for a bag that did not arrive, one found without its passenger, and the match that forwards it |
