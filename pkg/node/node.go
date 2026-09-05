@@ -71,7 +71,7 @@ type Node struct {
 	// egress): a trunk to another switch, or a carrier's link to its
 	// switch. They come up with the listeners and count as live peers
 	// while connected.
-	links map[string]*transport.Client
+	links   map[string]*transport.Client
 	linksMu sync.Mutex
 	// runCtx is the context Start was given, so a link added afterwards
 	// (ReloadPeers) is dialled under it; nil before Start.
