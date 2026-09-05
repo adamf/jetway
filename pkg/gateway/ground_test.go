@@ -10,6 +10,7 @@ import (
 
 	"github.com/adamf/jetway/pkg/acars"
 	"github.com/adamf/jetway/pkg/aftn"
+	"github.com/adamf/jetway/pkg/atfm"
 	"github.com/adamf/jetway/pkg/ats"
 	"github.com/adamf/jetway/pkg/baggage"
 	"github.com/adamf/jetway/pkg/dcs"
@@ -25,6 +26,7 @@ type recorder struct {
 	deps     []*dcs.Message
 	oooi     []*acars.Message
 	ats      []*ats.Message
+	atfm     []*atfm.Message
 	origins  []string
 	refuseOn string
 }
@@ -37,6 +39,12 @@ func (r *recorder) Datalink(ctx context.Context, m *acars.Message, o typeb.Addre
 
 func (r *recorder) ATS(ctx context.Context, m *ats.Message, env *aftn.Message) error {
 	r.ats = append(r.ats, m)
+	r.origins = append(r.origins, env.Originator)
+	return nil
+}
+
+func (r *recorder) ATFM(ctx context.Context, m *atfm.Message, env *aftn.Message) error {
+	r.atfm = append(r.atfm, m)
 	r.origins = append(r.origins, env.Originator)
 	return nil
 }
@@ -216,6 +224,41 @@ func TestGroundReceivesDatalinkAndATS(t *testing.T) {
 	}
 	if msg, _ := gw.Store.GetMessage(ctx, res.MessageID); msg == nil || msg.Format != store.FormatAFTN || msg.Kind != "ATS/DEP/BAW117" {
 		t.Errorf("filed as %+v", msg)
+	}
+}
+
+// A slot allocation from the Network Manager reaches the operations centre
+// through the same seam: parsed, handed over with its envelope, filed under
+// its own kind. A Ground that does not listen for flow management has it
+// filed and nothing more.
+func TestGroundReceivesSlotMessages(t *testing.T) {
+	gw, rec := carrierNode(t)
+	gw.Identity.AFTNAddress = "EGLLBAWO"
+	ctx := context.Background()
+	env := &aftn.Message{TransmissionID: "NMA001", Priority: aftn.PriorityRegularity, Addressees: []string{"EGLLBAWO"},
+		FilingTime: "260600", Originator: "EUCHZMFP",
+		Text: "-TITLE SAM\n-ARCID BAW117\n-IFPLID AA00000117\n-ADEP EGLL\n-ADES KJFK\n-EOBD 261126\n-EOBT 0800\n-CTOT 0855\n-REGUL KJFKA26M\n-TAXITIME 0020\n-REGCAUSE WA 84"}
+	raw, err := env.Encode(aftn.EncodeOptions{CRLF: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := gw.Ingest(ctx, "net", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != store.StatusApplied {
+		t.Errorf("SAM status %s", res.Status)
+	}
+	if len(rec.atfm) != 1 || rec.atfm[0].CTOT != "0855" || rec.atfm[0].REGCAUSE == nil || rec.atfm[0].REGCAUSE.IATA != "84" || rec.origins[len(rec.origins)-1] != "EUCHZMFP" {
+		t.Errorf("slot not handed over: %+v", rec.atfm)
+	}
+	if msg, _ := gw.Store.GetMessage(ctx, res.MessageID); msg == nil || msg.Format != store.FormatAFTN || msg.Kind != "ATFM/SAM/BAW117" {
+		t.Errorf("filed as %+v", msg)
+	}
+	// Without a listener the slot is filed, not refused.
+	gw.Ground = GroundFuncs{}
+	if res, err := gw.Ingest(ctx, "net", raw); err != nil || res.Status != store.StatusApplied {
+		t.Errorf("unlistened slot: %+v %v", res, err)
 	}
 }
 

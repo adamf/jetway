@@ -408,6 +408,8 @@ where this is wrong, that is the single most useful contribution available.
 | `pkg/matip` | MATIP (RFC 2351): packet format and the Type B session handshake |
 | `pkg/mvt` | MVT/MVA/DIV aircraft movement messages: departures, arrivals, delays, diversions |
 | `pkg/pnl` | PNL and ADL passenger name lists: what reservations tells the airport |
+| `pkg/atfm` | Air traffic flow management slot messages in ADEXP: the SAM that gives a flight its calculated take-off time, SRM, SLC, FLS, DES and the operator's replies, with the regulation cause and its IATA delay code, to EUROCONTROL's public ATFCM Users Manual |
+| `pkg/crew` | Flight crew legality: flight time and flight duty period limits by report time and segments, the two-hour extension and the ten-hour rest, from 14 CFR Part 117 as published; a duty checked as planned and again as the day runs late |
 | `pkg/baggage` | BSM, BPM and BUM bag messages: tags issued, bags loaded, a bag rushed without its passenger; AHL, OHD and FWD tracing files for a bag that did not arrive, one found without its passenger, and the match that forwards it |
 | `pkg/fare` | Fares filed per market and class with rules and taxes, and the pricing that sells each segment under the cheapest fare whose rules the trip meets |
 | `pkg/inventory` | A carrier's seat inventory: capacity per cabin from the schedule, sold and waitlisted per flight, rebuilt from the book of record; answers sells and broadcasts availability; an EMSR-b revenue management controller sets the nested authorisations from a demand forecast; bid-price control over connecting itineraries, from the leg ladders or from the network linear programme whose duals price each leg |

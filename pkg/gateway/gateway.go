@@ -734,6 +734,20 @@ func (g *Gateway) process(ctx context.Context, peer *Peer, msg *store.Message, r
 			return g.Ground.ATS(ctx, dec.ATS, dec.AFTN)
 		})
 	}
+	// Flow management: a slot for one of the carrier's flights. Only an
+	// operations centre that says it listens hears it; for anyone else
+	// the message is filed like other network text.
+	if dec.ATFM != nil {
+		if r, ok := g.Ground.(ATFMReceiver); ok && g.Ground != nil {
+			return g.toGround(ctx, msg, res, "atfm", func() error {
+				return r.ATFM(ctx, dec.ATFM, dec.AFTN)
+			})
+		}
+		msg.Status = store.StatusApplied
+		res.Status = store.StatusApplied
+		g.trace(msg.ID, "atfm", "slot message filed")
+		return nil
+	}
 	if dec.AFTN != nil {
 		// Free text on the aeronautical network: filed, and that is all.
 		msg.Status = store.StatusApplied

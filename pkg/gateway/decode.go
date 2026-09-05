@@ -11,6 +11,7 @@ import (
 	"github.com/adamf/jetway/pkg/acars"
 	"github.com/adamf/jetway/pkg/aftn"
 	"github.com/adamf/jetway/pkg/airimp"
+	"github.com/adamf/jetway/pkg/atfm"
 	"github.com/adamf/jetway/pkg/ats"
 	"github.com/adamf/jetway/pkg/avs"
 	"github.com/adamf/jetway/pkg/baggage"
@@ -75,6 +76,7 @@ type decoded struct {
 	// when the text is one.
 	AFTN *aftn.Message
 	ATS  *ats.Message
+	ATFM *atfm.Message
 	// OOOI is an aircraft's datalink report -- out, off, on, in -- forwarded
 	// by the service provider over Type B.
 	OOOI *acars.Message
@@ -316,6 +318,21 @@ func (g *Gateway) decodeAFTN(peer *Peer, raw []byte) (*decoded, error) {
 		return nil, fmt.Errorf("gateway: aftn decode: %w", err)
 	}
 	d := &decoded{Format: store.FormatAFTN, AFTN: env, peer: peer, Kind: "AFTN/" + string(env.Priority)}
+	if atfm.Looks(env.Text) {
+		// A flow management message: a slot, its revision or cancellation.
+		m, err := atfm.Parse(env.Text)
+		if err != nil {
+			d.Kind = "ATFM"
+			d.Diagnostics = append(d.Diagnostics, store.Diagnostic{
+				Layer: "atfm", Severity: "warn", Code: "unreadable_atfm_message", Detail: err.Error(),
+			})
+			d.Unreadable = err.Error()
+			return d, nil
+		}
+		d.ATFM = m
+		d.Kind = "ATFM/" + string(m.Title) + "/" + m.ARCID
+		return d, nil
+	}
 	if !ats.Looks(env.Text) {
 		return d, nil
 	}

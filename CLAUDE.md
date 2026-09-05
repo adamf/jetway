@@ -19,6 +19,8 @@ about which layer is which.
 | `pkg/mvt` | **Inferred, closely.** AHM 780/781 is paid, but OAG publishes the element tables and verbatim examples this package is built and tested against. |
 | `pkg/dcs` PSM, PTM, LDM, CPM | **Inferred, closely.** RP 1715/1718 and AHM 583/587 are paid, but airports and handlers reproduce the practices' own worked examples; the parsers are tested against those verbatim. |
 | `pkg/dcs` PFS, ETL | **Inferred.** No free reproduction of RP 1719/1719c was found. The layouts follow the PNL family; the category vocabulary is public. |
+| `pkg/atfm` | **Specified.** EUROCONTROL's ATFCM Users Manual is public; the slot messages follow its ADEXP field vocabulary and are tested against its Annex B examples verbatim, the regulation causes against its Annex D. The Network Manager's B2B services are not reproduced. |
+| `pkg/crew` | **Specified.** 14 CFR Part 117 is public law; Tables A and B, §117.19 and §117.25 are transcribed and tested value by value. Other regimes are a Rules value the caller supplies. |
 | `pkg/baggage` tracing | **Inferred.** WorldTracer's AHL, OHD and FWD files are the vendor's formats and are not published; the element codes and layout here are the ones handler training material reproduces, kept as an extensible profile with unknown elements verbatim. |
 | `pkg/aftn` | **Specified.** ICAO Annex 10 Volume II is public; the envelope is tested against the Annex's own example. |
 | `pkg/ats` | **Specified via free reproductions.** Doc 4444 is sold, but the FAA's ICAO flight planning guidance reproduces the message forms with verbatim examples the parser is tested against. |
@@ -135,7 +137,7 @@ host runs this unchanged and a function platform cannot.
 
 Everything importable lives under `pkg/`, in two layers. The codec packages
 (`typeb`, `edifact`, `airimp`, `padis`, `avs`, `ssim`, `ndc`, `matip`, `pnr`,
-`rescode`, `avail`, `pnl`, `baggage`, `mvt`, `dcs`, `aftn`, `ats`, `acars`) must not import the application packages (`gateway`,
+`rescode`, `avail`, `pnl`, `baggage`, `mvt`, `dcs`, `aftn`, `ats`, `atfm`, `acars`, `bsp`, `prorate`, `crew`) must not import the application packages (`gateway`,
 `store`, `node`, `queue`, `ingress`, `egress`, `transport`, `config`, `demo`,
 `api`, `metrics`, `telemetry`, `spool`, `ulid`). The application packages were
 promoted out of `internal/` on 2026-08-31 so external consumers -- the world

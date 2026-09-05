@@ -6,6 +6,7 @@ import (
 
 	"github.com/adamf/jetway/pkg/acars"
 	"github.com/adamf/jetway/pkg/aftn"
+	"github.com/adamf/jetway/pkg/atfm"
 	"github.com/adamf/jetway/pkg/ats"
 	"github.com/adamf/jetway/pkg/baggage"
 	"github.com/adamf/jetway/pkg/dcs"
@@ -41,6 +42,14 @@ type Ground interface {
 	ATS(ctx context.Context, m *ats.Message, envelope *aftn.Message) error
 }
 
+// ATFMReceiver is the optional half of Ground an operations centre adds to
+// hear flow management: a slot allocated to one of its flights, revised,
+// or cancelled, with the AFTN envelope it came in. A Ground that does not
+// implement it has the messages filed and nothing more.
+type ATFMReceiver interface {
+	ATFM(ctx context.Context, m *atfm.Message, envelope *aftn.Message) error
+}
+
 // GroundFuncs adapts three functions to Ground, for embedders that only care
 // about some of the traffic. A nil function files the message and does
 // nothing, which is the gateway's default.
@@ -50,6 +59,15 @@ type GroundFuncs struct {
 	OnDeparture func(ctx context.Context, m *dcs.Message, origin typeb.Address) error
 	OnDatalink  func(ctx context.Context, m *acars.Message, origin typeb.Address) error
 	OnATS       func(ctx context.Context, m *ats.Message, envelope *aftn.Message) error
+	OnATFM      func(ctx context.Context, m *atfm.Message, envelope *aftn.Message) error
+}
+
+// ATFM implements ATFMReceiver.
+func (g GroundFuncs) ATFM(ctx context.Context, m *atfm.Message, envelope *aftn.Message) error {
+	if g.OnATFM == nil {
+		return nil
+	}
+	return g.OnATFM(ctx, m, envelope)
 }
 
 // Datalink implements Ground.
