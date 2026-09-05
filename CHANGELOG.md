@@ -5,6 +5,19 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.93 — The desk runs the ground story
+- `ops.Desk.BuildNameList` and `SendNameList`: the PNL for a departure
+  from the node's own book -- a party per record with its locator, service
+  requests and ticket numbers -- opening the flight at the node's station
+  and copied to the configured addresses. `Desk.Run` is the whole ground
+  story now: name list, every passenger accepted with a bag, the counter
+  closed, the cabin boarded, the door closed with the load, the closure's
+  messages sent. On the console: `POST /api/ops/flight/{flight}/{date}/{board}/pnl`
+  and `.../run`, so a timetable outside the node -- a person, an agent, a
+  world -- can keep the hours.
+
+## v0.1.92 — gofmt
+
 ## v0.1.91 — The links map under a lock
 - A link added while running wrote the node's links map while LivePeers
   read it; the race detector caught it in a world joining another. The

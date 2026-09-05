@@ -253,3 +253,34 @@ func (s *Server) opsDesk(w http.ResponseWriter, r *http.Request) {
 		"movements_to": s.Ops.Config.MovementsTo, "via": s.Ops.Config.Via,
 	})
 }
+
+// opsNameList is POST /api/ops/flight/{flight}/{date}/{board}/pnl: the desk
+// sends the departure's name list from this node's book, opening the
+// flight at its station.
+func (s *Server) opsNameList(w http.ResponseWriter, r *http.Request) {
+	if s.Ops == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "this node runs no operations desk"})
+		return
+	}
+	n, err := s.Ops.SendNameList(r.Context(), r.PathValue("flight"), r.PathValue("date"), r.PathValue("board"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"parts": n})
+}
+
+// opsRun is POST /api/ops/flight/{flight}/{date}/{board}/run: the whole
+// ground story for the departure, now.
+func (s *Server) opsRun(w http.ResponseWriter, r *http.Request) {
+	if s.Ops == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "this node runs no operations desk"})
+		return
+	}
+	story, err := s.Ops.Run(r.Context(), r.PathValue("flight"), r.PathValue("date"), r.PathValue("board"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "story": story})
+		return
+	}
+	writeJSON(w, http.StatusOK, story)
+}

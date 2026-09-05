@@ -110,6 +110,8 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("GET /api/ops", s.opsDesk)
+	mux.HandleFunc("POST /api/ops/flight/{flight}/{date}/{board}/pnl", s.opsNameList)
+	mux.HandleFunc("POST /api/ops/flight/{flight}/{date}/{board}/run", s.opsRun)
 	mux.HandleFunc("GET /api/flights", s.flights)
 	mux.HandleFunc("GET /api/journeys", s.journeys)
 	mux.HandleFunc("POST /api/book", s.book)

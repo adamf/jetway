@@ -3,10 +3,15 @@ package ops
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"github.com/adamf/jetway/pkg/gateway"
+	"github.com/adamf/jetway/pkg/pnr"
+	"github.com/adamf/jetway/pkg/store"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,5 +105,46 @@ func TestDeskOpensFlightsAndFilesSlots(t *testing.T) {
 	}
 	if s := d.Slots()["BAW117/261126"]; s != "CTOT 0855 KJFKA26M WA 84" {
 		t.Errorf("slot line %q", s)
+	}
+}
+
+// The ground story from the node's own book: a record on the flight becomes
+// the name list that opens the flight at the station, the passengers are
+// accepted with bags, the counter closes, the cabin boards, the door closes
+// and the closure's messages are counted.
+func TestGroundStoryFromTheBook(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMem()
+	gw := gateway.New(gateway.Identity{Designator: "BA", TTYAddress: "LONRMBA", Name: "test"}, st, gateway.NewBus(8),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), []byte("s"))
+	d := New(gw, "BA", schedule(t), Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	dep := time.Date(2026, 11, 26, 8, 0, 0, 0, time.UTC)
+	for i, name := range []string{"SMITH", "JONES"} {
+		rec := &pnr.PNR{RecordLocator: fmt.Sprintf("STORY%d", i), Status: pnr.StatusTicketed,
+			Passengers: []pnr.Passenger{{Ref: 1, Surname: name, Given: "ANN", Title: "MS"}},
+			Segments: []pnr.Segment{{Ref: 1, Type: pnr.SegmentAir, Carrier: "BA", FlightNum: "0117", Class: "Y", Depart: dep, DepartTime: "0800",
+				WireDate: "26NOV", Board: "LHR", Off: "JFK", Status: "HK", Seats: 1}}}
+		if err := st.CreatePNR(ctx, rec, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parts, err := d.BuildNameList(ctx, "BA0117", "26NOV", "LHR")
+	if err != nil || len(parts) != 1 || !strings.Contains(parts[0], "1SMITH/ANNMS") || !strings.Contains(parts[0], ".L/STORY0") {
+		t.Fatalf("name list %q %v", parts, err)
+	}
+	story, err := d.Run(ctx, "BA0117", "26NOV", "LHR")
+	if err != nil {
+		t.Fatalf("run: %v (%+v)", err, story)
+	}
+	if story.Listed != 1 || story.Accepted != 2 || story.Boarded != 2 || !story.Closed || !story.Loadsheet {
+		t.Errorf("story %+v", story)
+	}
+	fl, ok := d.Station.Find("BA0117", "26NOV")
+	if !ok || fl.ClosedAt == nil {
+		t.Errorf("flight after the story: %+v", fl)
+	}
+	// Run again on a closed flight: nothing left to accept, and it says so.
+	if _, err := d.Run(ctx, "BA0117", "26NOV", "LHR"); err == nil {
+		t.Error("a second run on a closed flight should be refused")
 	}
 }
