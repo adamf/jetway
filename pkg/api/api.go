@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/adamf/jetway/pkg/ops"
 	"io"
 	"log/slog"
 	"net/http"
@@ -67,6 +68,9 @@ type Server struct {
 	// Ground is this node's departure control, when it runs one. Nil hides
 	// the departures endpoints and the console's Departures view.
 	Ground *dcs.Station
+	// Ops is the node's operations desk, when the configuration names a
+	// schedule: /api/ops serves its legs, slots and movement count.
+	Ops *ops.Desk
 	// OnAccept, OnOffload and OnClose let the embedder transmit what an
 	// agent's action produced: the bag messages at acceptance, the bag pull
 	// at offload, the whole message set at close. The API itself only
@@ -105,6 +109,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /{$}", s.console)
 	}
 	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("GET /api/ops", s.opsDesk)
 	mux.HandleFunc("GET /api/flights", s.flights)
 	mux.HandleFunc("GET /api/journeys", s.journeys)
 	mux.HandleFunc("POST /api/book", s.book)

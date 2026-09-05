@@ -5,6 +5,11 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.89 — The desk on the console
+- `GET /api/ops` on a node with an operations desk: the schedule as
+  loaded, the slots flow management has given its flights, the movements
+  filed, and where they go. 404 on a plain gateway.
+
 ## v0.1.88 — The operations desk
 - `pkg/ops`: a carrier's operations desk in a node that runs the carrier
   for real. The schedule loads from the SSIM chapter 7 file; a

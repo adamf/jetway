@@ -178,6 +178,7 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Optio
 		}
 		n.API = &api.Server{
 			Gateway: n.Gateway, Store: st, Bus: n.Bus, Log: log, Ground: ground,
+			Ops:     n.Ops,
 			Extend:  opts.ExtendAPI,
 			Console: cfg.HTTP.Console,
 			Metrics: cfg.HTTP.Metrics,

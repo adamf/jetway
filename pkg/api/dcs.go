@@ -239,3 +239,17 @@ func (s *Server) dcsClose(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"closure": cl, "send_error": sendErr})
 }
+
+// opsDesk is GET /api/ops: the operations desk's schedule as loaded, the
+// slots flow management has given its flights, and how many movements it
+// has filed. 404 on a node that is a gateway and nothing more.
+func (s *Server) opsDesk(w http.ResponseWriter, r *http.Request) {
+	if s.Ops == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "this node runs no operations desk"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"carrier": s.Ops.Carrier, "legs": s.Ops.Legs(), "slots": s.Ops.Slots(), "movements": s.Ops.Movements(),
+		"movements_to": s.Ops.Config.MovementsTo, "via": s.Ops.Config.Via,
+	})
+}
