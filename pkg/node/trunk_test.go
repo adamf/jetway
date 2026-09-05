@@ -350,3 +350,59 @@ func TestPeerTokenSetAtRuntime(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// A trunk added to a running switch is dialled at once: two switches come
+// up unaware of each other, one reloads its peers with a link_dial trunk to
+// the other (and the far end reloads the accepting side, with a token), and
+// a message crosses.
+func TestTrunkAddedAtRuntimeIsDialled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b := startSwitch(t, ctx, switchConfig("1Y", "XCHDD1Y", []config.Peer{
+		{Name: "YY", Carrier: "YY", Format: "typeb", TTYAddress: "MANRMYY", Egress: config.Egress{Type: "tcp_accept"}},
+	}))
+	a := startSwitch(t, ctx, switchConfig("1X", "XCHDD1X", []config.Peer{
+		{Name: "XX", Carrier: "XX", Format: "typeb", TTYAddress: "LHRRMXX", Egress: config.Egress{Type: "tcp_accept"}},
+	}))
+	xx := dialCarrier(t, ctx, "XX", a.Addr("links"))
+	yy := dialCarrier(t, ctx, "YY", b.Addr("links"))
+	// The far end learns of the trunk first, with the token it will demand.
+	if _, err := b.ReloadPeers([]config.Peer{
+		{Name: "1X", Carrier: "1X", Format: "typeb", TTYAddress: "XCHDD1X", Trunk: true, Token: "world", Egress: config.Egress{Type: "tcp_accept"}},
+		{Name: "XX", Carrier: "XX", Format: "typeb", TTYAddress: "LHRRMXX", Egress: config.Egress{Type: "via", Via: "1X"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.ReloadPeers([]config.Peer{
+		{Name: "1Y", Carrier: "1Y", Format: "typeb", TTYAddress: "XCHDD1Y", Token: "world", Egress: config.Egress{Type: "link_dial", Addr: b.Addr("links"), Role: "switch"}},
+		{Name: "YY", Carrier: "YY", Format: "typeb", TTYAddress: "MANRMYY", Egress: config.Egress{Type: "via", Via: "1Y"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(strings.Join(b.LivePeers(), ","), "1X") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the trunk added at runtime never came up: B sees %v", b.LivePeers())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := xx.client.Send(ctx, "", []byte("QU MANRMYY\n.LHRRMXX 121430\nOVER A TRUNK ADDED LATE\n")); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		found := false
+		for _, m := range yy.received() {
+			if strings.Contains(m, "OVER A TRUNK ADDED LATE") {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the message never crossed the late trunk: %q", yy.received())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

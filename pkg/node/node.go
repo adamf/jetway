@@ -72,6 +72,10 @@ type Node struct {
 	// switch. They come up with the listeners and count as live peers
 	// while connected.
 	links map[string]*transport.Client
+	// runCtx is the context Start was given, so a link added afterwards
+	// (ReloadPeers) is dialled under it; nil before Start.
+	runMu  sync.Mutex
+	runCtx context.Context
 }
 
 // Options are the knobs the scenario suite needs and jetwayd does not.
@@ -203,6 +207,9 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Optio
 // Start brings up everything that accepts or generates work, and returns once
 // the links are running. It does not serve the console; Serve does that.
 func (n *Node) Start(ctx context.Context) error {
+	n.runMu.Lock()
+	n.runCtx = ctx
+	n.runMu.Unlock()
 	if n.Config.Lease.Enabled {
 		// The links open only while this process holds the system. Until
 		// then it stands by, ready to take over the moment the holder lets

@@ -5,6 +5,13 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.90 — Links added while running are dialled
+- `ReloadPeers` with a `link_dial` peer on a running node dials it at
+  once, under the context Start was given, instead of waiting for a
+  restart; a reloaded peer's token is set on the listeners. Two switches
+  that came up unaware of each other are trunked at runtime and a message
+  crosses -- what two worlds joining need.
+
 ## v0.1.89 — The desk on the console
 - `GET /api/ops` on a node with an operations desk: the schedule as
   loaded, the slots flow management has given its flights, the movements

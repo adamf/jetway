@@ -185,10 +185,31 @@ func (n *Node) registerPeer(p config.Peer) error {
 		ICAO: p.ICAO, AFTN: p.AFTN, Via: p.Egress.Via,
 		Trunk: p.Trunk || p.Egress.Type == "link_dial" && p.Egress.Role == "switch",
 	})
+	if p.Token != "" {
+		for _, t := range tcps {
+			t.SetToken(p.Name, p.Token)
+		}
+	}
 	var s egress.Sender
 	var err error
 	if p.Egress.Type == "link_dial" {
 		s, err = n.dialLink(p)
+		if err == nil {
+			// Added while running: dial now, the way Start would have.
+			n.runMu.Lock()
+			ctx := n.runCtx
+			n.runMu.Unlock()
+			if ctx != nil && n.holding.Load() {
+				if c := n.links[p.Name]; c != nil {
+					go func() {
+						if err := c.Run(ctx); err != nil && ctx.Err() == nil {
+							log.Error("link stopped", "peer", p.Name, "err", err)
+						}
+					}()
+					log.Info("link dialling", "peer", p.Name, "addr", c.Addr, "role", c.Hello.Role)
+				}
+			}
+		}
 	} else {
 		s, err = egress.BuildWith(p, sessions, router, log)
 	}
