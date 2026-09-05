@@ -59,6 +59,7 @@ func (n *Node) buildIngress() ([]ingress.Ingress, map[string]*ingress.TCP, error
 			if err != nil {
 				return nil, nil, err
 			}
+			t.SetTokens(peerTokens(cfg.Peers))
 			if cfg.Routing.Relay {
 				// A switch's readers relay what they read onto other links;
 				// waiting on a full one would stall the reading (see
@@ -220,7 +221,7 @@ func (n *Node) dialLink(p config.Peer) (egress.Sender, error) {
 	name := p.Name
 	c := &transport.Client{
 		Addr:   p.Egress.Addr,
-		Hello:  transport.Hello{Peer: n.Config.Identity.Designator, Role: p.Egress.Role, Format: p.Format},
+		Hello:  transport.Hello{Peer: n.Config.Identity.Designator, Role: p.Egress.Role, Format: p.Format, Token: p.Token},
 		Framer: framer,
 		Log:    n.Log.With("link", name),
 		NoWait: n.Config.Routing.Relay,
@@ -390,4 +391,16 @@ func (n *Node) purgeAvailability(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// peerTokens is the shared secret each peer must present on its hello,
+// for the listeners that identify by hello.
+func peerTokens(peers []config.Peer) map[string]string {
+	out := map[string]string{}
+	for _, p := range peers {
+		if p.Token != "" {
+			out[p.Name] = p.Token
+		}
+	}
+	return out
 }

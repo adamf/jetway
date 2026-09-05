@@ -215,3 +215,85 @@ func TestTwoSwitchesTrunkTypeBBothWays(t *testing.T) {
 		t.Errorf("switch B saw the message %d times", n)
 	}
 }
+
+// A switch on the open internet cannot take a subscriber's word for who it
+// is. A peer configured with a token accepts only a link whose hello
+// carries it: the carrier that dials without one never comes up and its
+// traffic never enters the switch; with it, the link is a link.
+func TestHelloTokenGatesTheLink(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sw := startSwitch(t, ctx, switchConfig("1X", "XCHDD1X", []config.Peer{
+		{Name: "XX", Carrier: "XX", Format: "typeb", TTYAddress: "LHRRMXX", Token: "s3cret", Egress: config.Egress{Type: "tcp_accept"}},
+		{Name: "YY", Carrier: "YY", Format: "typeb", TTYAddress: "MANRMYY", Egress: config.Egress{Type: "tcp_accept"}},
+	}))
+	addr := sw.Addr("links")
+	yy := dialCarrier(t, ctx, "YY", addr)
+
+	// Without the token: refused before any message, so the switch never
+	// lists XX as live and nothing XX sends is captured.
+	dial := func(designator, token string) (*carrierLink, chan struct{}) {
+		cl := &carrierLink{}
+		up := make(chan struct{}, 1)
+		cl.client = &transport.Client{
+			Addr: addr, Framer: transport.DefaultFramer(), Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			Hello: transport.Hello{Peer: designator, Role: "carrier", Format: "typeb", Token: token},
+			OnMessage: func(ctx context.Context, peer string, raw []byte) error {
+				cl.mu.Lock()
+				cl.got = append(cl.got, string(raw))
+				cl.mu.Unlock()
+				return nil
+			},
+			OnUp: func() {
+				select {
+				case up <- struct{}{}:
+				default:
+				}
+			},
+		}
+		return cl, up
+	}
+	liar, _ := dial("XX", "")
+	liarCtx, stopLiar := context.WithCancel(ctx)
+	go liar.client.Run(liarCtx)
+	time.Sleep(400 * time.Millisecond)
+	liar.client.Send(liarCtx, "", []byte("QU MANRMYY\n.LHRRMXX 121430\nI AM XX HONEST\n")) //nolint:errcheck
+	time.Sleep(400 * time.Millisecond)
+	if strings.Contains(strings.Join(sw.LivePeers(), ","), "XX") {
+		t.Fatal("a link without the token came up as XX")
+	}
+	for _, m := range yy.received() {
+		if strings.Contains(m, "I AM XX HONEST") {
+			t.Fatal("the impostor's message was relayed")
+		}
+	}
+	stopLiar()
+
+	// With the token: up, and the message crosses.
+	xx, up := dial("XX", "s3cret")
+	go xx.client.Run(ctx)
+	select {
+	case <-up:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the link with the right token never came up")
+	}
+	if err := xx.client.Send(ctx, "", []byte("QU MANRMYY\n.LHRRMXX 121431\nREALLY XX\n")); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		found := false
+		for _, m := range yy.received() {
+			if strings.Contains(m, "REALLY XX") {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("XX's message never reached YY: %q", yy.received())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

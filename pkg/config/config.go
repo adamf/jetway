@@ -281,6 +281,14 @@ type Retry struct {
 type Peer struct {
 	Name    string `yaml:"name"`
 	Carrier string `yaml:"carrier"`
+	// Token, when set, is what a link that identifies itself as this peer
+	// by hello must present, and what this node presents when it dials the
+	// peer with link_dial. It turns identify-by-hello from an assertion into
+	// a shared secret, which is the least a switch on the open internet
+	// needs before it routes a subscriber's traffic to whoever says they
+	// are the subscriber. Prefer TLS with client certificates where the
+	// links can carry them; the token is for the links that cannot.
+	Token string `yaml:"token"`
 	// Trunk marks the link to another switch, whichever side dialled it.
 	// A message that arrived on a trunk is never sent back down it for a
 	// subscriber that switch serves. A link_dial egress with role

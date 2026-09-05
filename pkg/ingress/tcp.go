@@ -47,6 +47,8 @@ func sentinelFramer(f config.Framing) (framer, error) {
 // by the network they came from. That is what makes this usable with a real
 // carrier, whose front end will not speak a bespoke hello.
 type TCP struct {
+	// tokens are the peers' shared secrets, by peer name; see SetTokens.
+	tokens map[string]string
 	// NoWait and OutboxDepth shape every session's outbox (see
 	// transport.Outbox.NoWait): a relaying node sets NoWait and a deeper
 	// queue, so a reader never waits on a peer's window.
@@ -277,8 +279,17 @@ func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 		// population. The claim is trusted the way a source network would
 		// be; a link that lies about its identity is a network problem,
 		// not a parsing one.
-		peer, err = readHello(conn, r, t.framer)
-		remote = conn.RemoteAddr().String()
+		var hello transport.Hello
+		hello, err = readHello(conn, r, t.framer)
+		peer, remote = hello.Peer, conn.RemoteAddr().String()
+		if err == nil {
+			if want, required := t.tokenFor(peer); required && want != hello.Token {
+				// The claim is only as good as the secret behind it.
+				err = &ErrUnidentified{Detail: "the hello frame's token is not " + peer + "'s"}
+				metrics.Counter("jetway_ingress_rejected_total", "connections refused before any message",
+					metrics.Labels{"ingress": t.name, "reason": "bad_token"})
+			}
+		}
 	} else {
 		peer, remote, err = t.resolver.Resolve(state, conn.RemoteAddr())
 	}
@@ -349,22 +360,39 @@ func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 // readHello reads the identification frame a by_hello listener opens with.
 // The reader is the same one the session then reads from: a subscriber that
 // pipelines its hello and its first message in one write must lose nothing.
-func readHello(conn net.Conn, r *bufio.Reader, f framer) (string, error) {
+func readHello(conn net.Conn, r *bufio.Reader, f framer) (transport.Hello, error) {
+	var hello transport.Hello
 	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return "", err
+		return hello, err
 	}
 	raw, err := f.ReadFrame(r)
 	if err != nil {
-		return "", fmt.Errorf("reading the hello frame: %w", err)
+		return hello, fmt.Errorf("reading the hello frame: %w", err)
 	}
-	var hello transport.Hello
 	if err := json.Unmarshal(raw, &hello); err != nil || hello.Peer == "" {
-		return "", &ErrUnidentified{Detail: "the hello frame does not name a peer"}
+		return hello, &ErrUnidentified{Detail: "the hello frame does not name a peer"}
 	}
 	if err := conn.SetReadDeadline(time.Time{}); err != nil {
-		return "", err
+		return hello, err
 	}
-	return hello.Peer, nil
+	return hello, nil
+}
+
+// SetTokens gives the listener the peers' shared secrets: a link that
+// identifies itself by hello as one of these peers must present the token.
+// Peers without one are accepted on their word, as before.
+func (t *TCP) SetTokens(tokens map[string]string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.tokens = tokens
+}
+
+// tokenFor is the secret a peer must present, if any.
+func (t *TCP) tokenFor(peer string) (string, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	want, ok := t.tokens[peer]
+	return want, ok && want != ""
 }
 
 func (t *TCP) linkCount() int {

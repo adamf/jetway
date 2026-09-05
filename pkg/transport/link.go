@@ -32,6 +32,8 @@ type Hello struct {
 	Peer   string `json:"peer"`
 	Role   string `json:"role"`
 	Format string `json:"format"`
+	// Token is the peer's shared secret, when the listener requires one.
+	Token string `json:"token,omitempty"`
 }
 
 // Link is one open, bidirectional session with a peer.

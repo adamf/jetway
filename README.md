@@ -262,6 +262,15 @@ real deployment, [deploy/jetway.compose.yaml](deploy/jetway.compose.yaml) for
 the container stack. Full walkthrough in
 [docs/adding-a-carrier.md](docs/adding-a-carrier.md).
 
+A listener that identifies subscribers by their hello (`identify.by_hello`)
+takes the peer's word for who it is, which is fine on a private network and
+not on the internet. Give the peer a `token` in its entry and the hello must
+carry it: the node dialling in with `link_dial` sends its configured token,
+the switch refuses a link that names the peer without it, and the refusal
+is counted (`jetway_ingress_rejected_total{reason="bad_token"}`). It is a
+shared secret, not a certificate; use TLS with client certificates where
+the links can carry them.
+
 ## Design
 
 Six decisions shape everything else.
