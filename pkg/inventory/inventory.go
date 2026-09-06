@@ -86,14 +86,17 @@ type Inventory struct {
 	mu         sync.Mutex
 	sold       map[string]int // carrier/flight/date/board/compartment
 	waitlisted map[string]int
-	soldClass  map[string]int    // carrier/flight/date/board/compartment/class
-	overrides  map[string]string // carrier/flight/date/board/class -> forced status
+	soldClass  map[string]int // carrier/flight/date/board/compartment/class
+	// classes indexes soldClass by pool, so a pool's classes are read
+	// without walking every key the inventory holds.
+	classes   map[string]map[string]int
+	overrides map[string]string // carrier/flight/date/board/class -> forced status
 }
 
 // New returns an empty inventory for a carrier.
 func New(carrier string, capacity Capacity) *Inventory {
 	return &Inventory{Carrier: carrier, Capacity: capacity, WaitlistShare: 0.1, MinWaitlist: 2,
-		sold: map[string]int{}, waitlisted: map[string]int{}, soldClass: map[string]int{}, overrides: map[string]string{}}
+		sold: map[string]int{}, waitlisted: map[string]int{}, soldClass: map[string]int{}, classes: map[string]map[string]int{}, overrides: map[string]string{}}
 }
 
 // CompartmentFor maps a booking class onto the cabin it sells from, given
@@ -280,7 +283,7 @@ func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer
 		switch {
 		case inv.sold[key]+s.Seats <= seats:
 			inv.sold[key] += s.Seats
-			inv.soldClass[key+"/"+strings.ToUpper(s.Class)] += s.Seats
+			inv.addClass(key, strings.ToUpper(s.Class), s.Seats)
 			out[s.Key()] = "KK"
 		case inv.waitlisted[key]+s.Seats <= inv.waitlistFor(seats):
 			inv.waitlisted[key] += s.Seats
@@ -333,7 +336,7 @@ func (inv *Inventory) commit(s pnr.Segment, status string) {
 	switch status {
 	case "KK", "KL", "TK", "HK":
 		inv.sold[key] += s.Seats
-		inv.soldClass[key+"/"+strings.ToUpper(s.Class)] += s.Seats
+		inv.addClass(key, strings.ToUpper(s.Class), s.Seats)
 	case "US", "UU", "TL", "HL":
 		inv.waitlisted[key] += s.Seats
 	}
@@ -366,8 +369,7 @@ func (inv *Inventory) Release(ctx context.Context, s pnr.Segment, was string) {
 	switch was {
 	case "KK", "KL", "TK", "HK":
 		inv.sold[key] = max(0, inv.sold[key]-s.Seats)
-		ck := key + "/" + strings.ToUpper(s.Class)
-		inv.soldClass[ck] = max(0, inv.soldClass[ck]-s.Seats)
+		inv.addClass(key, strings.ToUpper(s.Class), -s.Seats)
 	case "US", "UU", "TL", "HL":
 		inv.waitlisted[key] = max(0, inv.waitlisted[key]-s.Seats)
 	}
@@ -378,6 +380,34 @@ func (inv *Inventory) Reset() {
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
 	inv.sold, inv.waitlisted, inv.soldClass = map[string]int{}, map[string]int{}, map[string]int{}
+	inv.classes = map[string]map[string]int{}
+}
+
+// addClass moves a class's sold count on a pool, never below zero, and
+// keeps the per-pool index in step.
+func (inv *Inventory) addClass(pool, class string, delta int) {
+	ck := pool + "/" + class
+	n := max(0, inv.soldClass[ck]+delta)
+	inv.soldClass[ck] = n
+	if inv.classes == nil {
+		inv.classes = map[string]map[string]int{}
+	}
+	m := inv.classes[pool]
+	if m == nil {
+		if n == 0 {
+			return
+		}
+		m = map[string]int{}
+		inv.classes[pool] = m
+	}
+	if n == 0 {
+		delete(m, class)
+		if len(m) == 0 {
+			delete(inv.classes, pool)
+		}
+		return
+	}
+	m[class] = n
 }
 
 // SetOverride forces the outcome for one class on one flight and date, the
@@ -509,11 +539,12 @@ func awaitingDecision(status string) bool {
 func (inv *Inventory) SoldByClass(carrier, flightNum, wireDate, board, compartment string) map[string]int {
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
-	prefix := poolKey(carrier, flightNum, wireDate, board, compartment) + "/"
+	// A pool's classes come from the index: a walk of every key the
+	// inventory holds made a big book's every flight cost a scan.
 	out := map[string]int{}
-	for k, n := range inv.soldClass {
-		if strings.HasPrefix(k, prefix) && n > 0 {
-			out[strings.TrimPrefix(k, prefix)] += n
+	for class, n := range inv.classes[poolKey(carrier, flightNum, wireDate, board, compartment)] {
+		if n > 0 {
+			out[class] += n
 		}
 	}
 	return out

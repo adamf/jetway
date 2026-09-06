@@ -5,6 +5,14 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.95 — A flight's classes without a walk of the book
+- `inventory.SoldByClass` walked every sold-class key the inventory held
+  and matched a prefix, so a carrier with a filled book paid a scan of
+  the whole for every flight asked about: a four-hundred-flight carrier's
+  state took minutes. The classes are indexed by pool now, kept in step
+  with every sale, seed, release and reset, and the answer costs the
+  pool's classes.
+
 ## v0.1.94 — Safe to face the internet
 A security pass over everything a stranger can reach, from a switch port
 on the public internet to the console behind a proxy. Nothing here changes
