@@ -41,6 +41,14 @@ func (s Split) FindOutboundByKey(ctx context.Context, peer, key string) (string,
 	return s.Messages.FindOutboundByKey(ctx, peer, key)
 }
 
+// PruneRecords forwards to the book of record when it can prune.
+func (s Split) PruneRecords(ctx context.Context, keep func(*pnr.PNR) bool) (Purged, error) {
+	if p, ok := s.Records.(Pruner); ok {
+		return p.PruneRecords(ctx, keep)
+	}
+	return Purged{}, fmt.Errorf("store: %T cannot prune records", s.Records)
+}
+
 func (s Split) CreatePNR(ctx context.Context, p *pnr.PNR, events []Event) error {
 	return s.Records.CreatePNR(ctx, p, events)
 }

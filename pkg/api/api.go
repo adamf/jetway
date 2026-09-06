@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/adamf/jetway/pkg/dcs"
@@ -49,9 +51,16 @@ type Server struct {
 	insightsFor  int
 	insightsBody []byte
 
-	// Console serves the operations console. It is unauthenticated, so a
-	// deployment reachable beyond a trusted network should turn it off.
+	// Console serves the operations console. Without an AdminToken it is
+	// unauthenticated, so a deployment reachable beyond a trusted network
+	// should set one or turn it off.
 	Console bool
+	// AdminToken, when set, must arrive as "Authorization: Bearer <token>"
+	// on every request that changes the system or reads its records; see
+	// guarded. Status, flights, availability and health stay open.
+	AdminToken string
+	// streams counts open /api/stream subscribers, capped at maxStreams.
+	streams atomic.Int32
 	// Metrics serves /metrics.
 	Metrics bool
 	// Ready reports whether dependencies are usable. A nil Ready means always
@@ -139,7 +148,51 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/stream", s.stream)
 	s.dcsRoutes(mux)
 
-	return logRequests(s.Log, mux)
+	return logRequests(s.Log, s.adminGate(mux))
+}
+
+// maxStreams caps the consoles that may hold /api/stream open at once; a
+// browser that reconnects is not a problem, a script that opens thousands is.
+const maxStreams = 256
+
+// guarded says whether a request needs the admin token: anything that is
+// not a read, and the reads that expose records, messages, queues and the
+// export. Everything a public status board needs stays open.
+func guarded(r *http.Request) bool {
+	p := r.URL.Path
+	if !strings.HasPrefix(p, "/api/") && p != "/ndc" {
+		return false
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return true
+	}
+	for _, pre := range []string{"/api/admin/", "/api/pnrs", "/api/pnr/", "/api/messages", "/api/message/",
+		"/api/queues", "/api/queue/", "/api/carrier/", "/api/journeys"} {
+		if strings.HasPrefix(p, pre) {
+			return true
+		}
+	}
+	return false
+}
+
+// adminGate enforces AdminToken on guarded requests; with no token set it
+// passes everything, which is the open console the demo always had.
+func (s *Server) adminGate(next http.Handler) http.Handler {
+	if s.AdminToken == "" {
+		return next
+	}
+	want := []byte(s.AdminToken)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if guarded(r) {
+			got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if !ok || subtle.ConstantTimeCompare([]byte(got), want) != 1 {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="jetway"`)
+				http.Error(w, "this needs the console's admin token", http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func logRequests(log *slog.Logger, next http.Handler) http.Handler {
@@ -498,6 +551,12 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+	if s.streams.Add(1) > maxStreams {
+		s.streams.Add(-1)
+		http.Error(w, "too many open streams", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.streams.Add(-1)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -560,7 +619,8 @@ func intParam(r *http.Request, name string, def int) int {
 	if err != nil || n <= 0 {
 		return def
 	}
-	return n
+	// A limit is a page size, not an allocation the caller picks.
+	return min(n, 10000)
 }
 
 // listQueues returns the pending count for every queue, including the empty

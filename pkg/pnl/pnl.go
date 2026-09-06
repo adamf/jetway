@@ -414,6 +414,9 @@ func parseGroupHead(t string) (Group, error) {
 
 func parseName(t string) (Name, error) {
 	fields := strings.Fields(t)
+	if len(fields) == 0 {
+		return Name{}, fmt.Errorf("pnl: empty name item")
+	}
 	head := fields[0]
 	i := 0
 	for i < len(head) && head[i] >= '0' && head[i] <= '9' {

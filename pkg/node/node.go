@@ -13,8 +13,10 @@ import (
 	"github.com/adamf/jetway/pkg/dcs"
 	"github.com/adamf/jetway/pkg/ops"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -187,6 +189,12 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Optio
 			Extend:  opts.ExtendAPI,
 			Console: cfg.HTTP.Console,
 			Metrics: cfg.HTTP.Metrics,
+			AdminToken: func() string {
+				if t := cfg.HTTP.AdminToken; strings.HasPrefix(t, "$") {
+					return os.Getenv(t[1:])
+				}
+				return cfg.HTTP.AdminToken
+			}(),
 			Ready: func(ctx context.Context) error {
 				if cfg.Lease.Enabled && !n.Holding() {
 					return fmt.Errorf("standing by: %s is held elsewhere", cfg.Identity.Designator)
@@ -434,7 +442,12 @@ func (n *Node) Serve(ctx context.Context, drainTimeout time.Duration) error {
 		return nil
 	}
 	hs := &http.Server{
-		Addr: n.Config.HTTP.Addr, Handler: n.API.Handler(), ReadHeaderTimeout: 10 * time.Second,
+		Addr: n.Config.HTTP.Addr, Handler: n.API.Handler(),
+		// Headers, then the body, then the idle keep-alive each have a
+		// bound, so a slow client holds one connection for a minute, not
+		// for ever. No WriteTimeout: /api/stream is meant to stay open.
+		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second,
+		IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10,
 	}
 	go func() {
 		<-ctx.Done()
@@ -443,6 +456,20 @@ func (n *Node) Serve(ctx context.Context, drainTimeout time.Duration) error {
 		defer cancel()
 		n.Drain(dctx, hs)
 	}()
+	if t := n.Config.HTTP.TLS; t != nil && t.Cert != "" {
+		n.Log.Info("console ready", "url", "https://"+n.Config.HTTP.Addr,
+			"identity", n.Config.Identity.Designator, "store", n.Config.Store.Backend)
+		return hs.ListenAndServeTLS(t.Cert, t.Key)
+	}
+	if host, _, err := net.SplitHostPort(n.Config.HTTP.Addr); err == nil && host != "" && host != "localhost" {
+		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+			n.Log.Warn("console serves cleartext HTTP beyond loopback; set http.tls, or front it with a proxy that terminates TLS",
+				"addr", n.Config.HTTP.Addr)
+		}
+	}
+	if n.Config.HTTP.AdminToken == "" && n.Config.HTTP.Console {
+		n.Log.Warn("console has no http.admin_token: anyone who can reach it can book, cancel, refund and export; set one before exposing it")
+	}
 	n.Log.Info("console ready", "url", "http://"+n.Config.HTTP.Addr,
 		"identity", n.Config.Identity.Designator, "store", n.Config.Store.Backend)
 	return hs.ListenAndServe()

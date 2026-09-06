@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -38,6 +39,8 @@ type Hello struct {
 
 // Link is one open, bidirectional session with a peer.
 type Link struct {
+	// idle, when set, is the server's IdleTimeout for this link.
+	idle time.Duration
 	// r is the reader the handshake left mid-stream; see newLinkReading.
 	r      *bufio.Reader
 	Peer   string
@@ -125,6 +128,11 @@ func (l *Link) serve(ctx context.Context, h Handler) {
 		if ctx.Err() != nil {
 			return
 		}
+		if l.idle > 0 {
+			// The deadline rolls forward with every frame; a link that says
+			// nothing for this long is gone, or was never a peer.
+			l.conn.SetReadDeadline(time.Now().Add(l.idle)) //nolint:errcheck
+		}
 		raw, err := l.framer.ReadFrame(r)
 		if len(raw) > 0 {
 			if herr := h(ctx, l.Peer, raw); herr != nil {
@@ -151,9 +159,18 @@ type Server struct {
 	OnConnect    func(peer, format string)
 	OnDisconnect func(peer string)
 
+	// IdleTimeout closes a link that has sent nothing for this long, so a
+	// peer that vanished or a stranger holding a socket does not keep a
+	// goroutine and a frame buffer for ever. Zero keeps quiet links open.
+	IdleTimeout time.Duration
+	// MaxConnections caps what the server holds open at once; beyond it a
+	// new connection is closed as it arrives. Zero is 4096.
+	MaxConnections int
+
 	mu    sync.RWMutex
 	links map[string]*Link
 	ln    net.Listener
+	conns atomic.Int64
 }
 
 // Listen binds the server's address.
@@ -189,6 +206,10 @@ func (s *Server) Serve(ctx context.Context) error {
 	s.initLinks()
 	go func() { <-ctx.Done(); s.ln.Close() }()
 
+	maxConns := s.MaxConnections
+	if maxConns <= 0 {
+		maxConns = 4096
+	}
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
@@ -197,7 +218,16 @@ func (s *Server) Serve(ctx context.Context) error {
 			}
 			return err
 		}
-		go s.handle(ctx, conn)
+		if s.conns.Load() >= int64(maxConns) {
+			// A full house closes the door, not the process.
+			conn.Close()
+			continue
+		}
+		s.conns.Add(1)
+		go func() {
+			defer s.conns.Add(-1)
+			s.handle(ctx, conn)
+		}()
 	}
 }
 
@@ -231,6 +261,7 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 	}
 
 	l := newLinkReading(hello.Peer, hello.Format, conn, r, s.Framer, s.Log)
+	l.idle = s.IdleTimeout
 	s.mu.Lock()
 	if prev := s.links[hello.Peer]; prev != nil {
 		prev.Close()

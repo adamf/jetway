@@ -5,6 +5,49 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.94 — Safe to face the internet
+A security pass over everything a stranger can reach, from a switch port
+on the public internet to the console behind a proxy. Nothing here changes
+a private deployment's behaviour unless it asks for it.
+- `ingress` (by-hello TCP): `require_token` refuses a hello from any peer
+  that has no token on the listener, so a stranger cannot take a tokenless
+  peer's name and displace its live session; token comparison is constant
+  time; `idle_timeout` reaps a link that has sent nothing for that long;
+  `max_connections` (4096 unless set) closes the door on newcomers rather
+  than the process; every session closes when the listener's context
+  ends. Rejections are counted by reason (`no_token`, `bad_token`,
+  `too_many_connections`).
+- `transport.Server` (trunk links): the same `IdleTimeout` and
+  `MaxConnections`, so a stalled peer cannot pin a frame buffer and a
+  goroutine for ever.
+- `transport.Sentinel` checks its bound while reading, not after: a peer
+  that never sends the terminator is cut at `Max`, where before the whole
+  stream was buffered first.
+- `http.admin_token`: when set, every request that changes the system or
+  reads its records (booking, cancelling, refunds, tickets, departure
+  control, replay, queues, the export, records and messages, `/ndc`)
+  needs `Authorization: Bearer`; status, flights, availability and
+  health stay open. Unset keeps the console as open as it was, with a
+  warning at startup when it is. `$NAME` reads the environment.
+- The console's `http.Server` has read, idle and header bounds, serves
+  TLS when `http.tls` is configured (it was parsed and ignored), and warns
+  when it is about to serve cleartext beyond loopback.
+- `/api/queue/{name}?limit=` is clamped to 10,000 and the memory store no
+  longer pre-sizes by a caller's number; the departure-control handlers
+  bound their bodies like every other POST; `/api/stream` holds at most
+  256 subscribers.
+- `ndc.soapBody` folded case with `strings.ToLower`, whose result can be a
+  different length from its input on invalid UTF-8, and then sliced the
+  original: a crafted `POST /ndc` panicked the handler. It folds ASCII
+  only now. `pnl.ParseName("")` panicked on the empty item.
+- `store.Pruner`: `PruneRecords(ctx, keep)` retires the records a caller's
+  policy rejects, with their events and queue items -- a host's retention
+  is the host's to decide (a flown journey, a settled ticket), and the
+  memory store had only a size cap and a purge by update time.
+- Fuzz harnesses for every parser that reads the wire or a file (21
+  packages), seeded from their sample messages; the two crashers they
+  found are the fixes above, and their inputs stay as regression seeds.
+
 ## v0.1.93 — The desk runs the ground story
 - `ops.Desk.BuildNameList` and `SendNameList`: the PNL for a departure
   from the node's own book -- a party per record with its locator, service

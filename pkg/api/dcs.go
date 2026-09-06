@@ -116,7 +116,7 @@ func (s *Server) dcsAccept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req dcs.AcceptRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -137,7 +137,7 @@ func (s *Server) dcsGoShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var g dcs.GoShow
-	if err := json.NewDecoder(r.Body).Decode(&g); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&g); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -163,7 +163,7 @@ func (s *Server) dcsBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var a passengerAction
-	if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&a); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -181,7 +181,7 @@ func (s *Server) dcsOffload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var a passengerAction
-	if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&a); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -219,7 +219,7 @@ func (s *Server) dcsClose(w http.ResponseWriter, r *http.Request) {
 	}
 	var opts dcs.CloseOptions
 	if r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&opts); err != nil {
 			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 			return
 		}

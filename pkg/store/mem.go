@@ -155,6 +155,28 @@ func (s *Mem) Purge(ctx context.Context, before time.Time) (Purged, error) {
 	return out, nil
 }
 
+// PruneRecords implements Pruner: every record the keep function rejects
+// leaves with its events and queue items. The function sees the stored
+// copy and must not retain or modify it.
+func (s *Mem) PruneRecords(ctx context.Context, keep func(*pnr.PNR) bool) (Purged, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out Purged
+	for id, p := range s.pnrs {
+		if keep(p) {
+			continue
+		}
+		delete(s.byLocator, p.RecordLocator)
+		delete(s.pnrs, id)
+		delete(s.events, id)
+		queued := len(s.queueIDs)
+		s.dropQueueForRecordLocked(id)
+		out.QueueItems += queued - len(s.queueIDs)
+		out.Records++
+	}
+	return out, nil
+}
+
 // trimMessagesLocked discards the oldest messages once the bound is exceeded.
 func (s *Mem) trimMessagesLocked() {
 	if s.MaxMessages <= 0 || len(s.messageIDs) <= s.MaxMessages {
@@ -497,7 +519,7 @@ func (s *Mem) ListQueue(ctx context.Context, f QueueFilter) ([]*QueueItem, error
 	if limit <= 0 {
 		limit = 200
 	}
-	out := make([]*QueueItem, 0, limit)
+	out := make([]*QueueItem, 0, min(limit, len(s.queueIDs)))
 	for i := len(s.queueIDs) - 1; i >= 0 && len(out) < limit; i-- {
 		it := s.queue[s.queueIDs[i]]
 		if it == nil {

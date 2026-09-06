@@ -179,6 +179,16 @@ type Pinger interface {
 	Ping(ctx context.Context) error
 }
 
+// Pruner is a store that retires records by a policy of the caller's. The
+// store does not know when a record is finished -- its last segment flew,
+// its documents settled, its host's retention ran out -- so the caller
+// says which records to keep and the rest leave with their events and
+// queue items. Messages are not touched. Memory implements it; Postgres
+// retires by day instead (see Retirer).
+type Pruner interface {
+	PruneRecords(ctx context.Context, keep func(*pnr.PNR) bool) (Purged, error)
+}
+
 // Retirer is a store that retires records by day: every record whose
 // retirement day is before the cutoff leaves, as partitions where the
 // backend has them. Postgres implements it; memory purges instead.

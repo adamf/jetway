@@ -327,6 +327,10 @@ day this document was written; the rest are open.
    `total_rate_limit` caps the ingress as a whole. A peer is paced to its
    own share before it reaches the shared bucket, so a flooding peer cannot
    take the others' share; `peers[].rate_limit` gives a peer its own.
+   ~~Hardening for a listener on the internet~~: `require_token` (no
+   tokenless hellos), `idle_timeout`, `max_connections`, and
+   `http.admin_token` for the console (v0.1.94, after a security pass
+   over wholesky's public deployment).
 9. **Load test as a release gate.** wholesky at warp 1 against a staging
    instance of the production topology, with the invariant suite (no
    oversell, message conservation, interline convergence) as the pass

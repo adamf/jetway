@@ -21,15 +21,28 @@ passenger data in a deployment until they are addressed.**
 - **No encryption at rest.** Sensitive fields are flagged and redacted from logs
   and the console, but stored in plaintext. No key management.
 - **No retention or erasure.** Nothing expires. There is no erasure workflow.
-- **No API authentication.** The API and console are unauthenticated. The
-  console can create bookings. Set `http.console: false` and bind `http.addr` to
-  a trusted interface.
+- **API authentication is a single bearer token.** With `http.admin_token`
+  set, every request that changes the system or reads its records needs
+  `Authorization: Bearer`; status, flights, availability and health stay
+  open. Without it the API and console are unauthenticated and the console
+  can create bookings: set the token, or `http.console: false` and bind
+  `http.addr` to a trusted interface. There are no per-user accounts.
+- **A by-hello link is a claim.** A peer that identifies by hello is taken
+  at its word unless it has a token; on a listener the internet can reach,
+  set `require_token: true` and give every peer one, or a stranger can take
+  a tokenless peer's name. Tokens travel in the clear unless the listener
+  has `tls`; use it.
 - **Certificates are read once at start.** Rotating one requires a restart.
 - **The spool is unbounded.** A long store outage fills the volume.
 
 ## Deploying with less risk
 
-- Bind `-http` to a trusted interface. Put authentication in front of it.
+- Bind `-http` to a trusted interface, set `http.admin_token`, and put a
+  TLS-terminating proxy or `http.tls` in front of it.
+- On any listener strangers can reach: `require_token`, `idle_timeout`
+  (a quiet link is reaped), `max_connections`, `rate_limit` and
+  `total_rate_limit`. Every knob has a bounded default except the token
+  requirement, which changes who may connect and so is yours to turn on.
 - Configure `tls.client_ca` on every partner listener and map peers with
   `identify.by_cert_cn`. Identifying by `by_cidr` is weaker and only defensible
   on a private circuit; `identify.peer` assumes nothing else can reach the port.

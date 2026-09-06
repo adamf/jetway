@@ -176,7 +176,7 @@ func CarriesCardData(raw []byte) bool {
 // wrapper is removed rather than made the caller's problem.
 func soapBody(raw []byte) []byte {
 	s := string(raw)
-	lower := strings.ToLower(s)
+	lower := asciiLower(s)
 	i := strings.Index(lower, ":body>")
 	if i < 0 {
 		if i = strings.Index(lower, "<body>"); i < 0 {
@@ -185,7 +185,7 @@ func soapBody(raw []byte) []byte {
 		i += len("<body>") - 1
 	}
 	start := i + len(":body>")
-	j := strings.LastIndex(strings.ToLower(s), ":body>")
+	j := strings.LastIndex(asciiLower(s), ":body>")
 	if j <= start {
 		return raw
 	}
@@ -194,6 +194,19 @@ func soapBody(raw []byte) []byte {
 		return raw
 	}
 	return []byte(s[start:k])
+}
+
+// asciiLower lowers A-Z only, so every index into the result is an index
+// into the original: strings.ToLower rewrites invalid UTF-8 and changes
+// the length, and a payload from the network is not promised to be valid.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 // MessageType reports which order message a payload carries.

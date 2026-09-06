@@ -3,6 +3,7 @@ package ingress
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/adamf/jetway/pkg/config"
@@ -71,6 +73,13 @@ type TCP struct {
 	tls      *tls.Config
 	resolver *Resolver
 	log      *slog.Logger
+
+	// requireToken refuses peers with no token; idle reaps quiet links;
+	// maxConns caps what the listener holds open. See config.Ingress.
+	requireToken bool
+	idle         time.Duration
+	maxConns     int
+	conns        atomic.Int64
 
 	// sessions holds the open connection per peer, so a reply can go back down
 	// the link the request arrived on.
@@ -183,11 +192,16 @@ func NewTCP(c config.Ingress, log *slog.Logger) (*TCP, error) {
 	if err != nil {
 		return nil, err
 	}
+	maxConns := c.MaxConnections
+	if maxConns <= 0 {
+		maxConns = 4096
+	}
 	return &TCP{
 		name: c.Name, addr: c.Addr, framer: f, tls: tc, resolver: r,
 		rateLimit: c.RateLimit, burst: c.Burst,
-		shared: newBucket(c.TotalRateLimit, c.TotalBurst),
-		log:    log.With("ingress", c.Name), sessions: map[string]*session{},
+		shared:       newBucket(c.TotalRateLimit, c.TotalBurst),
+		requireToken: c.RequireToken, idle: c.IdleTimeout, maxConns: maxConns,
+		log: log.With("ingress", c.Name), sessions: map[string]*session{},
 	}, nil
 }
 
@@ -244,12 +258,28 @@ func (t *TCP) Start(ctx context.Context, h Handler) error {
 			}
 			return err
 		}
-		go t.serve(ctx, conn, h)
+		// A full house closes the door rather than the process: sockets
+		// and goroutines are what a stranger exhausts first.
+		if t.conns.Load() >= int64(t.maxConns) {
+			conn.Close()
+			metrics.Counter("jetway_ingress_rejected_total", "connections refused before any message",
+				metrics.Labels{"ingress": t.name, "reason": "too_many_connections"})
+			continue
+		}
+		t.conns.Add(1)
+		go func() {
+			defer t.conns.Add(-1)
+			t.serve(ctx, conn, h)
+		}()
 	}
 }
 
 func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 	defer conn.Close()
+	// Shutdown closes the socket under a blocked read, so no session
+	// outlives the listener.
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 
 	// Complete the TLS handshake before resolving identity: the peer
 	// certificate is not available until it has run.
@@ -283,7 +313,14 @@ func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 		hello, err = readHello(conn, r, t.framer)
 		peer, remote = hello.Peer, conn.RemoteAddr().String()
 		if err == nil {
-			if want, required := t.tokenFor(peer); required && want != hello.Token {
+			want, required := t.tokenFor(peer)
+			switch {
+			case !required && t.requireToken:
+				// A listener the internet reaches takes nobody's word.
+				err = &ErrUnidentified{Detail: peer + " has no token here, and this listener requires one"}
+				metrics.Counter("jetway_ingress_rejected_total", "connections refused before any message",
+					metrics.Labels{"ingress": t.name, "reason": "no_token"})
+			case required && subtle.ConstantTimeCompare([]byte(want), []byte(hello.Token)) != 1:
 				// The claim is only as good as the secret behind it.
 				err = &ErrUnidentified{Detail: "the hello frame's token is not " + peer + "'s"}
 				metrics.Counter("jetway_ingress_rejected_total", "connections refused before any message",
@@ -329,6 +366,11 @@ func (t *TCP) serve(ctx context.Context, conn net.Conn, h Handler) {
 	for {
 		if ctx.Err() != nil {
 			return
+		}
+		if t.idle > 0 {
+			// A link that says nothing for this long is gone, or was never
+			// a peer: the deadline rolls forward with every frame.
+			conn.SetReadDeadline(time.Now().Add(t.idle)) //nolint:errcheck
 		}
 		raw, err := t.framer.ReadFrame(r)
 		if len(raw) > 0 {

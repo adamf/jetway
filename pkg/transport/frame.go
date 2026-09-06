@@ -173,7 +173,18 @@ func (f Sentinel) ReadFrame(r *bufio.Reader) ([]byte, error) {
 	last := f.Terminator[len(f.Terminator)-1]
 	var buf []byte
 	for {
-		chunk, err := r.ReadBytes(last)
+		// ReadSlice hands back at most the reader's buffer at a time, so a
+		// peer that never sends the terminator is caught at the bound
+		// rather than buffered whole: ReadBytes would hold the entire
+		// stream before the size was ever checked.
+		chunk, err := r.ReadSlice(last)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			if len(buf)+len(chunk) > max {
+				return nil, fmt.Errorf("%w: %d > %d", ErrFrameTooLarge, len(buf)+len(chunk), max)
+			}
+			buf = append(buf, chunk...)
+			continue
+		}
 		if err != nil {
 			// Return what we have alongside the error so a truncated final
 			// message can still be captured rather than silently discarded.

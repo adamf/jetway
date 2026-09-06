@@ -136,6 +136,12 @@ type HTTP struct {
 	// Metrics serves /metrics.
 	Metrics bool `yaml:"metrics"`
 	TLS     *TLS `yaml:"tls"`
+	// AdminToken, when set, is the bearer token every request that changes
+	// the system or reads its records must carry (Authorization: Bearer).
+	// Status, flights, availability and health stay open. Unset, the
+	// console is as open as it always was, which is only right behind an
+	// operator's own network; $NAME reads the environment.
+	AdminToken string `yaml:"admin_token"`
 }
 
 // TLS configures a listener's transport security.
@@ -213,6 +219,19 @@ type Ingress struct {
 	// cannot take the others' share of the total.
 	TotalRateLimit float64 `yaml:"total_rate_limit"`
 	TotalBurst     int     `yaml:"total_burst"`
+
+	// RequireToken refuses a hello from any peer that has no token here.
+	// On a listener the internet can reach, a peer's word is not an
+	// identity: set this and give every peer a secret, or a stranger can
+	// take any tokenless peer's name and its link.
+	RequireToken bool `yaml:"require_token"`
+	// IdleTimeout closes a link that has sent nothing for this long, so a
+	// peer that vanished, or a stranger holding sockets open, is reaped
+	// rather than held for ever. Zero keeps a quiet link open.
+	IdleTimeout time.Duration `yaml:"idle_timeout"`
+	// MaxConnections caps the connections the listener holds open at once;
+	// beyond it new connections are closed as they arrive. Zero is 4096.
+	MaxConnections int `yaml:"max_connections"`
 
 	// Synchronous makes an https listener hold the request open and return any
 	// generated reply in the response body, rather than answering 202 and
