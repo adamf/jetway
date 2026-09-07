@@ -189,6 +189,12 @@ func TestServerClientExchange(t *testing.T) {
 		t.Fatal("no connection within the timeout")
 	}
 
+	// The server sees the link before the client marks it up: wait for
+	// the client's side too, or a fast machine sends into a link that is
+	// not yet up.
+	for !cli.Connected() && ctx.Err() == nil {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if err := cli.Send(ctx, "", []byte("SELL")); err != nil {
 		t.Fatalf("client send: %v", err)
 	}
