@@ -269,7 +269,12 @@ carry it: the node dialling in with `link_dial` sends its configured token,
 the switch refuses a link that names the peer without it, and the refusal
 is counted (`jetway_ingress_rejected_total{reason="bad_token"}`). It is a
 shared secret, not a certificate; use TLS with client certificates where
-the links can carry them.
+the links can carry them. On a listener the internet can reach, set
+`require_token: true` so a peer with no token is refused rather than taken
+at its word (a stranger could otherwise hello as any tokenless peer and
+displace its session), `idle_timeout` so a link that has sent nothing is
+reaped, and `max_connections` (4,096 unless set) so a full house closes
+the door and not the process.
 
 ## Design
 
@@ -471,7 +476,10 @@ because locators get read aloud.
 
 ## Testing it, and loading it
 
-The end-to-end scenarios are written once and run two ways.
+The end-to-end scenarios are written once and run two ways. Every parser
+that reads the wire or a file has a native fuzz harness beside it
+(`fuzz_test.go` in twenty-one packages), seeded from the package's own
+sample messages; `go test -fuzz=. -fuzztime=45s ./pkg/typeb` runs one.
 
 ```sh
 go test ./internal/scenario          # run each once, assert it behaved
@@ -515,9 +523,9 @@ sessions, bound to loopback inside the container because the carriers live in
 the same process. Nothing is mocked.
 
 It is a demo, so: storage is in memory and bounded, everything is forgotten on
-restart, the console is unauthenticated and anyone can make a booking, and the
-machine suspends when nobody is looking at it — so the first request after a
-quiet spell takes a moment. Deployment config is in
+restart, the console has no `http.admin_token` set and anyone can make a
+booking, and the machine suspends when nobody is looking at it — so the first
+request after a quiet spell takes a moment. Deployment config is in
 [fly.toml](fly.toml) and [deploy/jetway.demo.yaml](deploy/jetway.demo.yaml).
 
 ## Running it for real
@@ -575,7 +583,9 @@ aviation on this library — live at https://wholesky-demo.fly.dev : a Jetway no
 carrier reservation systems as multi-tenant hosts, and a GDS reaching every
 carrier through one switch link -- AIRIMP over Type B and PADIS over EDIFACT,
 relayed by address line and UNB recipient. It is also why the application
-packages live under `pkg/` and why MVT and the `via` egress exist.
+packages live under `pkg/` and why MVT and the `via` egress exist. People
+and agents run its carriers through the same API; a recorded day of Claude
+running Jet2 on it is at https://wholesky.io/replay/?src=jet2-claude.json.
 
 ## Independence
 
@@ -627,7 +637,9 @@ deployment until they are.
 
 The link handshake identifies a peer by a name it asserts. It is not
 authentication, and it is not a substitute for binding identity to the
-transport's own credentials. See [SECURITY.md](SECURITY.md).
+transport's own credentials; `require_token` makes the name worthless
+without the peer's secret, and `http.admin_token` puts the console's
+changes and records behind a bearer. See [SECURITY.md](SECURITY.md).
 
 ## Contributing
 
