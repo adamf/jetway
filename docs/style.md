@@ -45,7 +45,14 @@ every sentence you write or change.
   "the state is the core's to keep".
 - Do not use the possessive construction "X is Y's to do". Say "Y does X".
 - Write numbers as digits with a space before the unit: 5,364 flights,
-  4 GB, 160 s. Give a number only if the reader uses it.
+  4 GB, 160 s. Write one, two and three as words when they count things in
+  a sentence ("one switch", "two regions"). Use digits for measurements,
+  ratios (1 in 150), settings (warp 1) and numbers that are compared. Give
+  a number only if the reader uses it.
+- First person is allowed where the author speaks for himself: what he
+  built, wanted, learned or did not buy. Use it for one sentence, not a
+  paragraph, and never for the software ("I send" is wrong; "the core
+  sends" is right).
 - Give the full form of an abbreviation the first time it appears in a
   document, then the abbreviation.
 
@@ -79,3 +86,55 @@ every sentence you write or change.
 | The consoles are a window on the carriers' systems, not a door. | Anyone can read a carrier's console. Only the seat holder can change it. |
 | Every one of these found real bugs in jetway, and each fix landed upstream with a regression test that was watched to fail first. | Each feature exposed bugs in jetway. Each fix is in jetway with a regression test. |
 | What is still rough | Known limitations |
+
+## Tells, and where they come from
+
+The rules above cover most of what marks text as machine-written. This
+list adds the patterns that other people have catalogued, so a reviewer
+can check for them by name. Sources: Anthropic's prompting guide for
+Claude Fable 5.1 ("Writing density"), Wikipedia's "Signs of AI writing",
+and the de-slop checklists collected by writers who edit model output.
+
+- **Mannered prose.** Metaphor and flourish in place of a direct
+  statement: "a dial worth turning" for "a parameter worth varying",
+  "earns its keep" for "still matters", "closes the door" for "refuses",
+  "takes nobody's word" for "requires a token". When a literal phrase
+  exists, use it. This is the tell Anthropic names for this model.
+- **Invented vocabulary.** A coined noun repeated as if it were a
+  standard term ("ground story", "the fabric", "shape" for a topology).
+  Product terms are fine once defined; coinages are not.
+- **Applause lines.** A short sentence at the end of a paragraph whose
+  job is emphasis, not information.
+- **Hooks and recaps.** "Here is the thing", "the key insight", "in
+  summary", "overall", "ultimately", "let that sink in".
+- **Performative honesty.** Calling the text honest, real, or candid.
+- **Negative parallelism.** "Not X but Y", "not only X but also Y", "not
+  just X, it's Y", "X rather than Y" used for rhythm. State Y.
+- **Copulative avoidance.** "Serves as", "stands as", "functions as",
+  "represents", "features", "boasts" in place of "is" or "has".
+- **Participial tails.** A clause of commentary hung on a sentence:
+  ", highlighting…", ", ensuring…", ", reflecting…", ", allowing…".
+- **Rule of three.** Three items or three parallel phrases chosen for
+  rhythm. Use the number of items there are.
+- **Model vocabulary.** delve, tapestry, testament, pivotal, crucial,
+  robust, comprehensive, fundamentally, nuanced, paradigm, landscape,
+  leverage, seamless, showcase, underscore, foster, vibrant, meticulous,
+  intricate, enhance, bolster, garner, elevate, empower, unlock, navigate,
+  journey, cutting-edge, game-changer, "at its core", "in today's".
+- **Hedging and throat-clearing.** "It is worth noting", "importantly",
+  "notably", "essentially", "arguably", "typically", "often" where the
+  statement is true without them.
+- **Inflation.** Claims of significance, legacy or transformation; vague
+  attribution ("experts say", "widely regarded").
+- **Uniform rhythm.** Every sentence the same length, every paragraph the
+  same shape, every section the same arc. Short sentences are the rule
+  here, so vary them: a long sentence of fact, then a short one; a
+  paragraph of two sentences after one of six. Do not make every list a
+  bulleted list.
+- **Formatting as decoration.** Bold on more than one phrase per
+  paragraph, headings that only hold other headings, horizontal rules
+  between sections, emoji, curly quotes.
+
+`scripts/prose.py` scans a repository for the deterministic patterns in
+this list and reports them by file and line. Run it before pushing a
+document. It cannot see rhythm, invention or inflation; read for those.

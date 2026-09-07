@@ -6,7 +6,7 @@ codebase or asks why a booking is in its current state:
 - **[Message flows](flows.md)** has sequence diagrams for every conversation
   jetway holds. The conversations are sells and their replies in both
   dialects, cancellations, availability, schedule changes, movements,
-  tickets, and the ground story. The cancellations include the ones that
+  tickets, and ground handling. The cancellations include the ones that
   cross other messages on the network.
 - **[State machines](states.md)** has the status vocabularies and their legal
   transitions. These cover segment action codes, record status, the message

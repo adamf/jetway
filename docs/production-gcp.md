@@ -9,7 +9,7 @@ states where the software must change before jetway can run this way.
 wholesky is the load generator that tests each claim below. The numbers
 quoted are the numbers wholesky measured.
 
-In summary, jetway is a stateful, connection-oriented system with a Postgres
+jetway is a stateful, connection-oriented system with a Postgres
 book of record. Operate it as a database with a wire protocol. Do not operate
 it as a web service.
 
