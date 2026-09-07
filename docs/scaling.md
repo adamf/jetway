@@ -1,12 +1,12 @@
 # Scaling
 
-Measured, not estimated. Every number below came from `go test -bench` on a
-2026 laptop against a local PostgreSQL 17 with stock settings; reproduce them
-with the commands in [Reproducing](#reproducing). They are a floor, not a
-projection: real hardware and a tuned database do better, and the shape of the
-curve matters more than the absolute figures.
+Every number in this document is measured. The numbers came from
+`go test -bench` on a 2026 laptop against a local PostgreSQL 17 with stock
+settings. Reproduce them with the commands in [Reproducing](#reproducing).
+The numbers are a floor. Production hardware and a tuned database do better,
+and the shape of the curve matters more than the absolute figures.
 
-## What one process does today
+## Single-process performance
 
 | Operation | Cost | Rate, single-threaded |
 | --- | --- | --- |
@@ -18,12 +18,11 @@ curve matters more than the absolute figures.
 | `UpdatePNR` with events | 221 µs | ~4,500/s |
 | `CreatePNR` with events | 167 µs | ~6,000/s |
 
-**The codecs are not the bottleneck and never will be.** Parsing is a rounding
-error next to the database; a message costs about seventy times more to store
-than to decode. Anybody optimising the wire formats for throughput is
-optimising the wrong thing.
+**The codecs are not the bottleneck and never will be.** Parsing costs little
+next to the database. A message costs about 70 times more to store than to
+decode. Optimising the wire formats for throughput targets the wrong cost.
 
-Capture does scale with concurrency, up to a point:
+Capture scales with concurrency up to a limit:
 
 | Concurrency | Cost | Rate |
 | --- | --- | --- |
@@ -32,18 +31,20 @@ Capture does scale with concurrency, up to a point:
 | 12 | 25 µs | 40,100/s |
 | 32 | 26 µs | 38,700/s |
 
-It plateaus around **40,000 captures per second** at about twelve in flight,
-and gets slightly worse beyond that — the classic connection-pool overshoot.
+Capture plateaus around **40,000 captures per second** at about 12 in
+flight. Beyond that, it gets slightly worse. This is connection-pool
+overshoot.
 
-An inbound message that changes a record costs roughly **450–500 µs of database
-time**: capture, read, write with events, status update, and the capture of any
-reply. Call it **2,000 applied messages per second per process** against one
-untuned database, with headroom to perhaps 8,000–10,000 once the database is
-tuned and the pool is sized properly.
+An inbound message that changes a record costs roughly **450–500 µs of
+database time**. That time covers capture, read, write with events, status
+update, and the capture of any reply. The rate is about **2,000 applied
+messages per second per process** against one untuned database. With a tuned
+database and a correctly sized pool, the rate can reach perhaps
+8,000–10,000.
 
-## What breaks first, and it is not throughput
+## Hot-path record scans
 
-Three lookups walk the record table on the hot path:
+On the hot path, 3 lookups walk the record table:
 
 | Site | When it runs |
 | --- | --- |
@@ -61,23 +62,25 @@ The cost is exactly linear:
 | 1,000 | 400 µs |
 | 10,000 | 4.0 ms, and 8 MB allocated |
 
-At a million records — small for a real GDS — a single ticket control message
-would cost something like 400 ms and 800 MB of garbage. That alone rules out
-production.
+A million records is small for a GDS. At that size, a single ticket control
+message would cost about 400 ms and 800 MB of garbage. That cost alone rules
+out production.
 
-**But the worse problem is that these are correctness bugs, not performance
-bugs.** `ListPNRs` is `ORDER BY updated_at DESC LIMIT n`. The scans therefore
-examined only the most recently touched records, so a ticket control message for
-a booking made last month did not find it and was refused with "no record holds
-this document". The partner was told something false. That failure got *more*
-likely as the store grew, and it was silent.
+**The worse problem is that these are correctness bugs before they are
+performance bugs.** `ListPNRs` is `ORDER BY updated_at DESC LIMIT n`. The
+scans therefore examined only the most recently touched records. A ticket
+control message for a booking made last month did not find the booking. The
+gateway refused it with "no record holds this document" and told the partner
+something false. That failure became *more* likely as the store grew, and it
+was silent.
 
-### Fixed
+### Completed fixes
 
-The three call sites now go through `store.Lookup`, whose contract is that an
-implementation searches every record or returns an error — it may never quietly
-answer from a prefix. Postgres serves all three from the existing
-`pnr_state_idx` GIN index by JSON containment, measured on 20,000 records:
+The 3 call sites now go through `store.Lookup`. Its contract is that an
+implementation searches every record or returns an error. It may never answer
+silently from a prefix. Postgres serves all 3 lookups from the existing
+`pnr_state_idx` GIN index by JSON containment. The table gives measurements
+on 20,000 records:
 
 | Lookup | Plan | Time |
 | --- | --- | --- |
@@ -85,47 +88,51 @@ answer from a prefix. Postgres serves all three from the existing
 | by partner locator | Bitmap Index Scan on `pnr_state_idx` | 0.23 ms |
 | by flight and date | BitmapOr over `pnr_state_idx` | 0.55 ms, 23 rows |
 
-Three things were worth learning while doing it:
+The work produced 3 lessons:
 
-- **Containment over-matches, so it narrows rather than decides.** It will match
-  a segment this node has already cancelled, and it ignores segment type. Both
-  backends therefore filter what comes back through one shared
-  `store.SegmentOnFlight`, and the Postgres lookup pages until the rows run out
-  rather than trusting the first page — stopping early would report fewer
-  passengers on a flight than are really on it, which is the same class of quiet
-  wrong answer being removed.
-- **Carriers write the same flight both zero-padded and bare**, and containment
-  is exact, so each spelling has to be asked for separately. The planner ORs
-  them into one bitmap, so this costs an extra index probe, not an extra scan.
-- **`ScheduleScanLimit` changed meaning.** It used to bound the search; it now
-  caps how many bookings one schedule message may queue, and the gateway logs a
-  warning when a message hits it. Silence there would read as "these are all the
-  passengers".
+- **Containment over-matches, and it narrows rather than decides.** It
+  matches a segment this node has already cancelled, and it ignores segment
+  type. Both backends therefore filter the results through one shared
+  `store.SegmentOnFlight`. The Postgres lookup pages until the rows run out.
+  It does not trust the first page. Stopping early would report fewer
+  passengers on a flight than are on it. That is the same class of silent
+  wrong answer that this work removes.
+- **Carriers write the same flight both zero-padded and bare.** Containment
+  is exact. The lookup therefore queries each spelling separately. The
+  planner ORs the 2 queries into one bitmap. This costs an extra index probe
+  and not an extra scan.
+- **`ScheduleScanLimit` changed meaning.** It used to bound the search. It
+  now caps how many bookings one schedule message may queue. The gateway logs
+  a warning when a message hits the cap. Silence there would read as "these
+  are all the passengers".
 
-The schedule path was the worst of the three, and the regression test says why:
-under the old scan, a flight cancellation for a booking made six months earlier
-queued **zero** tasks. No error, no log line, message marked applied. The
-further ahead the change, the more passengers it missed — exactly backwards,
-since a schedule change months out is the normal case.
+The schedule path was the worst of the 3, and the regression test shows why.
+Under the old scan, a flight cancellation for a booking made 6 months earlier
+queued **zero** tasks. There was no error and no log line, and the message
+was marked applied. The further ahead the change, the more passengers the
+scan missed. That is backwards, because a schedule change months out is the
+normal case.
 
-Both regression tests were confirmed to fail against the old implementation
-before being kept. This repo has twice shipped tests that encoded the same guess
-as the code, so a new test does not count until it has been watched to fail.
+Both regression tests failed against the old implementation before they were
+kept. This repository has twice shipped tests that encoded the same guess as
+the code. A new test therefore does not count until it has been watched to
+fail.
 
-### Still open
+### Open items
 
-- Push the sweeper's due-date predicates into SQL so a pass costs a range scan
-  rather than a full read.
-- Compute the Insights aggregate from counters rather than from the store. It
-  is honest at demo volume and wrong anywhere else, and the file says so.
-- Extract document number and carrier locator into real columns with btree
-  indexes. Containment against the GIN index is fast enough that this is now an
-  optimisation rather than a fix.
+- Push the sweeper's due-date predicates into SQL. A pass then costs a range
+  scan rather than a full read.
+- Compute the Insights aggregate from counters rather than from the store.
+  The aggregate is correct at demo volume and wrong anywhere else, and the
+  file says so.
+- Extract document number and carrier locator into dedicated columns with
+  btree indexes. Containment against the GIN index is fast enough that this
+  is now an optimisation rather than a fix.
 
 ## PostgreSQL tuning
 
-The measurements above ran against stock settings, which is why they are a
-floor:
+The measurements above ran against stock settings. For this reason they are
+a floor:
 
 ```
 shared_buffers       = 128MB     work_mem            = 4MB
@@ -134,9 +141,9 @@ wal_buffers          = 4MB       max_wal_size        = 1GB
 synchronous_commit   = on        checkpoint_timeout  = 5min
 ```
 
-For a write-heavy OLTP box — which is exactly what this is, since every message
-is an insert and most are followed by an update — the pgtune shape for, say, 16
-vCPU and 64 GB RAM is:
+jetway is a write-heavy online transaction processing (OLTP) workload,
+because every message is an insert and most are followed by an update. For
+such a workload, the pgtune shape for 16 vCPU and 64 GB RAM is:
 
 ```
 shared_buffers                  = 16GB      # 25% of RAM
@@ -154,45 +161,51 @@ max_connections                 = 200       # with pooling in front; see below
 default_statistics_target       = 100
 ```
 
-Three that matter more than the rest here:
+These 3 settings matter more than the rest:
 
-**`synchronous_commit`.** Leave it `on`. The whole capture-before-acknowledge
-discipline exists so that a message this gateway has acknowledged is durable;
-turning off synchronous commit trades exactly that guarantee for throughput and
-makes the spool pointless. If commit latency is the wall, put the WAL on its own
-fast device or consider `remote_write` on a replica — do not turn it off.
+**`synchronous_commit`.** Leave it `on`. The capture-before-acknowledge
+discipline exists to make every message this gateway has acknowledged
+durable. Turning off synchronous commit trades that guarantee for throughput
+and makes the spool pointless. If commit latency is the limit, put the
+write-ahead log (WAL) on its own fast device or consider `remote_write` on a
+replica. Do not turn `synchronous_commit` off.
 
 **Connection pooling.** The plateau above is a pool effect. Do not give each
-gateway process a hundred connections; give it enough for its concurrency
-(twelve to twenty-five is where this saturates) and put pgbouncer in transaction
-mode in front if you run many processes. Optimistic concurrency retries make
+gateway process 100 connections. Give it enough connections for its
+concurrency, which saturates at 12 to 25. Put pgbouncer in transaction mode
+in front if you run many processes. Optimistic concurrency retries make the
 connection count worse than it looks, because a conflict costs a second
 round trip.
 
-**Partitioning the message log.** `message` grows without bound and is
-append-only with a time-ordered ULID primary key — a natural range partition by
-`at`. That also makes retention a `DROP TABLE` rather than a `DELETE` that
-fights vacuum. Retention does not exist yet, and is on the roadmap.
+**Partitioning the message log.** `message` grows without bound. It is
+append-only with a time-ordered ULID primary key, which suits a range
+partition by `at`. Partitioning also makes retention a `DROP TABLE` rather
+than a `DELETE` that fights vacuum. Retention exists in 2 forms: the
+Postgres store retires records by day (`RetireBefore`, as partitions), and
+the memory store prunes records by a policy the host supplies
+(`store.Pruner`, v0.1.94). The message log has a size cap in memory and a
+time-based purge on both stores.
 
-## How many instances
+## Instance count
 
-Work it out from the applied-message rate rather than from a rule of thumb:
+Calculate the instance count from the applied-message rate rather than from
+a rule of thumb:
 
 ```
 instances = peak messages per second / 2,000     (untuned)
           = peak messages per second / 8,000     (tuned, pooled, scans fixed)
 ```
 
-Two honest caveats before anybody multiplies.
+Apply 2 caveats before you multiply.
 
-**I do not know AA's message rate.** Interline reservation volume for a carrier
-that size is not public, and guessing would be worse than useless. What can be
-said: Type B messages are capped at 4 KB, so bandwidth is irrelevant — this is a
-message-rate problem, not a bytes problem — and availability broadcasts (AVS)
-usually dominate reservation traffic by an order of magnitude. AVS is also the
-cheapest thing here to process, because it touches no record.
+**AA's message rate is unknown.** Interline reservation volume for a carrier
+that size is not public, and a guess would be worse than useless. Type B
+messages are capped at 4 KB, and bandwidth is therefore irrelevant. The
+problem is the message rate and not the byte count. Availability broadcasts
+(AVS) usually dominate reservation traffic by an order of magnitude. AVS is
+also the cheapest message here to process, because it touches no record.
 
-**More instances is not currently a straightforward win**, because three pieces
+**More instances are not currently a straightforward win**, because 3 pieces
 of state live in process memory and would diverge:
 
 | State | Where it lives | What goes wrong with two processes |
@@ -201,39 +214,42 @@ of state live in process memory and would diverge:
 | Channel sequence baselines | `Gateway.seq`, in memory | Each sees half a channel's numbering and reports gaps that are not there |
 | Deduplication | The store, so shared | Fine |
 
-The availability cache is the significant one: it is the thing that decides
-whether a segment sells without asking. Two processes disagreeing about it is a
-correctness problem, not a cache-hit-rate problem. Fixing it means either
-sharing availability through the database, pinning each carrier's AVS feed to
-one process, or accepting that free sale is per-process and saying so.
+The availability cache is the significant one. It decides whether a segment
+sells without a request to the carrier. 2 processes that disagree about it
+are a correctness problem and not a cache-hit-rate problem. There are
+3 possible fixes. The first shares availability through the database. The
+second pins each carrier's AVS feed to one process. The third accepts that
+free sale is per-process and documents it.
 
-## Load balancing, and why MATIP resists it
+## Load balancing and MATIP
 
-This is the part that does not work like a web service.
+This part does not work like a web service.
 
-**MATIP sessions are stateful and long-lived.** A session is opened, carries
-many messages, and is closed; the sequence numbering that lets a gap be detected
-is per channel. So:
+**MATIP sessions are stateful and long-lived.** A session opens, carries many
+messages, and closes. The sequence numbering that lets the gateway detect a
+gap is per channel. The consequences are:
 
-- **You cannot round-robin messages.** A load balancer that spreads packets of
-  one TCP session across backends breaks the session outright, and one that
-  spreads *sessions* of one channel across backends breaks gap detection,
-  because each process sees a subset of the numbering and both report holes.
-- **Balance whole links, not messages.** An L4 balancer with source affinity, or
-  simpler and better, static assignment: each gateway process owns a set of
-  peers, and the link for a given carrier always terminates on the same process.
-  Peers are already a configuration concept, so this is a deployment layout
+- **You cannot round-robin messages.** A load balancer that spreads packets
+  of one TCP session across backends breaks the session. A load balancer that
+  spreads *sessions* of one channel across backends breaks gap detection.
+  Each process then sees a subset of the numbering, and both report holes.
+- **Balance whole links rather than messages.** Use an L4 balancer with
+  source affinity, or the simpler and better option of static assignment.
+  With static assignment, each gateway process owns a set of peers, and the
+  link for a given carrier always terminates on the same process. Peers are
+  already a configuration concept. This is therefore a deployment layout
   rather than new code.
-- **Failover is a reconnection, not a rebalance.** If a process dies its peers
-  reconnect and MATIP re-opens the session; the partner retransmits anything
-  unacknowledged. That works because capture precedes acknowledgement — nothing
-  is acknowledged that is not durable. What it does *not* do is preserve the
-  sequence baseline, so expect a gap report on the first message after a
-  failover. That is the honest cost of keeping the baseline in memory, and it is
-  documented in `checkSequence` rather than papered over.
-- **BATAP would help and is not implemented.** The acknowledgement contract above
-  MATIP is what would let a partner retransmit deliberately rather than by
-  timeout, which is what makes failover clean rather than merely survivable.
+- **Failover is a reconnection rather than a rebalance.** If a process dies,
+  its peers reconnect, MATIP re-opens the session, and the partner
+  retransmits anything unacknowledged. That works because capture precedes
+  acknowledgement. The gateway acknowledges nothing that is not durable.
+  Failover does *not* preserve the sequence baseline. Expect a gap report on
+  the first message after a failover. That is the cost of keeping the
+  baseline in memory, and `checkSequence` documents it.
+- **BATAP would help and is not implemented.** BATAP is the acknowledgement
+  contract above MATIP. It would let a partner retransmit deliberately rather
+  than by timeout. That would make failover clean rather than merely
+  survivable.
 
 The other transports are easier:
 
@@ -242,13 +258,13 @@ The other transports are easier:
 | MATIP / framed TCP | Pin the link. One peer, one process. |
 | HTTPS with mTLS | Ordinary L7. Each request is independent; identity is the client certificate. |
 | NDC over HTTP | Ordinary L7, same as any API. |
-| File drop | One consumer per directory, or a lock — two processes on one directory will race. |
+| File drop | One consumer per directory, or a lock. Two processes on one directory will race. |
 
-So the shape of a real deployment is not a homogeneous autoscaling pool. It is a
-small number of processes, each owning a set of carrier links, all sharing one
-database, with the HTTP surface behind a normal balancer and the teletype links
-pinned. That is closer to how a message switch is actually run than to how a web
-service is.
+A production deployment is therefore not a homogeneous autoscaling pool. It
+is a small number of processes, each owning a set of carrier links, all
+sharing one database. The HTTP surface sits behind a normal balancer and the
+teletype links are pinned. That is closer to how operators run a message
+switch than to how they run a web service.
 
 ## Reproducing
 

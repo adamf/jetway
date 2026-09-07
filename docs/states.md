@@ -1,14 +1,14 @@
 # State machines
 
-The status vocabularies and their legal transitions. The segment codes are
-the interline action/status vocabulary (`pkg/rescode`); everything else
-derives from them.
+This document lists the status vocabularies and their legal transitions. The
+segment codes are the interline action/status vocabulary (`pkg/rescode`).
+Every other status derives from them.
 
 ## Segment status
 
-A segment's status is an action code. The categories drive every decision:
-requests expect replies, holdings state facts, cancellations and refusals
-are dead ends, advice narrates schedule change.
+A segment's status is an action code. The code categories drive every
+decision. A request expects a reply. A holding states a fact. A cancellation
+or a refusal is a terminal state. An advice code describes a schedule change.
 
 ```mermaid
 stateDiagram-v2
@@ -33,16 +33,16 @@ stateDiagram-v2
     XX --> XX: late NO ignored — refusals do not revive either
 ```
 
-Guards worth naming, each with a regression test behind it:
+These guards each have a regression test:
 
-- **Refusals are not live** (v0.1.6): `Recompute` derives liveness from the
-  category table. `NO` is exactly as dead as `XX`; a hand-written dead list
-  once omitted it and a stray refusal reopened a cancelled record.
-- **Late confirmations are ignored** (v0.1.20): a `KK` landing on an `XX`
-  segment — replies and cancellations cross on a store-and-forward network
-  — leaves the segment dead, queues a divergence, and re-sends the
+- **Refusals are not live** (v0.1.6). `Recompute` derives liveness from the
+  category table. `NO` is as dead as `XX`. A hand-written dead list once
+  omitted `NO`, and a stray refusal reopened a cancelled record.
+- **Late confirmations are ignored** (v0.1.20). Replies and cancellations
+  cross on a store-and-forward network. A `KK` that lands on an `XX` segment
+  leaves the segment dead, queues a divergence, and re-sends the
   cancellation.
-- **Unknown codes stay live**: a code we cannot read is not a reason to
+- **Unknown codes stay live.** A code that we cannot read is not a reason to
   cancel somebody's booking.
 
 ## Record status
@@ -56,11 +56,11 @@ stateDiagram-v2
     Cancelled --> Open: a segment is genuinely held again (KK on a live path)
 ```
 
-"Live" means the category table says so: holdings, pending requests, and
-confirmed or waitlisted replies. Cancellations, refusals, and the advice
-codes that say deleted are not; surface (ARNK) and auxiliary placeholders
-never count. Ticketing is sticky — a ticketed record stays ticketed until
-nothing on it lives.
+A segment is live when the category table says so. The live categories are
+holdings, pending requests, and confirmed or waitlisted replies.
+Cancellations, refusals, and the advice codes that mean deleted are not live.
+Surface (ARNK) and auxiliary placeholders never count. Ticketing is sticky. A
+ticketed record stays ticketed until no segment on it is live.
 
 ## Inbound message pipeline
 
@@ -76,10 +76,11 @@ stateDiagram-v2
     end note
 ```
 
-Resolution order for the record a message names: our own locator first;
-then, for messages that amend rather than create, the partner's locator via
-the external-locator index, scoped to the sending peer — a cancellation can
-arrive before the reply that would have taught the sender our locator.
+The pipeline resolves the record that a message names in this order. It tries
+our own locator first. Then, for messages that amend an existing record, it
+tries the partner's locator through the external-locator index, scoped to the
+sending peer. The second step exists because a cancellation can arrive before
+the reply that would have given the sender our locator.
 
 ## Outbound message
 
@@ -108,12 +109,12 @@ stateDiagram-v2
     end note
 ```
 
-The queues themselves say what kind of attention a record needs:
-`confirmation` (a partner confirmed), `unable` (a partner could not),
-`schedule-change` (a flight moved under a booking), `ticketing` (a time
-limit approaches; the sweeper cancels on expiry only when asked), and
-`divergence` — the queue for every case where two systems' views of one
-booking are known to disagree.
+The queue name states what kind of attention a record needs. `confirmation`
+means a partner confirmed. `unable` means a partner could not. `schedule-change`
+means a flight moved under a booking. `ticketing` means a time limit
+approaches, and on that queue the sweeper cancels on expiry only when asked.
+`divergence` is the queue for every case where 2 systems' views of one booking
+are known to disagree.
 
 ## Passenger, at departure control
 
@@ -137,10 +138,10 @@ stateDiagram-v2
     end note
 ```
 
-The PFS categories read straight off this chart: `NOSHO` is `listed →
-noshow`, `OFFLD` is anything that reached `offloaded`, `GOSHO` and `NOREC`
-are go-shows that flew, `IDPAD` is staff that cleared. A passenger who was
-listed, accepted and boarded is not reported at all: the list was right.
+The PFS categories map directly onto this chart. `NOSHO` is `listed →
+noshow`. `OFFLD` is any passenger who reached `offloaded`. `GOSHO` and
+`NOREC` are go-shows who flew. `IDPAD` is staff who cleared. A passenger who
+was listed, accepted and boarded is not reported, because the list was right.
 
 ## Flight, at departure control
 

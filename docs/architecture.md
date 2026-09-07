@@ -2,8 +2,8 @@
 
 ## The inbound pipeline
 
-Every inbound message goes through the same stages in the same order. The
-ordering is the contract, and it is enforced in `pkg/gateway.Ingest`.
+Every inbound message goes through the same stages in the same order. This
+order is the contract. `pkg/gateway.Ingest` enforces it.
 
 ```
 bytes from a partner
@@ -50,39 +50,43 @@ bytes from a partner
 └─────────────┘  state and our answer can never disagree.
 ```
 
-A failure at any stage after capture leaves the message in the dead letter queue
-with its bytes intact and the reason recorded. It is never dropped and never
-silently succeeds.
+A failure at any stage after capture leaves the message in the dead letter
+queue. The queue keeps the bytes intact and records the reason. The pipeline
+never drops the message, and it never records a failure as a success.
 
-## Why capture comes first
+## Capture before decoding
 
-The alternative — parse, then store what you understood — loses the information
-you did not know you needed. Carrier dialects diverge, and the first sign is
-usually a message you cannot read. If the bytes are gone, so is the evidence.
+The alternative is to decode a message and then store the decoded result.
+This loses the information that you did not know you needed. Carrier dialects
+diverge. The first sign of a divergence is usually a message that the decoder
+cannot read. If the bytes are gone, the evidence is gone.
 
-Capturing first buys three things:
+Capture before decoding has these benefits:
 
-- **Replay.** Fix the parser, reprocess the traffic that failed. The partner
-  considers those messages delivered and will not resend them.
-- **Audit.** "What did they actually send" is answerable years later, and the
-  answer does not depend on the parser deployed at the time.
-- **A safe failure mode.** A decode bug costs a reprocessing run, not a booking.
+- **Replay.** Fix the decoder, then reprocess the traffic that failed. The
+  partner considers those messages delivered and does not resend them.
+- **Audit.** The bytes answer the question of what the partner sent, years
+  later. The answer does not depend on the decoder that was deployed at the
+  time.
+- **A safe failure mode.** A decode bug costs a reprocessing run. It does not
+  cost a booking.
 
-## Why the record is derived
+## The derived record
 
-`pnr.state` is a projection of the events in `pnr_event`, kept alongside them
-for cheap reads. Every event names the message that caused it.
+`pnr.state` is a projection of the events in `pnr_event`. The store keeps the
+projection next to the events for cheap reads. Every event names the message
+that caused it.
 
-This is what makes an interline dispute answerable. The record shows what it
-holds now; the events show which partner message put it there and when. Without
-that link, reconciling a disagreement means reading two message logs side by
-side and guessing.
+This link makes an interline dispute answerable. The record shows its current
+contents. The events show which partner message put each item there, and when.
+Without that link, reconciling a disagreement means reading 2 message logs side
+by side and guessing.
 
 ## Concurrency
 
-A gateway and a carrier can be changing one record at the same instant — a
-schedule change arriving while an agent adds a passenger. Every write carries
-the version it read:
+A gateway and a carrier can change one record at the same instant. For
+example, a schedule change arrives while an agent adds a passenger. Every
+write carries the version it read:
 
 ```go
 rec, _ := store.GetPNR(ctx, locator)
@@ -91,12 +95,13 @@ expected := rec.Version
 err := store.UpdatePNR(ctx, rec, expected, events)   // ErrConflict if it moved
 ```
 
-`ErrConflict` means re-read and reapply, which the pipeline does automatically
-up to a bounded number of attempts. A blind write would silently discard
-whichever change it did not see, and nobody would find out until a passenger did.
+`ErrConflict` means re-read and reapply. The pipeline does this automatically,
+up to a bounded number of attempts. A blind write would discard the change
+that it did not see. Nobody would discover the loss before a passenger did.
 
-The store conformance suite asserts this against both backends, including a
-concurrent-writers test that requires exactly one of eight writers to win.
+The store conformance suite asserts this against both backends. The suite
+includes a concurrent-writers test that requires exactly 1 of 8 writers to
+win.
 
 ## Layering
 
@@ -122,29 +127,32 @@ concurrent-writers test that requires exactly one of eight writers to win.
    └──────────────────┴──────────────────┴──────────────────────┘
 ```
 
-The `pkg/...` tree does not import the gateway, the store or the transport. You
-can use the codecs on their own — `jetwayctl decode` does exactly that, and
-works with no server running.
+The codec packages under `pkg/` do not import the gateway, the store or the transport. `pkg/matip` imports the transport, because it is a transport.
+You can use the codecs on their own. `jetwayctl decode` uses them this way,
+and it works with no server running.
 
-The split between wire syntax and message grammar is load-bearing. Syntax rules
-are universal and stable, so `pkg/typeb` and `pkg/edifact` can be exact and
-strict about what they validate. Message composition varies by carrier, version
-and bilateral agreement, so `pkg/airimp` and `pkg/padis` are profiles: ordered
-recognizers and segment handlers you can extend per link. An unknown message
-type still decodes at the syntax layer, so it can be captured, routed and
-replayed even when nothing above knows what it means.
+The design depends on the split between wire syntax and message grammar.
+Syntax rules are universal and stable. For this reason, `pkg/typeb` and
+`pkg/edifact` can be exact and strict in what they validate. Message
+composition varies by carrier, version and bilateral agreement. `pkg/airimp`
+and `pkg/padis` are therefore profiles. A profile is an ordered set of
+recognisers and segment handlers that you can extend for each link.
+
+An unknown message type still decodes at the syntax layer. The gateway can
+therefore capture, route and replay it, even when no higher layer knows its
+meaning.
 
 ## The shared status vocabulary
 
-`pkg/rescode` holds the two-letter action and status codes. They appear in
-teletype segment elements and in EDIFACT `RPI` segments alike, and both decoders
-read them from the one table.
+`pkg/rescode` holds the 2-letter action and status codes. The codes appear in
+teletype segment elements and in EDIFACT `RPI` segments. Both decoders read
+them from this one table.
 
-That is not tidiness. A code table duplicated across two decoders drifts, and a
-decoder that disagrees with its sibling about whether `US` means "waitlisted"
-produces bookings that quietly disagree with the partner holding the other copy.
+A code table duplicated across 2 decoders drifts. If the 2 decoders disagree
+about whether `US` means "waitlisted", their bookings disagree with the
+partner that holds the other copy.
 
-## Where your systems plug in
+## Integration seams
 
 | Seam | Interface | Default |
 | --- | --- | --- |
@@ -156,75 +164,85 @@ produces bookings that quietly disagree with the partner holding the other copy.
 | Teletype dialect | `airimp.Profile` | `airimp.Default` |
 | EDIFACT dialect | `padis.Profile` | `padis.Default` |
 
-`Responder` is the important one. Deciding whether a seat is available is the
-carrier's business and this project does not try to be an inventory system. The
-interface is one synchronous call — given a record, return a status code per
-segment — so putting a real inventory behind it changes nothing else.
+`Responder` is the most important seam. The carrier decides whether a seat is
+available. This project is not an inventory system. The interface is a single
+synchronous call. The call receives a record and returns a status code for
+each segment. Putting the carrier's inventory system behind the interface
+changes nothing else.
 
 ## Routing
 
-There are two ways a message finds a link, and they answer different questions.
+A message finds a link in 2 ways. The 2 ways answer different questions.
 
-**By peer name** is how a reply goes back: the pipeline already knows which
-partner it is talking to. **By address** is how a message reaches everybody it
-was sent to. A Type B priority line may carry several addressees and the network
-is expected to deliver a copy to each; routing on peer name alone can only ever
-reach the one link a message was handed to. `Gateway.Fanout` resolves each
-address through a table built from every peer's `TTYAddress` and `Addresses`,
-sends the bytes unchanged, and reports per addressee — delivered, terminates
-here, or served by no link.
+**By peer name** is the route for a reply. The pipeline already knows which
+partner it is answering. **By address** is the route to every addressee of a
+message. A Type B priority line can carry several addressees. The network is
+expected to deliver a copy to each addressee. Routing by peer name alone
+reaches only the single link that the message was given to.
 
-The bytes go out unchanged deliberately. Rewriting the address line per
-recipient would make each copy a different message from the one in the log, and
-the address line is part of what a partner may check.
+`Gateway.Fanout` resolves each address through a table built from every peer's
+`TTYAddress` and `Addresses`. It sends the bytes unchanged and reports a
+result for each addressee. The result is delivered, terminates here, or served
+by no link.
 
-Forwarding traffic addressed to *other* links — being a switch rather than an
-endpoint — is `routing.relay`, and it is off by default. A node that relays for
-anyone who can reach it is an open relay: a partner can spend another partner's
-link budget through us, under our originator address. When it is on, the
-addressee that matters most is the one skipped, because forwarding to the link a
-message arrived on returns it to its sender, and on a store-and-forward network
-that loop survives restarts.
+The gateway sends the bytes unchanged by design. If it rewrote the address
+line for each recipient, each copy would be a different message from the
+message in the log. The address line is also part of what a partner can
+check.
+
+`routing.relay` forwards traffic that is addressed to *other* links. With
+relay on, the node is a switch. Otherwise the node is an endpoint. Relay is
+off by default. A node that relays for anyone who can reach it is an open
+relay. A partner can then spend another partner's link budget through this
+node, under this node's originator address.
+
+When relay is on, the most important addressee is the one that the relay
+skips. That is the link the message arrived on. Forwarding to that link
+returns the message to its sender. On a store-and-forward network, that loop
+survives restarts.
 
 ## Queues
 
-A record that needs human attention has to end up somewhere a human looks.
-`pkg/queue` is that mechanism, and it has two producers with different
-characters.
+A record that needs human attention must reach a place where a person looks.
+`pkg/queue` is that mechanism. It has 2 producers, and they place items for
+different reasons.
 
-The **gateway** places on a queue when a partner's answer changes a segment into
-a state somebody must act on: a confirmation, a refusal, a waitlist, a status
-outside the interline vocabulary. The trigger is the *transition*, captured
-before the message is applied and compared after. Using the resulting state
-instead would re-raise a confirmation every time any later message touched a
-settled record.
+The **gateway** places an item when a partner's answer changes a segment into
+a state that somebody must act on. Such a state is a confirmation, a refusal,
+a waitlist, or a status outside the interline vocabulary. The trigger is the
+*transition*. The gateway captures the status before it applies the message
+and compares the status after. If the trigger were the resulting state, every
+later message that touched a settled record would re-raise the confirmation.
 
-The **sweeper** places on a queue for things that happen because time passed.
-A partner who answers creates work by answering; a partner who never answers
-creates none, and neither does a ticketing deadline expiring, because neither
-is an event anybody sends. Only a periodic pass can see those.
+The **sweeper** places an item for conditions that arise because time passed.
+A partner who answers creates work by answering. A partner who never answers
+sends no event, and a ticketing deadline that expires sends no event either.
+Only a periodic pass can detect those conditions.
 
-Placement is idempotent on `(queue, record, reason code, segment)`. The segment
-is part of that key because an interline record has one segment per carrier and
-each answers separately: two partners confirming one booking are two pieces of
-work. Record-level placements such as a ticketing limit use segment 0 and so
-still collapse to one. In Postgres this is a partial unique index over pending
-rows, not a lookup, because two sweepers racing must not both succeed.
+Placement is idempotent on `(queue, record, reason code, segment)`. The
+segment is part of the key because an interline record has one segment per
+carrier, and each carrier answers separately. When 2 partners confirm one
+booking, that is 2 items of work. Record-level placements, such as a
+ticketing limit, use segment 0 and therefore still collapse to 1 item. In
+Postgres the key is a partial unique index over pending rows. It is not a
+lookup, because 2 racing sweepers must not both succeed.
 
-Working an item does not delete it. Who cleared it and when is the question
-asked after an interline dispute.
+Working an item does not delete it. After an interline dispute, the question
+is who cleared the item and when.
 
-### Why the state is not in a broker
+### Queue state in the store
 
-A reservations queue is a worklist, not a transport. It is listed, counted,
-filtered, re-read, and audited after the fact — database semantics, not message
-semantics. So the state lives in `store.QueueStore` next to the records it
-refers to.
+A reservations queue is a worklist. It is not a transport. People list, count,
+filter, re-read and audit it after the fact. Those are database semantics.
+They are not message semantics. The state therefore lives in
+`store.QueueStore`, next to the records that it refers to.
 
-What an external queueing system is good at is the other half: telling a robot
-that work has arrived. `queue.Publisher` is that seam. A placement is stored
-first and published second, in the same order and for the same reason as
-capture-before-parse: a publish that failed leaves work that the next reader
-still finds, whereas a publish that succeeded before the write would announce
-work nobody can look up. An error from the publisher is logged, never
-propagated, because failing the placement would discard work already recorded.
+An external queueing system is good at the other half of the job. It tells a
+robot that work has arrived. `queue.Publisher` is that seam.
+
+The store writes a placement first, and the publisher publishes it second.
+This is the same order, for the same reason, as capture before decoding. A
+publish that fails leaves work that the next reader still finds. A publish
+that succeeded before the write would announce work that nobody can look up.
+`pkg/queue` logs an error from the publisher and never propagates it. Failing
+the placement would discard work that is already recorded.

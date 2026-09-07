@@ -1,14 +1,15 @@
 # Message flows
 
-Who talks to whom, in what order. Participants are the roles a real network
-has: a distribution system (GDS) that sells, a switch that relays, and a
-carrier's reservation system that answers. On a switchless topology the GDS
-and carrier talk directly; nothing in the flows changes but the middle
-column disappearing.
+This document shows which participant sends each message, and in what order.
+The participants are a distribution system (GDS) that sells, a switch that
+relays, and a carrier's reservation system that answers. On a switchless
+topology the GDS and the carrier communicate directly. The flows do not
+change, except that the middle column disappears.
 
 ## A Type B sell, requested
 
-The cold-cache path: the GDS holds no availability assertion, so it asks.
+This is the cold-cache path. The GDS holds no availability assertion. It
+therefore sends a request to the carrier.
 
 ```mermaid
 sequenceDiagram
@@ -31,8 +32,9 @@ sequenceDiagram
 
 ## A Type B sell, free sale
 
-The warm-cache path: the carrier's AVS broadcast said the class is open, so
-the GDS confirms on the spot and reports the sale it made.
+This is the warm-cache path. The carrier's AVS broadcast stated that the
+class is open. The GDS therefore confirms the segment immediately and reports
+the sale to the carrier.
 
 ```mermaid
 sequenceDiagram
@@ -50,8 +52,9 @@ sequenceDiagram
 
 ## An EDIFACT sell
 
-Same conversation, different wire: PAOREQ asks, PAORES answers, CONTRL
-acknowledges syntax separately from content.
+This is the same conversation on a different wire. PAOREQ carries the request
+and PAORES carries the answer. CONTRL acknowledges the syntax separately from
+the content.
 
 ```mermaid
 sequenceDiagram
@@ -67,10 +70,11 @@ sequenceDiagram
 
 ## Cancellation
 
-A cancellation is an advisory, not a request: the sender has already
-cancelled, and nothing in it asks the recipient to decide anything. On
-EDIFACT it carries MSG function 1 — answering one as if it were a sell was
-how a cancelled booking once got refused back to life (v0.1.6).
+A cancellation is an advisory. It is not a request. The sender has already
+cancelled, and the message does not ask the recipient to decide anything. On
+EDIFACT a cancellation carries MSG function 1. An earlier version answered a
+cancellation as if it were a sell, and the refusal revived a cancelled
+booking (v0.1.6).
 
 ```mermaid
 sequenceDiagram
@@ -85,8 +89,8 @@ sequenceDiagram
 
 ## Messages that cross on the network
 
-Store-and-forward retries reorder deliveries. Two guards exist because real
-volume found both resurrections (v0.1.6, v0.1.20).
+Store-and-forward retries reorder deliveries. Traffic at volume revived
+cancelled segments in 2 ways (v0.1.6, v0.1.20). There is a guard for each.
 
 ```mermaid
 sequenceDiagram
@@ -163,11 +167,12 @@ sequenceDiagram
 
 ## Departure control
 
-Reservations knows who booked; departure control knows who flew. The name
-list opens the flight at the airport, check-in fills it, and closing the
-door produces the messages everyone downstream runs on. Every arrow here is
-a real Type B message; the DCS is `pkg/dcs`, plugged into a carrier's node
-through `gateway.Ground`.
+Reservations records who booked. Departure control records who flew. The name
+list opens the flight at the airport. Check-in fills the flight. Closing the
+door produces the messages that every downstream system uses.
+
+Every arrow in the diagram is a Type B message. The departure control system
+(DCS) is `pkg/dcs`. It connects to a carrier's node through `gateway.Ground`.
 
 ```mermaid
 sequenceDiagram
@@ -203,21 +208,22 @@ sequenceDiagram
     D->>O: MVT — departure with the boarded count
 ```
 
-What the DCS refuses, and why, is part of the design: a PNL after
-acceptance has begun (`ErrListAfterAccept`), acceptance after check-in has
-closed unless a supervisor forces it, a seat already taken, a go-show when
-every seat is owed to a listed passenger. The refusals are recorded against
-the message in the ledger as `rejected`, bytes intact.
+The DCS refuses some inputs by design. It refuses a PNL after acceptance has
+begun (`ErrListAfterAccept`), and acceptance after check-in has closed unless
+a supervisor forces it. It also refuses a seat that is already taken, and a
+go-show when every seat is owed to a listed passenger. The ledger records each
+refusal against the message as `rejected`, with the bytes intact.
 
-Load control follows the AHM 560 method: passengers weigh by cabin zone,
-bags are split between the holds to bring the take-off centre of gravity
-toward the middle of the envelope, containerised aircraft get ULDs at
-positions, and the loadsheet reports the limits it was checked against.
+Load control follows the AHM 560 method. The DCS computes passenger weight by
+cabin zone. It splits the bags between the holds to bring the take-off centre
+of gravity toward the middle of the envelope. It assigns ULDs to positions on
+containerised aircraft. The loadsheet reports the limits that the DCS checked
+it against.
 
 ## Irregular operations
 
-A cancellation queues every booking it touches (see Schedule change). The
-irops engine is the desk that works that queue for the common case.
+A cancellation queues every booking that it touches (see Schedule change).
+The irops engine works that queue for the common case.
 
 ```mermaid
 sequenceDiagram
@@ -243,18 +249,19 @@ sequenceDiagram
     end
 ```
 
-Nothing open anywhere leaves the item on the queue for a person. With
-`AskCarriers` the engine will instead request a closed or unknown flight and
-leave the passenger holding an HN, which is a different promise and is off
-by default.
+If no alternative flight is open, the engine leaves the item on the queue for
+a person. With `AskCarriers`, the engine instead requests a closed or unknown
+flight and leaves the passenger holding an HN. That is a different promise to
+the passenger. `AskCarriers` is off by default.
 
 ## The aircraft and the tower
 
-Two networks beside the airline's own. The aircraft reports its movements
-over its datalink; the provider forwards them to the airline as ARINC 620
-messages on Type B, and operations derives the MVT from the report. Air
-traffic services runs the AFTN: the airline files a flight plan, and the
-towers send departure and arrival messages when they see the aircraft move.
+There are 2 networks beside the airline's own network. The aircraft reports
+its movements over its datalink. The datalink provider forwards the reports
+to the airline as ARINC 620 messages on Type B. Operations derives the MVT
+from the report. Air traffic services runs the AFTN. The airline files a
+flight plan on the AFTN, and the towers send departure and arrival messages
+when they observe the aircraft move.
 
 ```mermaid
 sequenceDiagram
@@ -275,6 +282,7 @@ sequenceDiagram
     T->>O: FF EGLLBAWX · (ARR-BAW117-EGLL-KJFK1857)
 ```
 
-The switch carries AFTN traffic by indicator: an addressee carrying a
-carrier's three-letter designator goes down that carrier's link wherever the
-location; anything else goes to the link marked as the aeronautical network.
+The switch routes AFTN traffic by indicator. An addressee that carries a
+carrier's 3-letter designator goes down that carrier's link, whatever the
+location. Every other addressee goes to the link that is marked as the
+aeronautical network.

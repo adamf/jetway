@@ -1,14 +1,14 @@
 # Adding a carrier link
 
-Onboarding a partner is four questions. The first two are configuration; the
-rest only come up when their dialect differs from the shipped profile.
+Onboarding a partner has 4 steps. The first 2 are configuration. The other 2
+apply only when the partner's dialect differs from the shipped profile.
 
-## 1. How do the bytes arrive, and how is the sender identified?
+## 1. Transport and sender identification
 
-These are one question, because a listener answers both.
+These are one decision, because one listener configuration covers both.
 
-**Over HTTPS.** The easiest partner to onboard, and the only one that needs no
-network contract and no agreed framing:
+**Over HTTPS.** This is the easiest partner to onboard. It is the only one
+that needs no network contract and no agreed framing:
 
 ```yaml
 ingress:
@@ -26,8 +26,8 @@ ingress:
 ```
 
 **Over a circuit.** Most carrier interface control documents describe a
-length-prefixed stream differing only in header width, byte order, and whether
-the count includes the header:
+length-prefixed stream. The streams differ only in header width, byte order,
+and whether the count includes the header:
 
 ```yaml
   - name: link-xx
@@ -43,15 +43,15 @@ the count includes the header:
       by_cert_cn: {res.xx.example.com: XX}
 ```
 
-For links carrying the classic teletype end-of-message, use
+For links that carry the classic teletype end-of-message, use
 `framing: {kind: sentinel, terminator: "\nNNNN\n"}` instead.
 
-Get the framing wrong and every symptom looks like a parser bug. Verify it
-against a capture before anything else: a correctly framed message decodes or
-produces coherent diagnostics, whereas a misframed one produces nonsense at a
-random offset.
+If the framing is wrong, every symptom looks like a parser bug. Verify the
+framing against a capture before anything else. A correctly framed message
+decodes or produces coherent diagnostics. A misframed message produces
+nonsense at a random offset.
 
-**By file drop.** Run a real SFTP server and point Jetway at the directory it
+**By file drop.** Run an SFTP server and point Jetway at the directory it
 writes into:
 
 ```yaml
@@ -63,12 +63,14 @@ writes into:
     identify: {peer: XX}
 ```
 
-Note what `identify` never offers: a way to take the peer name from the message.
-A certificate signed by your CA but not listed under `by_cert_cn` is refused,
-not treated as a default. `by_cidr` is weaker and only defensible on a private
-circuit; `identify.peer` assumes nothing else can reach the port.
+`identify` never offers a way to take the peer name from the message. The
+listener refuses a certificate that your certificate authority (CA) signed
+but that is not listed under `by_cert_cn`. It does not treat such a
+certificate as a default. `by_cidr` is weaker and is only defensible on a
+private circuit. `identify.peer` assumes that nothing else can reach the
+port.
 
-## 2. How do we reach them?
+## 2. Outbound delivery to the partner
 
 ```yaml
 peers:
@@ -83,26 +85,26 @@ peers:
       retry: {max_attempts: 12, initial: 2s, max: 10m}
 ```
 
-`tcp_accept` means they connect to us and replies go back down that session,
-which is the usual arrangement when we host the listener.
+`tcp_accept` means that the partner connects to us and replies go back down
+that session. This is the usual arrangement when we host the listener.
 
-Check it before starting anything:
+Check the configuration before you start anything:
 
 ```sh
 jetwayd -config /etc/jetway/jetway.yaml -print-config
 ```
 
-## 3. What dialect do they speak?
+## 3. Partner dialect
 
-Start with the default profile and find out. Run traffic through, then look at
-what arrives as unparsed — the console surfaces it per record, and
+Start with the default profile and observe. Run traffic through, then look at
+what arrives as unparsed. The console shows unparsed content per record, and
 `jetwayctl decode` shows it for a captured file:
 
 ```sh
 jetwayctl decode captured.tty
 ```
 
-Lines marked `?` are what the profile did not claim.
+Lines marked `?` are the lines that the profile did not claim.
 
 For teletype, add a recognizer ahead of the defaults:
 
@@ -130,14 +132,14 @@ xx.Handlers["TVL"] = func(p *pnr.PNR, seg edifact.Segment, st *padis.State,
 peer.PadisProfile = xx
 ```
 
-Ordering matters for recognizers: they are tried first to last, and the
-keyword-led elements must come before the positional ones. `Prepend` puts yours
-ahead of everything.
+Order matters for recognizers. The profile tries them first to last, and the
+keyword-led elements must come before the positional ones. `Prepend` puts
+yours ahead of everything.
 
-## 4. Can they answer, or only ask?
+## 4. Answering requests
 
-If the link only receives requests from you, leave `Responder` nil. If this node
-answers — because it is a carrier, or because you are running a simulator —
+If the link only receives requests from you, leave `Responder` nil. This node
+answers when it is a carrier, or when you run a simulator. In that case,
 implement the interface:
 
 ```go
@@ -147,8 +149,8 @@ type Responder interface {
 ```
 
 Return a status code keyed by `pnr.Segment.Key()`. Answer only segments in a
-requested state; re-answering one already at `HK` double-counts the seats.
-`gateway.Inventory` is a worked example.
+requested state. Re-answering a segment already at `HK` double-counts the
+seats. `gateway.Inventory` is a worked example.
 
 ## Testing a new link
 
@@ -161,10 +163,12 @@ curl --cacert ca.crt --cert xx.crt --key xx.key \
      https://gateway.example.com:8443/messages
 ```
 
-A 202 means the bytes are durable. A 403 means the certificate did not map to a
-peer. A 503 means the pipeline would not take it and they should retransmit.
+A 202 means that the bytes are durable. A 403 means that the certificate did
+not map to a peer. A 503 means that the pipeline would not take the message
+and the partner should retransmit.
 
-Or point a `carriersim` at your gateway and drive it from the other side:
+Alternatively, point a `carriersim` at your gateway and drive it from the
+other side:
 
 ```sh
 go run ./cmd/carriersim -carrier XX -format typeb -tty XXXRMXX \
@@ -174,27 +178,30 @@ curl -s localhost:9500/pnrs        # what the carrier believes
 curl -s localhost:9500/inventory   # what it has sold
 ```
 
-Comparing both sides is the test that matters. A booking is only correct if the
+Comparing both sides is the important test. A booking is correct only if the
 gateway and the carrier agree about it.
 
-For a regression test, the pattern in `pkg/gateway/e2e_test.go` wires two
-gateways together with direct calls — no sockets, fully deterministic — and
-asserts on both records, both message logs, and the event trail.
+For a regression test, the pattern in `pkg/gateway/e2e_test.go` wires
+2 gateways together with direct calls. It uses no sockets and is fully
+deterministic. It asserts on both records, both message logs, and the event
+trail.
 
 ## Checklist before going live
 
 - [ ] `jetwayd -print-config` shows the listener with `mtls=true`.
 - [ ] The partner's certificate common name is mapped under `by_cert_cn`, and an
       unmapped certificate is confirmed to get a 403.
-- [ ] Framing confirmed against the interface control document, not inferred.
+- [ ] Framing is confirmed against the interface control document and is not
+      inferred.
 - [ ] A captured message from the partner decodes with no `error` diagnostics.
-- [ ] Unparsed fragments reviewed; anything meaningful has a recognizer.
+- [ ] Unparsed fragments are reviewed, and anything meaningful has a
+      recognizer.
 - [ ] The dedup key is right for this link. If the partner sends a sequence
-      number, use it — the teletype fallback keys on originator, time group and
-      digest, which treats two byte-identical messages in one minute as one.
-- [ ] Character repertoire agreed. `ITA2` is conservative; confirm before
-      sending anything wider.
+      number, use it. The teletype fallback keys on originator, time group and
+      digest, which treats 2 byte-identical messages in one minute as one.
+- [ ] The character repertoire is agreed. `ITA2` is conservative. Confirm
+      before you send anything wider.
 - [ ] Test traffic is marked as test. The gateway refuses interchanges with the
       `UNB` test indicator set, which is only useful if the partner sets it.
-- [ ] Both sides agree on a booking end to end, checked against the carrier's
+- [ ] Both sides agree on a booking end to end. The check uses the carrier's
       own record and not only ours.
