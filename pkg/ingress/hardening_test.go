@@ -47,12 +47,14 @@ func helloAs(t *testing.T, addr string, f framer, peer, token string) net.Conn {
 	}
 	t.Cleanup(func() { conn.Close() })
 	hello, _ := json.Marshal(transport.Hello{Peer: peer, Role: "carrier", Token: token})
+	// A refused peer may be cut before its second frame is written; a
+	// write error here is that refusal arriving early, not a test failure.
+	// An accepted peer's message always gets through, and the test that
+	// expects it fails on the missing message instead.
 	if err := f.WriteFrame(conn, hello); err != nil {
-		t.Fatal(err)
+		return conn
 	}
-	if err := f.WriteFrame(conn, []byte("FROM "+peer)); err != nil {
-		t.Fatal(err)
-	}
+	f.WriteFrame(conn, []byte("FROM "+peer)) //nolint:errcheck
 	return conn
 }
 
