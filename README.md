@@ -446,7 +446,7 @@ contribution available.
 | `pkg/pnl` | PNL and ADL passenger name lists: what reservations tells the airport |
 | `pkg/ops` | A carrier's operations desk in a node that runs the carrier: the schedule from its SSIM file, departure control at its stations as the gateway's Ground, the aircraft's OOOI reports turned into the MVTs the network reads, the towers' and the Network Manager's messages filed; `ops:` in the configuration turns a gateway into an airline |
 | `pkg/atfm` | Air traffic flow management slot messages in ADEXP: the SAM that gives a flight its calculated take-off time, SRM, SLC, FLS, DES and the operator's replies, with the regulation cause and its IATA delay code, to EUROCONTROL's public ATFCM Users Manual |
-| `pkg/crew` | Flight crew legality: flight time and flight duty period limits by report time and segments, the two-hour extension and the ten-hour rest, from 14 CFR Part 117 as published; a duty checked as planned and again as the day runs late |
+| `pkg/crew` | Crew legality and pay: Part 117's flight time and flight duty period limits by report time and segments, the two-hour extension, the cumulative limits over 168 hours, 672 hours and 365 days, and the rest rules, checked against a crew member's history (`History`, with `Record` the exact form); flight attendant duty and rest from 14 CFR 121.467 and their minimum number from 121.391; a labour agreement's pay arithmetic: block, duty rig, trip rig and minimum day credit, pay protection, extension and day-off premiums, per diem |
 | `pkg/baggage` | BSM, BPM and BUM bag messages: tags issued, bags loaded, a bag rushed without its passenger; AHL, OHD and FWD tracing files for a bag that did not arrive, one found without its passenger, and the match that forwards it |
 | `pkg/fare` | Fares filed per market and class with rules and taxes, and the pricing that sells each segment under the cheapest fare whose rules the trip meets |
 | `pkg/inventory` | A carrier's seat inventory: capacity per cabin from the schedule, sold and waitlisted per flight, rebuilt from the book of record; answers sells and broadcasts availability; an EMSR-b revenue management controller sets the nested authorisations from a demand forecast; bid-price control over connecting itineraries, from the leg ladders or from the network linear programme whose duals price each leg |
@@ -655,7 +655,9 @@ control system (`pkg/dcs`) and an NDC order endpoint (`pkg/ndc`). It is
 **not** any of the following:
 
 - a passenger-facing booking site or an agent desktop.
-- a flight planning, crew scheduling or maintenance system.
+- a flight planning, crew pairing and rostering, or maintenance system.
+  `pkg/crew` checks whether a crew member may fly a duty and what the duty
+  pays. It does not build pairings or rosters.
 - a revenue accounting system beyond the settlement and proration files.
 - a fare filing. The fares in `pkg/fare` are a synthetic structure, not an
   ATPCO filing.

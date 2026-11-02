@@ -6,9 +6,17 @@
 // and Table B's flight duty period limits for unaugmented operations, by
 // the acclimated local time the duty starts and the number of flight
 // segments, the two-hour extension of §117.19 for unforeseen circumstances
-// before take-off, and the ten-hour rest of §117.25. Other regimes (EASA
-// ORO.FTL, CAP 371) differ in the tables, not the shape; a Rules value
-// carries the tables, and Part117 is the one shipped.
+// before take-off, the cumulative limits of §117.23, and the rest of
+// §117.25. Other regimes (EASA ORO.FTL, CAP 371) differ in the tables, not
+// the shape; a Rules value carries the tables, and Part117 is the one
+// shipped.
+//
+// A crew member's past is a History: Admits checks a duty against it, and
+// Remaining says how much a member may still fly. Record is the exact
+// History; a crew tracking store with its own layout implements the
+// interface instead. Cabin crew are 14 CFR 121.467 (CabinRules) and their
+// minimum number 14 CFR 121.391 (MinFlightAttendants). What a duty pays
+// under a labour agreement is PayRules.
 package crew
 
 import (
@@ -29,10 +37,17 @@ type Rules struct {
 	// take-off; Rest the minimum between duties.
 	Extension time.Duration
 	Rest      time.Duration
+	// Cumulative are the look-back limits (§117.23); FreeTime is the time
+	// free of all duty a member must have had in the FreeWindow before any
+	// duty (§117.25(b)). Admits checks them against a History.
+	Cumulative []Cumulative
+	FreeTime   time.Duration
+	FreeWindow time.Duration
 }
 
 // Part117 is 14 CFR Part 117 as published: Tables A and B, §117.19(a),
-// §117.25(e).
+// the cumulative limits of §117.23(b) and (c), and the rest of §117.25(b)
+// and (e).
 var Part117 = Rules{
 	Name: "14 CFR 117",
 	FDP: func(h, m int) [6]float64 {
@@ -69,8 +84,11 @@ var Part117 = Rules{
 			return 9
 		}
 	},
-	Extension: 2 * time.Hour,
-	Rest:      10 * time.Hour,
+	Extension:  2 * time.Hour,
+	Rest:       10 * time.Hour,
+	Cumulative: Part117Cumulative,
+	FreeTime:   30 * time.Hour,
+	FreeWindow: 168 * time.Hour,
 }
 
 // FDPLimit is the maximum flight duty period for a duty reporting at the
@@ -122,6 +140,9 @@ type Verdict struct {
 	Extended        bool
 	Flight, FTLimit time.Duration
 	Reason          string
+	// Totals are the cumulative limits with the duty added, when the
+	// verdict came from Admits.
+	Totals []Total
 }
 
 // Check says whether the duty, with its legs at their current times, may be

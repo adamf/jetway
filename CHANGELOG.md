@@ -5,6 +5,34 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.96 — A crew member's history, cabin crew, and what a duty pays
+- `crew.History` is a crew member's past as a tracking store holds it:
+  block time and flight duty time inside a window, the last duty, and
+  the longest time free of duty. `crew.Record` is the exact form, every
+  period kept; a store with its own layout implements the interface.
+- `Duty.Admits(h)` checks a duty against a history: the duty's own
+  Table A and B limits, ten hours of rest before report (§117.25(e)),
+  thirty hours free in the 168 before it (§117.25(b)), and the four
+  cumulative limits of §117.23 with the duty added: 100 hours of flight
+  time in any 672, 1,000 in 365 calendar days, 60 FDP hours in any 168,
+  190 in any 672. Each limit is evaluated where it is highest, which for
+  block time can be a middle leg's arrival. `Rules.Remaining` is the
+  headroom a member has left. A reserve period is duty for rest and not
+  FDP. The text is the eCFR's of 15 October 2026.
+- `crew.Part121Cabin` is 14 CFR 121.467(b) for flight attendants: 14
+  hours of scheduled duty with the minimum complement, 16, 18 or 20 with
+  more; 10 hours of rest, 12 after a duty over 14; 24 hours free in any 7
+  calendar days. It limits the duty as scheduled, because (b)(14) does.
+  `crew.MinFlightAttendants` is §121.391(a).
+- `crew.PayRules` prices a duty under a labour agreement: credit is the
+  greatest of block, duty rig, trip rig and the minimum day; pay
+  protection credits the schedule when the day flew less or was
+  cancelled; credit beyond the schedule's and a duty on a day off are
+  paid at the agreement's premiums; per diem by the hour away from base;
+  deadhead legs at a share of their block. The shape is section 11.D of
+  APFA's public On-Duty Contract Guide (2016), and a test uses its
+  numbers. The numbers in use are the caller's.
+
 ## v0.1.95 — A flight's classes without a walk of the book
 - `inventory.SoldByClass` walked every sold-class key the inventory held
   and matched a prefix, so a carrier with a filled book paid a scan of
