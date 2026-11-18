@@ -76,6 +76,13 @@ type BookingRequest struct {
 	// refused, and one older than the node's QuoteValidity is priced as
 	// of now.
 	PricedAt time.Time `json:"priced_at,omitempty"`
+	// Quote is the fare as the seller's own engine priced it, for a node
+	// that accepts quotes (Gateway.AcceptQuotes): the record carries it
+	// as priced and the node does not price again. It is how a booking
+	// made from a shopping engine's answer, or from an airline's offer,
+	// keeps the price the traveller was shown. The quote must cover the
+	// booking's air segments in order, in the classes booked.
+	Quote *fare.Quote `json:"quote,omitempty"`
 }
 
 // nameOutsideWire reports the first character of s that cannot survive both
@@ -243,7 +250,11 @@ func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, e
 	if err != nil {
 		return nil, err
 	}
-	if err := g.price(rec, priced); err != nil {
+	if req.Quote != nil && g.AcceptQuotes {
+		if err := storeQuote(rec, req.Quote, now); err != nil {
+			return nil, err
+		}
+	} else if err := g.price(rec, priced); err != nil {
 		return nil, err
 	}
 	rec.Recompute()
@@ -519,6 +530,38 @@ func (g *Gateway) price(rec *pnr.PNR, now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("gateway: pricing: %w", err)
 	}
+	return putQuote(rec, air, q, now)
+}
+
+// storeQuote puts a quote the seller priced on the record, after holding
+// it against the record: a passenger's price for each passenger, a
+// segment's fare for each air segment, in the class booked.
+func storeQuote(rec *pnr.PNR, q *fare.Quote, now time.Time) error {
+	var air []int
+	for i, s := range rec.Segments {
+		if s.Type == pnr.SegmentAir {
+			air = append(air, i)
+		}
+	}
+	if len(q.Passengers) != len(rec.Passengers) {
+		return fmt.Errorf("gateway: the quote prices %d passengers and the booking has %d", len(q.Passengers), len(rec.Passengers))
+	}
+	for _, pq := range q.Passengers {
+		if len(pq.Segments) != len(air) {
+			return fmt.Errorf("gateway: the quote prices %d segments and the booking has %d", len(pq.Segments), len(air))
+		}
+		for k, i := range air {
+			if c := pq.Segments[k].Class; c != "" && !strings.EqualFold(c, rec.Segments[i].Class) {
+				return fmt.Errorf("gateway: the quote prices segment %d in %s and it is booked in %s", k+1, c, rec.Segments[i].Class)
+			}
+		}
+	}
+	return putQuote(rec, air, q, now)
+}
+
+// putQuote writes a quote onto a record: the money, the fare calculation,
+// the components, and the fare basis on each air segment.
+func putQuote(rec *pnr.PNR, air []int, q *fare.Quote, now time.Time) error {
 	pr := &pnr.Pricing{Currency: q.Currency, Base: q.Base.Amount, Taxes: q.Taxes.Amount, Total: q.Total.Amount, PricedAt: now,
 		CarrierFees: q.CarrierFees.Amount, Calc: q.Calc}
 	for _, c := range q.Components {

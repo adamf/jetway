@@ -129,3 +129,52 @@ func TestBookingIsPricedForItsPointOfSale(t *testing.T) {
 		t.Error("a quote dated in the future was accepted")
 	}
 }
+
+// A node that accepts quotes books at the price its seller's engine gave
+// and does not price again; a node that does not ignores the quote; and a
+// quote that does not fit the booking is refused.
+func TestBookingCarriesTheSellersQuote(t *testing.T) {
+	ctx := context.Background()
+	gds, _ := wire(t, "BA", store.FormatTypeB)
+	gds.gw.Tariff = tariff()
+	dep := dayAhead(40)
+	// The seller priced K while K could be sold: the node, asked now with
+	// the flight five days off, would refuse it.
+	q, err := fare.Price(tariff(), fare.Request{
+		Segments:   []fare.Segment{{Carrier: "BA", Origin: "LHR", Destination: "JFK", Class: "K", Depart: dep}},
+		Passengers: []fare.PaxType{fare.Adult},
+		Purchased:  dep.AddDate(0, 0, -30),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := func() *BookingRequest {
+		return &BookingRequest{
+			Passengers: []BookingPassenger{{Surname: "QUOTED", Given: "ANN", Title: "MS"}},
+			Segments:   []BookingSegment{{Carrier: "BA", FlightNum: "0175", Class: "K", Date: pnr.FormatDate(dayAhead(5)), Board: "LHR", Off: "JFK", Seats: 1}},
+			Agent:      "test", Channel: "test", Quote: q,
+		}
+	}
+	if _, err := gds.gw.Book(ctx, req()); err == nil {
+		t.Fatal("a node that does not accept quotes sold K five days out on a quote")
+	}
+	gds.gw.AcceptQuotes = true
+	res, err := gds.gw.Book(ctx, req())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := res.PNR; rec.Pricing == nil || rec.Pricing.Total != q.Total.Amount || rec.Segments[0].FareBasis != "KLX21" || rec.Pricing.Calc != q.Calc {
+		t.Errorf("the record does not carry the quote: %+v", res.PNR.Pricing)
+	}
+	wrong := req()
+	wrong.Segments[0].Class = "Y"
+	if _, err := gds.gw.Book(ctx, wrong); err == nil {
+		t.Error("a quote in K was stored on a booking in Y")
+	}
+	two := req()
+	two.Passengers = append(two.Passengers, BookingPassenger{Surname: "QUOTED", Given: "TOM", Title: "MR"})
+	two.Segments[0].Seats = 2
+	if _, err := gds.gw.Book(ctx, two); err == nil {
+		t.Error("a quote for one passenger was stored on a booking for two")
+	}
+}

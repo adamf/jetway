@@ -5,6 +5,18 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.98 — A booking that carries its seller's quote
+- `gateway.BookingRequest.Quote` is the fare as the seller's own engine
+  priced it. A node with `Gateway.AcceptQuotes` set stores it on the
+  record and does not price again, after it checks that the quote covers
+  the booking's passengers and air segments in the classes booked. This
+  is how a booking made from a shopping engine's answer keeps the price
+  the traveller was shown. A node that does not accept quotes ignores
+  the field and prices the booking itself, as before.
+- An ingress test no longer dials a probe connection at a listener whose
+  `max_connections` is 2. The probe held one of the 2 places, and the
+  test failed about once in 150 runs under the race detector.
+
 ## v0.1.97 — Fare components and priceable units, the point of sale, minimum connecting times
 - `pkg/fare` prices an itinerary the way a fare engine does. A fare pays
   for one or more consecutive flights (a fare component). Components

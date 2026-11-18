@@ -174,6 +174,12 @@ type Gateway struct {
 	// suits a seller that guarantees its quotes to ticketing; a node that
 	// faces the public should set a day or less.
 	QuoteValidity time.Duration
+	// AcceptQuotes lets a booking carry the fare its seller priced
+	// (BookingRequest.Quote) in place of this node's own pricing. A node
+	// that sells for a shopping engine it trusts turns it on; a node that
+	// faces callers it does not trust leaves it off and prices
+	// everything itself.
+	AcceptQuotes bool
 	// Miles, when set, is the ticketed mileage between two points. Pricing
 	// uses it to divide a through fare between the flights it covers, to
 	// hold a routing to its mileage, and to measure an open jaw.
