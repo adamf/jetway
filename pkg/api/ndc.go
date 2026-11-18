@@ -138,9 +138,12 @@ func bookingFromOrder(m *ndc.OrderCreateRQ) (*gateway.BookingRequest, error) {
 	if err != nil {
 		return nil, err
 	}
+	// An order is a sale in the NDC channel: the record says so, and a
+	// fare filed for that channel can be priced for it.
 	req := &gateway.BookingRequest{
 		ReceivedFrom: m.Party.AgencyName,
 		Agent:        m.Party.ID(),
+		Channel:      "ndc",
 	}
 	for _, p := range rec.Passengers {
 		req.Passengers = append(req.Passengers, gateway.BookingPassenger{

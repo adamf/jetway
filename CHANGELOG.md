@@ -5,6 +5,13 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.99 — An NDC order is a sale in the NDC channel
+- An order created over `POST /ndc` now carries the channel `ndc` on its
+  booking request, so the record's origin names it and a fare filed for
+  NDC sellers can be priced for the order. Before, the channel was
+  empty, and a fare restricted to that channel could not be sold through
+  it.
+
 ## v0.1.98 — A booking that carries its seller's quote
 - `gateway.BookingRequest.Quote` is the fare as the seller's own engine
   priced it. A node with `Gateway.AcceptQuotes` set stores it on the
