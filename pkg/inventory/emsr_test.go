@@ -301,3 +301,49 @@ func TestControllerBidPricesOverrideTheLadders(t *testing.T) {
 		t.Errorf("legs worth 25000 each: 45000 should be refused, got %v", out)
 	}
 }
+
+// A class that has sold past its limit stays closed. The controller sets
+// the limits again at every question, so a forecast that strengthens
+// lowers a discount class's limit under what the class has already sold.
+// The seats it may still sell are then none. They were once counted as
+// less than none, which the callers read as "no ladder", and the class
+// reopened to the whole cabin at the moment revenue management most
+// wanted it shut.
+func TestAClassSoldPastItsLimitStaysClosed(t *testing.T) {
+	inv := New("WN", b737())
+	strong := false
+	ctl := &Controller{Capacity: b737(), Forecast: func(carrier, flight, date, board, comp string, seats int) []ClassDemand {
+		if comp != "Y" {
+			return nil
+		}
+		yMean := 20.0
+		if strong {
+			yMean = 120
+		}
+		return []ClassDemand{{Class: "Y", Fare: 300, Mean: yMean, StdDev: 10}, {Class: "K", Fare: 90, Mean: 200, StdDev: 20}}
+	}}
+	inv.Levels = ctl.Levels
+	// A weak full-fare forecast leaves K wide open: sixty sell.
+	for i := 0; i < 60; i++ {
+		if got := decide(t, inv, seg("2554", "K", "HN", 1)); got != "KK" {
+			t.Fatalf("K seat %d under a weak forecast: %s", i+1, got)
+		}
+	}
+	// The forecast strengthens: K's limit is now 49, and it has sold 60.
+	strong = true
+	if lv := inv.Levels("WN", "2554", "26NOV", "BNA", "Y"); len(lv) != 2 || lv[1].Class != "K" || lv[1].Authorized != 49 {
+		t.Fatalf("levels under the strong forecast: %+v", lv)
+	}
+	if got := decide(t, inv, seg("2554", "K", "HN", 1)); got != "UC" {
+		t.Errorf("K, sold past its limit, answered %s", got)
+	}
+	key := avail.NewKey("WN", "2554", time.Date(2026, 11, 26, 0, 0, 0, 0, time.UTC), "BNA", "DCA", "K")
+	es := inv.Availability([]avail.Key{key}, time.Now().UTC())
+	if len(es) != 1 || es[0].Status != avail.Closed {
+		t.Errorf("K, sold past its limit, is advertised as %+v", es)
+	}
+	// Full fare still sells: the seats exist.
+	if got := decide(t, inv, seg("2554", "Y", "HN", 1)); got != "KK" {
+		t.Errorf("Y: %s", got)
+	}
+}

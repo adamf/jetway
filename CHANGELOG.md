@@ -5,6 +5,17 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.101 — A class sold past its limit stays closed
+- `pkg/inventory` counted the seats a class may still sell as its
+  authorisation less what was sold in it and below it. The controller
+  sets the authorisations again at every question. When a forecast
+  strengthened, a class's authorisation fell under what the class had
+  sold, the count went negative, and the callers read a negative count
+  as "no ladder". The class then sold to the last seat of the cabin and
+  was advertised as open. The count now stops at zero. wholesky found
+  it: a carrier's lowest class had closed, a sale in the class above
+  moved the limit down by 2, and the next request was confirmed.
+
 ## v0.1.100 — A carrier's node sells its own seats
 - A node with a carrier's identity and a `Responder` could answer other
   systems' requests and could not sell for itself. A booking of its own

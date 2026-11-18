@@ -170,9 +170,15 @@ func (inv *Inventory) ladderFor(carrier, flight, date, board, class string) []Le
 
 // classOpen reports how many seats the class may still sell under the
 // ladder: its authorisation less what is sold in it and every class below
-// it. Without a ladder, or for a class not on it, the cabin's own count
-// decides and this returns -1. The ladder comes from ladderFor, asked
-// before the lock.
+// it, and never less than none. Without a ladder, or for a class not on
+// it, the cabin's own count decides and this returns -1. The ladder comes
+// from ladderFor, asked before the lock.
+//
+// The floor matters. The ladder is set again at every question, and a
+// forecast that strengthens puts a class's authorisation under what the
+// class has already sold. A negative answer here read as "no ladder" to
+// the callers, and a class sold past its limit sold on to the last seat
+// of the cabin.
 func (inv *Inventory) classOpen(ladder []Level, carrier, flight, date, board, comp, class string) int {
 	if len(ladder) == 0 {
 		return -1
@@ -191,7 +197,7 @@ func (inv *Inventory) classOpen(ladder []Level, carrier, flight, date, board, co
 	for _, l := range ladder[at:] {
 		below += inv.soldClass[key+"/"+strings.ToUpper(l.Class)]
 	}
-	return ladder[at].Authorized - below
+	return max(0, ladder[at].Authorized-below)
 }
 
 // Decide implements gateway.Responder: a status per segment awaiting one.
