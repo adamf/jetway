@@ -163,3 +163,51 @@ func TestADistributionNodeOwnsNothing(t *testing.T) {
 		t.Error("a carrier's node owns its own carrier's seats and nobody else's")
 	}
 }
+
+// The record a booking publishes is not written to afterwards. A
+// listener on the bus reads each record it is handed, and the own-sale
+// step once changed the very record the booking had just published.
+// Run under the race detector, a listener that reads while own sales are
+// made finds any such write.
+func TestAnOwnSaleDoesNotWriteToAPublishedRecord(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, air := wire(t, "BA", store.FormatTypeB)
+	air.gw.Responder.(*Inventory).SetCapacity(200)
+	events, stop := air.gw.Bus.Subscribe()
+	defer stop()
+	read := make(chan int)
+	go func() {
+		n := 0
+		for {
+			select {
+			case <-ctx.Done():
+				read <- n
+				return
+			case ev := <-events:
+				if ev.Type != EvPNR {
+					continue
+				}
+				if p, ok := ev.Data.(map[string]any); ok {
+					if rec, ok := p["record"].(*pnr.PNR); ok {
+						for _, s := range rec.Segments {
+							n += len(s.Status)
+						}
+						n += int(rec.Version) + len(rec.Status)
+					}
+				}
+			}
+		}
+	}()
+	for i := 0; i < 60; i++ {
+		res, err := air.gw.Book(ctx, ownBooking("BA", "0175", "Y", 1))
+		if err != nil || res.PNR.Segments[0].Status != "HK" {
+			t.Fatalf("own sale %d: %v", i, err)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	if <-read == 0 {
+		t.Error("the listener read no record")
+	}
+}

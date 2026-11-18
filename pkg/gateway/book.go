@@ -290,8 +290,10 @@ func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, e
 
 	// The node's own carrier's seats are its own to sell: decided here,
 	// with nothing sent.
-	if _, err := g.sellOwn(ctx, rec, req.Agent, nil); err != nil {
+	if sold, err := g.sellOwn(ctx, rec.RecordLocator, req.Agent, nil); err != nil {
 		g.Log.Warn("could not decide an own sale", "locator", rec.RecordLocator, "err", err)
+	} else if sold != nil {
+		rec = sold
 	}
 
 	res := &BookResult{PNR: rec, Carriers: rec.Carriers()}

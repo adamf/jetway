@@ -91,8 +91,11 @@ func (g *Gateway) AddSegment(ctx context.Context, locator string, s BookingSegme
 
 		if g.Own(seg.Carrier) {
 			// The node's own seat: decided here, with nothing sent.
-			if _, err := g.sellOwn(ctx, rec, by, func(x pnr.Segment) bool { return x.Ref == newRef }); err != nil {
+			sold, err := g.sellOwn(ctx, locator, by, func(x pnr.Segment) bool { return x.Ref == newRef })
+			if err != nil {
 				g.Log.Warn("could not decide the added own segment", "locator", locator, "err", err)
+			} else if sold != nil {
+				rec = sold
 			}
 			return rec, nil
 		}

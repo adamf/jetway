@@ -29,10 +29,19 @@ func (g *Gateway) Own(carrier string) bool {
 	return g.Responder != nil && carrier != "" && strings.EqualFold(carrier, g.Identity.Designator)
 }
 
-// sellOwn decides the record's segments on this node's own carrier that
-// await an answer, and writes the answers. only, when set, limits it to
-// the segments it admits. It reports whether the record had any.
-func (g *Gateway) sellOwn(ctx context.Context, rec *pnr.PNR, actor string, only func(pnr.Segment) bool) (bool, error) {
+// sellOwn decides the segments of a stored record that are on this
+// node's own carrier and await an answer, and writes the answers. only,
+// when set, limits it to the segments it admits. It returns the record as
+// it now stands, or nil when it had no such segment.
+//
+// It works on its own copy, read from the store. The record a caller
+// holds has been published on the bus by then, and whoever listens there
+// reads it while this would be writing.
+func (g *Gateway) sellOwn(ctx context.Context, locator, actor string, only func(pnr.Segment) bool) (*pnr.PNR, error) {
+	rec, err := g.Store.GetPNR(ctx, locator)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: read record for own sale: %w", err)
+	}
 	waiting := false
 	for _, s := range rec.Segments {
 		if s.Type == pnr.SegmentAir && g.Own(s.Carrier) && s.Status == "HN" && (only == nil || only(s)) {
@@ -40,7 +49,7 @@ func (g *Gateway) sellOwn(ctx context.Context, rec *pnr.PNR, actor string, only 
 		}
 	}
 	if !waiting {
-		return false, nil
+		return nil, nil
 	}
 	// The Responder sees the record as it would see a partner's request,
 	// narrowed to the segments asked, with no link.
@@ -55,7 +64,7 @@ func (g *Gateway) sellOwn(ctx context.Context, rec *pnr.PNR, actor string, only 
 	}
 	outcomes, err := g.Responder.Decide(ctx, &view, nil)
 	if err != nil {
-		return true, fmt.Errorf("gateway: decide own sale: %w", err)
+		return nil, fmt.Errorf("gateway: decide own sale: %w", err)
 	}
 	now := g.now()
 	var events []store.Event
@@ -76,16 +85,16 @@ func (g *Gateway) sellOwn(ctx context.Context, rec *pnr.PNR, actor string, only 
 		events = append(events, store.Event{Type: "decided", Detail: s.Describe() + " -> " + code + " (own sale)", Actor: actor, At: now})
 	}
 	if len(events) == 0 {
-		return true, nil
+		return nil, nil
 	}
 	expected := rec.Version
 	rec.Recompute()
 	rec.UpdatedAt = now
 	if err := g.Store.UpdatePNR(ctx, rec, expected, events); err != nil {
-		return true, fmt.Errorf("gateway: record own sale: %w", err)
+		return nil, fmt.Errorf("gateway: record own sale: %w", err)
 	}
 	g.Bus.Publish(EvPNR, g.pnrView(rec))
-	return true, nil
+	return rec, nil
 }
 
 // releaseOwn gives back the seats of this node's own carrier that a

@@ -5,6 +5,14 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.102 — An own sale does not write to a published record
+- v0.1.100 decided a carrier's own segments on the record that `Book`
+  had just published on the bus. A subscriber that read the record at
+  that moment raced with the write. The own-sale step now reads its own
+  copy from the store, decides on that, and publishes it. `Book` and
+  `AddSegment` return the decided copy. A test with a bus listener fails
+  under the race detector on the old code.
+
 ## v0.1.101 — A class sold past its limit stays closed
 - `pkg/inventory` counted the seats a class may still sell as its
   authorisation less what was sold in it and below it. The controller
