@@ -62,6 +62,20 @@ type BookingRequest struct {
 	// a partner message. It is carried onto the record and onto the span,
 	// because "how much comes through NDC" is a question somebody asks.
 	Channel string `json:"channel,omitempty"`
+	// Country is the point of sale's country and Account the corporate or
+	// agency contract the booking is made under. With Agent and Channel
+	// they are the point of sale the fares are priced for: a fare filed
+	// for one country, one channel, one agency or one account sells only
+	// there.
+	Country string `json:"country,omitempty"`
+	Account string `json:"account,omitempty"`
+	// PricedAt is when the fare was quoted, when that was before the
+	// sell: a seller shops, quotes, and books afterwards, and the quote
+	// is what the traveller agreed to. The rules that count from the
+	// purchase count from it. Zero is now. A moment in the future is
+	// refused, and one older than the node's QuoteValidity is priced as
+	// of now.
+	PricedAt time.Time `json:"priced_at,omitempty"`
 }
 
 // nameOutsideWire reports the first character of s that cannot survive both
@@ -166,6 +180,7 @@ func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, e
 		ReceivedFrom: req.ReceivedFrom,
 		Origin: pnr.Origin{
 			Party: g.Identity.Designator, Agent: req.Agent, Channel: "api",
+			Country: upper(req.Country), Account: upper(req.Account),
 		},
 	}
 	rec.Origin.Channel = channel
@@ -224,7 +239,11 @@ func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, e
 	if req.Contact != "" {
 		rec.Contacts = append(rec.Contacts, pnr.Contact{Type: "phone", Text: req.Contact})
 	}
-	if err := g.price(rec, now); err != nil {
+	priced, err := g.quoteTime(req, now)
+	if err != nil {
+		return nil, err
+	}
+	if err := g.price(rec, priced); err != nil {
 		return nil, err
 	}
 	rec.Recompute()
@@ -459,13 +478,28 @@ func (g *Gateway) price(rec *pnr.PNR, now time.Time) error {
 	if g.Tariff == nil {
 		return nil
 	}
-	req := fare.Request{Purchased: now}
+	req := fare.Request{Purchased: now, Sale: fare.Sale{Country: rec.Origin.Country, Channel: rec.Origin.Channel, Agency: rec.Origin.Agent, Account: rec.Origin.Account}}
+	if g.Miles != nil {
+		req.Distance = g.Miles
+	}
 	var air []int
 	for i, s := range rec.Segments {
 		if s.Type != pnr.SegmentAir {
 			continue
 		}
-		req.Segments = append(req.Segments, fare.Segment{Carrier: s.Carrier, Origin: s.Board, Destination: s.Off, Class: s.Class, Depart: s.Depart})
+		fs := fare.Segment{Carrier: s.Carrier, Origin: s.Board, Destination: s.Off, Class: s.Class, FlightNum: s.FlightNum,
+			Depart: clockOn(s.Depart, s.DepartTime)}
+		if s.ArriveTime != "" && s.DepartTime != "" {
+			fs.Arrive = clockOn(s.Depart, s.ArriveTime)
+			if fs.Arrive.Before(fs.Depart) {
+				// Lands after midnight: the arrival is the next day's.
+				fs.Arrive = fs.Arrive.AddDate(0, 0, 1)
+			}
+		}
+		if g.Miles != nil {
+			fs.Miles = g.Miles(s.Board, s.Off)
+		}
+		req.Segments = append(req.Segments, fs)
 		air = append(air, i)
 	}
 	if len(req.Segments) == 0 {
@@ -485,7 +519,15 @@ func (g *Gateway) price(rec *pnr.PNR, now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("gateway: pricing: %w", err)
 	}
-	pr := &pnr.Pricing{Currency: q.Currency, Base: q.Base.Amount, Taxes: q.Taxes.Amount, Total: q.Total.Amount, PricedAt: now}
+	pr := &pnr.Pricing{Currency: q.Currency, Base: q.Base.Amount, Taxes: q.Taxes.Amount, Total: q.Total.Amount, PricedAt: now,
+		CarrierFees: q.CarrierFees.Amount, Calc: q.Calc}
+	for _, c := range q.Components {
+		fc := pnr.FareComponent{Carrier: c.Fare.Carrier, Basis: c.Fare.Basis, From: c.From, To: c.To, Amount: c.Amount.Amount, Unit: c.Unit}
+		if c.Unit < len(q.Units) {
+			fc.Kind = string(q.Units[c.Unit].Kind)
+		}
+		pr.Components = append(pr.Components, fc)
+	}
 	for i, pq := range q.Passengers {
 		pp := pnr.PassengerPricing{Ref: i + 1, Type: string(pq.Type), Base: pq.Base.Amount, Total: pq.Total.Amount}
 		for _, tl := range pq.Taxes {
@@ -504,6 +546,44 @@ func (g *Gateway) price(rec *pnr.PNR, now time.Time) error {
 	}
 	rec.Pricing = pr
 	return nil
+}
+
+// clockOn is a date with a wire time of day (HHMM) on it; the date alone
+// when the time is missing or malformed.
+func clockOn(date time.Time, hhmm string) time.Time {
+	if len(hhmm) != 4 {
+		return date
+	}
+	h, m := 0, 0
+	for i, c := range hhmm {
+		if c < '0' || c > '9' {
+			return date
+		}
+		if i < 2 {
+			h = h*10 + int(c-'0')
+		} else {
+			m = m*10 + int(c-'0')
+		}
+	}
+	if h > 23 || m > 59 {
+		return date
+	}
+	return time.Date(date.Year(), date.Month(), date.Day(), h, m, 0, 0, date.Location())
+}
+
+// quoteTime is the moment a booking's fare is priced as of: the quote the
+// seller gave, when the request carries one that is still good, else now.
+func (g *Gateway) quoteTime(req *BookingRequest, now time.Time) (time.Time, error) {
+	if req.PricedAt.IsZero() {
+		return now, nil
+	}
+	if req.PricedAt.After(now.Add(time.Minute)) {
+		return now, fmt.Errorf("the fare quote is dated in the future")
+	}
+	if g.QuoteValidity > 0 && now.Sub(req.PricedAt) > g.QuoteValidity {
+		return now, nil
+	}
+	return req.PricedAt, nil
 }
 
 // couponValue is what a passenger's coupon on a segment is worth, from the

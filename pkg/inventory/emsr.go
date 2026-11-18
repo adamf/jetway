@@ -3,6 +3,9 @@ package inventory
 import (
 	"math"
 	"sort"
+
+	"github.com/adamf/jetway/pkg/gateway"
+	"github.com/adamf/jetway/pkg/pnr"
 )
 
 // ClassDemand is one booking class's forecast for a cabin: the fare it
@@ -103,6 +106,20 @@ type Controller struct {
 	// the additive ladder heuristic is the fallback whenever it answers
 	// false. It is consulted before the inventory lock is taken.
 	BidPrice func(carrier, flightNum, wireDate, board, compartment string) (float64, bool)
+	// Value, when set, is what the carrier expects a request to bring it
+	// for the segments asked, across the party: the fare for that origin,
+	// destination and class at the seller's point of sale, less what the
+	// channel that asked costs -- a distribution system's booking fee, a
+	// commission. A carrier's inventory is asked over links that carry no
+	// price, so the value is the carrier's own estimate from its own
+	// filing; the record's pricing is used when Value is unset or answers
+	// false. A request for one leg is then nested by its value: one worth
+	// less than its class's fare is sold only while the class its value
+	// does cover is open, which is how a seat stays on sale in the
+	// carrier's own channel after it has closed in a dearer one. It is
+	// called before the inventory lock is taken. The peer is the link the
+	// request arrived on, nil for the carrier's own sales.
+	Value func(p *pnr.PNR, asked []*pnr.Segment, peer *gateway.Peer) (float64, bool)
 }
 
 // Levels is the ladder for a cabin now, or nil when the flight or the

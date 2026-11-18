@@ -167,6 +167,17 @@ type Gateway struct {
 	// and later on the ticket coupons, and a class with no fare that may be
 	// sold for the trip refuses the booking with the rule named.
 	Tariff fare.Tariff
+	// QuoteValidity is how long a fare quote stands: a booking that says
+	// when its fare was quoted (BookingRequest.PricedAt) is priced as of
+	// that moment while the quote is younger than this, and as of now when
+	// it is older. Zero honours any quote not dated in the future, which
+	// suits a seller that guarantees its quotes to ticketing; a node that
+	// faces the public should set a day or less.
+	QuoteValidity time.Duration
+	// Miles, when set, is the ticketed mileage between two points. Pricing
+	// uses it to divide a through fare between the flights it covers, to
+	// hold a routing to its mileage, and to measure an open jaw.
+	Miles func(a, b string) int
 
 	// Responder decides how to answer an inbound request. Nil means this node
 	// does not answer requests, which is the right behaviour for a distribution

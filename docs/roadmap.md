@@ -58,6 +58,8 @@ the same guess twice.
 | **IATA RP 1715 (PSM), RP 1718 (PTM), AHM 583 (LDM), AHM 587 (CPM)** | These are built from the practices' own worked examples as airports and handlers reproduce them, and tested against those verbatim. They are close, and still a profile. The element directory behind the examples was not read. |
 | **IATA AHM 560** | The index arithmetic is the published method. The aircraft data in `dcs.DefaultFleet` is representative type-class data and not an operator's data. A deployment supplies its own. |
 | **ARINC 618/620** | `pkg/acars` reads the OOOI reports a provider forwards, from OAG's verbatim examples. The air-ground leg (618) and the company formats (A80 and similar) are not modelled. |
+| **ATPCO fare and rule records** | `pkg/fare` holds the rule categories by their public numbers and meanings and prices with them. The record layouts (Record 1, 2, 3, the category data tables, routings, footnotes) are licensed and are not reproduced, so a real filing cannot be loaded without a converter that the licensee writes. The mileage system and the IATA construction checks (HIP, BHC, CTM) are not implemented, and for that reason an international multi-stop journey is priced without them. |
+| **IATA Prorate Manual** | `pkg/prorate` divides a fare component by sector mileage. The manual's prorate factors, base amounts and filed provisos are sold and are not reproduced. `Divide` takes the terms of a bilateral agreement from the caller. |
 | **ATPCO Optional Services** | Reason-for-issuance sub-codes are carried as free text rather than validated. The 7 top-level groups are public and are enforced. |
 
 This has 2 consequences.

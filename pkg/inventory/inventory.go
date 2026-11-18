@@ -219,14 +219,35 @@ func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer
 			}
 		}
 	}
+	// What the request is worth to the carrier, by its own estimate when it
+	// has one, else by the record's price.
+	var worth float64
+	valued, own := false, false
+	if inv.Network != nil && len(asked) > 0 {
+		if inv.Network.Value != nil {
+			worth, valued = inv.Network.Value(p, asked, peer)
+			own = valued
+		}
+		if !valued {
+			worth, valued = itineraryFare(p, asked)
+		}
+	}
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
 	out := map[string]string{}
+	// A single leg valued by the carrier is nested by its value: the class
+	// asked for, or a lower one when the value does not cover that class's
+	// fare.
+	nestAs := map[string]string{}
+	if own && len(asked) == 1 {
+		s := asked[0]
+		nestAs[s.Key()] = netClass(ladders[s.Key()], fares[s.Key()], s.Class, worth/float64(max(s.Seats, 1)))
+	}
 	// Bid-price control for a connecting itinerary: the record's fare for
 	// this carrier's legs must cover what the legs' last seats are worth.
 	displaced := false
 	if inv.Network != nil && len(asked) >= 2 {
-		if fare, ok := itineraryFare(p, asked); ok {
+		if fare, ok := worth, valued; ok {
 			var bid float64
 			for _, s := range asked {
 				key, comp, _, ok := inv.cabin(s.Carrier, s.FlightNum, s.WireDate, s.Board, s.Class)
@@ -275,7 +296,11 @@ func (inv *Inventory) Decide(ctx context.Context, p *pnr.PNR, peer *gateway.Peer
 		// closed class is unable, not waitlisted, because the seats exist
 		// and are being held for a higher fare.
 		if inv.sold[key]+s.Seats <= seats {
-			if open := inv.classOpen(ladders[s.Key()], s.Carrier, s.FlightNum, s.WireDate, s.Board, comp, s.Class); open >= 0 && s.Seats > open {
+			class := s.Class
+			if as, ok := nestAs[s.Key()]; ok {
+				class = as
+			}
+			if open := inv.classOpen(ladders[s.Key()], s.Carrier, s.FlightNum, s.WireDate, s.Board, comp, class); open >= 0 && s.Seats > open {
 				out[s.Key()] = "UC"
 				continue
 			}

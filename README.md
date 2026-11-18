@@ -126,7 +126,10 @@ The fare sits between the itinerary and the documents. It shows the price of
 the record at the time of booking. It gives base and taxes in the filing's
 currency, and each passenger's fare basis and amount. The caller supplies the
 tariff. `pkg/fare` is the structure of a filing and carries no fare of its own.
-The fare basis is on every segment, because a ticket needs it there.
+The fare basis is on every segment, because a ticket needs it there. The
+record also keeps the fare calculation line and the fare components, and it is
+priced for its point of sale: the country, channel, agency and account that
+booked it.
 
 Below the itinerary is everything issued against it. There are 2 flight
 tickets, with a coupon per segment. An **EMD-A** for excess baggage is
@@ -448,10 +451,11 @@ contribution available.
 | `pkg/atfm` | Air traffic flow management slot messages in ADEXP: the SAM that gives a flight its calculated take-off time, SRM, SLC, FLS, DES and the operator's replies, with the regulation cause and its IATA delay code, to EUROCONTROL's public ATFCM Users Manual |
 | `pkg/crew` | Crew legality and pay: Part 117's flight time and flight duty period limits by report time and segments, the two-hour extension, the cumulative limits over 168 hours, 672 hours and 365 days, and the rest rules, checked against a crew member's history (`History`, with `Record` the exact form); flight attendant duty and rest from 14 CFR 121.467 and their minimum number from 121.391; a labour agreement's pay arithmetic: block, duty rig, trip rig and minimum day credit, pay protection, extension and day-off premiums, per diem |
 | `pkg/baggage` | BSM, BPM and BUM bag messages: tags issued, bags loaded, a bag rushed without its passenger; AHL, OHD and FWD tracing files for a bag that did not arrive, one found without its passenger, and the match that forwards it |
-| `pkg/fare` | Fares filed per market and class with rules and taxes, and the pricing that sells each segment under the cheapest fare whose rules the trip meets |
-| `pkg/inventory` | A carrier's seat inventory: capacity per cabin from the schedule, sold and waitlisted per flight, rebuilt from the book of record; answers sells and broadcasts availability; an EMSR-b revenue management controller sets the nested authorisations from a demand forecast; bid-price control over connecting itineraries, from the leg ladders or from the network linear programme whose duals price each leg |
+| `pkg/fare` | Fares filed per market and class with rules, routings and taxes. The pricing divides an itinerary into fare components and priceable units (one way, round trip, open jaw, circle trip) and returns the cheapest division whose fares pass their rules: advance purchase, stay and Saturday night, day and time, season, blackouts, combinations, surcharges, and who may sell the fare. It also runs as a lowest-fare search over the classes that can be sold, and prints the fare calculation line |
+| `pkg/mct` | Minimum connecting times to IATA's SSIM chapter 8: the 200-byte transmission file, station standards, exceptions and suppressions, the hierarchy that picks the record for a connection, the codeshare rules and the connection-building filter |
+| `pkg/inventory` | A carrier's seat inventory: capacity per cabin from the schedule, sold and waitlisted per flight, rebuilt from the book of record; answers sells and broadcasts availability; an EMSR-b revenue management controller sets the nested authorisations from a demand forecast; bid-price control over connecting itineraries, from the leg ladders or from the network linear programme whose duals price each leg; a request valued net of its channel's cost and nested in the class that value covers |
 | `pkg/bsp` | Settlement: the BSP HOT file an airline receives for its agents' sales and the RET a reporting system sends the plan, with agency debit and credit memos against the documents they correct, to IATA's public DISH 23 handbook, written and read |
-| `pkg/prorate` | Interline proration: a through fare divided between coupons by mileage, with the interline service charge, for billing between the carrier that flew and the carrier that sold |
+| `pkg/prorate` | Interline proration: a fare component divided between its coupons by mileage, or by the terms of a special prorate or codeshare agreement, with the service charge or commission, for billing between the carrier that flew and the carrier that sold |
 | `pkg/dcs` | Departure control: the manifest, check-in, seating, bag tagging, boarding, close; bag reconciliation at the door; through check-in for another carrier's connecting passengers; an aircraft substitution that re-seats the cabin; PFS, PTM, PSM, ETL, LDM, CPM; load control and the loadsheet |
 | `pkg/aftn` | The Aeronautical Fixed Telecommunication Network envelope (ICAO Annex 10 Vol II): priority, eight-letter addressee indicators, origin, ZCZC/NNNN |
 | `pkg/ats` | ICAO air traffic services messages (Doc 4444 Appendix 3): FPL, DEP, ARR, DLA, CNL, CHG |

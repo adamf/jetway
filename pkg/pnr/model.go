@@ -201,6 +201,29 @@ type Pricing struct {
 	Total      int64              `json:"total"`
 	PricedAt   time.Time          `json:"priced_at"`
 	Passengers []PassengerPricing `json:"passengers,omitempty"`
+	// CarrierFees is the part of Taxes that is the carriers' own: fuel
+	// and other surcharges, which are revenue and are not remitted.
+	CarrierFees int64 `json:"carrier_fees,omitempty"`
+	// Calc is the fare calculation line: the points and carriers in order
+	// with the amount and basis of each fare component, as a ticket
+	// prints it.
+	Calc string `json:"calc,omitempty"`
+	// Components are the fare components the record was priced as: which
+	// fare pays for which air segments.
+	Components []FareComponent `json:"components,omitempty"`
+}
+
+// FareComponent is one fare and the air segments it covers, counted from
+// zero in itinerary order, with what it costs an adult. Unit numbers the
+// priceable unit it was priced in.
+type FareComponent struct {
+	Carrier string `json:"carrier"`
+	Basis   string `json:"basis"`
+	From    int    `json:"from"`
+	To      int    `json:"to"`
+	Amount  int64  `json:"amount"`
+	Unit    int    `json:"unit"`
+	Kind    string `json:"kind,omitempty"`
 }
 
 // PassengerPricing is one passenger's share: the fare basis per segment in
@@ -239,6 +262,11 @@ type Origin struct {
 	Agent string `json:"agent,omitempty"`
 	// Channel is the transport the first message arrived on.
 	Channel string `json:"channel,omitempty"`
+	// Country is the point of sale's country and Account the contract the
+	// seller booked under, when the booking said: the fares that may only
+	// be sold in some places or to some accounts are priced from them.
+	Country string `json:"country,omitempty"`
+	Account string `json:"account,omitempty"`
 }
 
 // PNR is the canonical record.

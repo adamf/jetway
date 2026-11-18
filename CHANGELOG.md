@@ -5,6 +5,62 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.97 — Fare components and priceable units, the point of sale, minimum connecting times
+- `pkg/fare` prices an itinerary the way a fare engine does. A fare pays
+  for one or more consecutive flights (a fare component). Components
+  are grouped into priceable units: one way, round trip, open jaw,
+  circle trip. `Price` searches every division of the itinerary and
+  returns the cheapest whose fares all pass their rules. Before, each
+  segment was priced alone under its own market's fare, so a connection
+  cost the sum of two local fares and no rule reached past its segment.
+  The model is Carl de Marcken's "Computational Complexity of Air Travel
+  Planning" (ITA Software, 2003), and the tests price that paper's
+  examples: the $2,000 and $1,800 ways to pay for the same three
+  flights, the H14ESNR fare with its days, routing, surcharges and
+  combinations, and the four flights that sell as two open jaws when
+  the circle trip fails its advance purchase.
+- Rules by ATPCO category: day and time (2), season (3) and blackouts
+  (11), flight application with partner carriers and their booking
+  classes (4), advance purchase measured to the first flight of the
+  priceable unit (5), minimum and maximum stay and the Saturday night
+  (6, 7), stopovers by the length of the wait (8, 9), combinations
+  (10), surcharges (12), sales restrictions by country, channel, agency
+  and account (15, 35) and penalties (16). A routing names the points a
+  fare may connect at. A fare is good in both directions unless it is
+  `Directional`, and a `RoundTrip` fare may not be sold one way.
+- `Request.Open` turns the pricing into a lowest-fare search: it chooses
+  each segment's class from the ones that can be sold. `Request.Sale` is
+  the point of sale. The quote carries its fare components, its
+  priceable units and the fare calculation line a ticket prints.
+- A through fare is divided between its segments by their miles. A tax
+  marked `CarrierImposed` (YQ, YR) is totalled apart, because it is the
+  carrier's revenue. A tariff that implements `Taxer` gives the taxes
+  for an itinerary and not only for a carrier.
+- `gateway.BookingRequest` gains `Country`, `Account` and `PricedAt`.
+  The record's origin keeps the point of sale, the pricing is for it,
+  and a quote made earlier is honoured for `Gateway.QuoteValidity`.
+  `pnr.Pricing` keeps the fare calculation, the fare components and the
+  carrier-imposed fees. `Gateway.Miles` supplies sector mileage.
+- `inventory.Controller.Value` is the carrier's own estimate of what a
+  request brings it, net of what the channel costs. A request for one
+  leg is nested in the class its net value covers. A seat therefore
+  stays on sale in the carrier's own channel after it closes in a
+  dearer one.
+- `pkg/mct` is new: minimum connecting times to IATA's SSIM chapter 8
+  (March 2021), which IATA publishes free. It reads and writes the
+  200-byte transmission file, holds station standards, exceptions and
+  suppressions, and answers for a connection by the chapter's hierarchy
+  of 31 data elements, its codeshare rules, its global defaults and the
+  connection-building filter. The tests use the chapter's sample
+  records and its worked examples. The fuzzer found that a record with
+  an invalid status was written and then refused on reading.
+- `prorate.Divide` values each coupon of a fare component under the
+  terms two carriers have agreed: a fixed amount, a share of the fare
+  or of the local fare, a floor or a ceiling, and a service charge or
+  codeshare commission. Coupons without terms share the rest by
+  straight rate. `Coupon` gains `Local`, so a literal without field
+  names no longer compiles.
+
 ## v0.1.96 — A crew member's history, cabin crew, and what a duty pays
 - `crew.History` is a crew member's past as a tracking store holds it:
   block time and flight duty time inside a window, the last duty, and

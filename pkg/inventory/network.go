@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"math"
+	"strings"
 
 	"github.com/adamf/jetway/pkg/pnr"
 )
@@ -90,4 +91,27 @@ func itineraryFare(p *pnr.PNR, segs []*pnr.Segment) (float64, bool) {
 		}
 	}
 	return total, true
+}
+
+// netClass is the class a request is nested as when it is worth less than
+// its own class's fare: the highest class at or below the one asked whose
+// fare the value still covers, or the lowest class on the ladder when it
+// covers none. The ladder comes highest fare first.
+func netClass(ladder []Level, fares map[string]float64, class string, value float64) string {
+	at := -1
+	for i, l := range ladder {
+		if strings.EqualFold(l.Class, class) {
+			at = i
+			break
+		}
+	}
+	if at < 0 || len(fares) == 0 {
+		return class
+	}
+	for i := at; i < len(ladder); i++ {
+		if f, ok := fares[ladder[i].Class]; ok && value >= f {
+			return ladder[i].Class
+		}
+	}
+	return ladder[len(ladder)-1].Class
 }
