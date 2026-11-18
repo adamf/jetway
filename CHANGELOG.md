@@ -5,6 +5,12 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.103 — An empty override is taken off
+- `SetOverride` with an empty status stored the empty status. The next
+  request for the class was answered with no status code. An empty
+  status now removes the override, in `pkg/inventory` and in the
+  gateway's simple inventory, and the class sells as its ladder says.
+
 ## v0.1.102 — An own sale does not write to a published record
 - v0.1.100 decided a carrier's own segments on the record that `Book`
   had just published on the bus. A subscriber that read the record at

@@ -442,10 +442,15 @@ func (inv *Inventory) addClass(pool, class string, delta int) {
 }
 
 // SetOverride forces the outcome for one class on one flight and date, the
-// way a demo shows a refusal or a waitlist on demand.
+// way a demo shows a refusal or a waitlist on demand. An empty status
+// takes the override off and gives the class back to the ladder.
 func (inv *Inventory) SetOverride(carrier, flight, wireDate, board, class, status string) {
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
+	if status == "" {
+		delete(inv.overrides, classKey(carrier, flight, wireDate, board, class))
+		return
+	}
 	inv.overrides[classKey(carrier, flight, wireDate, board, class)] = status
 }
 

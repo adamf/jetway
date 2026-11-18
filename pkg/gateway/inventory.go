@@ -77,6 +77,11 @@ func (inv *Inventory) capacityFor(s pnr.Segment) int {
 func (inv *Inventory) SetOverride(key, status string) {
 	inv.mu.Lock()
 	defer inv.mu.Unlock()
+	if status == "" {
+		// An empty status takes the override off.
+		delete(inv.overrides, key)
+		return
+	}
 	inv.overrides[key] = status
 }
 

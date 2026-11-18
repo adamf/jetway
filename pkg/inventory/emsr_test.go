@@ -347,3 +347,23 @@ func TestAClassSoldPastItsLimitStaysClosed(t *testing.T) {
 		t.Errorf("Y: %s", got)
 	}
 }
+
+// A class forced closed is closed, and an empty status gives it back to
+// the ladder: the override is taken off, and the class sells as the
+// ladder says. An empty override once stayed in place and answered a
+// request with no status at all.
+func TestAnOverrideIsTakenOff(t *testing.T) {
+	inv := New("WN", b737())
+	inv.SetOverride("WN", "2554", "26NOV", "BNA", "K", "UC")
+	if got := decide(t, inv, seg("2554", "K", "HN", 1)); got != "UC" {
+		t.Fatalf("K forced closed answered %q", got)
+	}
+	inv.SetOverride("WN", "2554", "26NOV", "BNA", "K", "")
+	if got := decide(t, inv, seg("2554", "K", "HN", 1)); got != "KK" {
+		t.Errorf("K back on the ladder answered %q", got)
+	}
+	key := avail.NewKey("WN", "2554", time.Date(2026, 11, 26, 0, 0, 0, 0, time.UTC), "BNA", "DCA", "K")
+	if es := inv.Availability([]avail.Key{key}, time.Now().UTC()); len(es) != 1 || es[0].Status != avail.Open {
+		t.Errorf("K back on the ladder is advertised as %+v", es)
+	}
+}
