@@ -5,6 +5,12 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.104 — A split store exports its records
+- `store.Split` did not implement `store.Exporter`. A caller that asked
+  a store for its records one by one found that a hosted carrier's
+  store, with its messages in memory and its records in Postgres, could
+  not give them. `Split.ExportPNRs` now streams from the records store.
+
 ## v0.1.103 — An empty override is taken off
 - `SetOverride` with an empty status stored the empty status. The next
   request for the class was answered with no status code. An empty

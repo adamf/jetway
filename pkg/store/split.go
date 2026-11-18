@@ -126,6 +126,16 @@ func (s Split) SoldSeats(ctx context.Context, carrier, wireDate string) ([]SoldS
 func (s Split) LoadPNRs(ctx context.Context, recs []*pnr.PNR, actor string) error {
 	return s.Records.LoadPNRs(ctx, recs, actor)
 }
+
+// ExportPNRs implements Exporter with the records store's own stream. A
+// records store that cannot stream its records gives an error.
+func (s Split) ExportPNRs(ctx context.Context, fn func(*pnr.PNR) error) error {
+	ex, ok := s.Records.(Exporter)
+	if !ok {
+		return fmt.Errorf("store: records store cannot export its records")
+	}
+	return ex.ExportPNRs(ctx, fn)
+}
 func (s Split) FindPNRsByFlight(ctx context.Context, flightKey, wireDate string, limit int) ([]*pnr.PNR, error) {
 	return s.Records.FindPNRsByFlight(ctx, flightKey, wireDate, limit)
 }

@@ -40,3 +40,39 @@ func TestExportWalksTheBookInOrder(t *testing.T) {
 		}
 	})
 }
+
+// noExport is a records store that cannot stream its records.
+type noExport struct{ Store }
+
+// A split store exports the records of its records store, and none of
+// its message store's. With a records store that cannot stream, it says
+// so and gives no records.
+func TestASplitStoreExportsItsRecords(t *testing.T) {
+	ctx := context.Background()
+	msgs, recs := NewMem(), NewMem()
+	var s Store = Split{Messages: msgs, Records: recs}
+	for _, loc := range []string{"SPL001", "SPL002"} {
+		if err := s.CreatePNR(ctx, samplePNR(loc), []Event{{Type: "created"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := msgs.CreatePNR(ctx, samplePNR("MSG001"), []Event{{Type: "created"}}); err != nil {
+		t.Fatal(err)
+	}
+	ex, ok := s.(Exporter)
+	if !ok {
+		t.Fatal("a split store does not export")
+	}
+	var got []string
+	if err := ex.ExportPNRs(ctx, func(p *pnr.PNR) error { got = append(got, p.RecordLocator); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "SPL001" || got[1] != "SPL002" {
+		t.Errorf("the records store holds SPL001 and SPL002; the export gave %v", got)
+	}
+	n := 0
+	err := Split{Messages: msgs, Records: noExport{recs}}.ExportPNRs(ctx, func(*pnr.PNR) error { n++; return nil })
+	if err == nil || n != 0 {
+		t.Errorf("a records store that cannot stream: %d records and error %v", n, err)
+	}
+}
