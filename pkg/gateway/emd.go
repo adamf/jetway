@@ -205,6 +205,9 @@ func (g *Gateway) notifyDocument(ctx context.Context, rec *pnr.PNR, doc pnr.Tick
 		byCarrier[carrier] = append(byCarrier[carrier], padis.CouponRef{Number: c.Number, Status: c.Status})
 	}
 	for carrier, coupons := range byCarrier {
+		if g.Own(carrier) {
+			continue // the node's own flight: it holds the document already
+		}
 		if err := g.sendTicketControl(ctx, rec, doc, carrier, coupons); err != nil {
 			g.Log.Error("could not tell a carrier about a document",
 				"locator", rec.RecordLocator, "carrier", carrier,

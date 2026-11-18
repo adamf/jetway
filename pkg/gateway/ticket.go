@@ -279,6 +279,9 @@ func (g *Gateway) notifyTicketed(ctx context.Context, rec *pnr.PNR, by string) {
 			})
 		}
 		for carrier, coupons := range byCarrier {
+			if g.Own(carrier) {
+				continue // the node's own flight: it holds the ticket already
+			}
 			if err := g.sendTicketControl(ctx, rec, t, carrier, coupons); err != nil {
 				// The ticket exists either way. What is lost is the carrier
 				// knowing, so it goes in front of somebody rather than being

@@ -5,6 +5,23 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.100 — A carrier's node sells its own seats
+- A node with a carrier's identity and a `Responder` could answer other
+  systems' requests and could not sell for itself. A booking of its own
+  flight made on the node, from its console, its API or an NDC order,
+  wrote the record, found no link to itself, and left the segment at
+  `HN` for ever. The node now decides its own carrier's segments from
+  its own inventory when the booking is made, with a nil peer and no
+  message. `Gateway.Own` reports whether a carrier's seats are the
+  node's own.
+- A cancellation of an own segment releases the seat through the
+  `Releaser` and counts no carrier as unreachable. Ticketing, documents
+  and a division send nothing to the node's own carrier and queue no
+  divergence for it. An added segment on the node's own carrier is
+  decided the same way.
+- Segments of other carriers on the same record are requested over
+  their links as before. A node with no `Responder` is unchanged.
+
 ## v0.1.99 — An NDC order is a sale in the NDC channel
 - An order created over `POST /ndc` now carries the channel `ndc` on its
   booking request, so the record's origin names it and a fare filed for

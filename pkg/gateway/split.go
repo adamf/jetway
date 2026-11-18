@@ -145,7 +145,8 @@ func (g *Gateway) Split(ctx context.Context, req SplitRequest) (*SplitResult, er
 func (g *Gateway) adviseSplit(ctx context.Context, parent, child *pnr.PNR, by string) (advised, unadvised []string) {
 	carriers := map[string]bool{}
 	for _, s := range child.Segments {
-		if s.Type == pnr.SegmentAir && s.Status != "XX" {
+		// The node's own carrier holds both records already.
+		if s.Type == pnr.SegmentAir && s.Status != "XX" && !g.Own(s.Carrier) {
 			carriers[s.Carrier] = true
 		}
 	}

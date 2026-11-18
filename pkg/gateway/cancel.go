@@ -78,6 +78,7 @@ func (g *Gateway) Cancel(ctx context.Context, locator string, opts CancelOptions
 		// wrong -- so the messages have to be built while the segments are
 		// still live, and the record marked afterwards.
 		var doomed []*pnr.Segment
+		var ownHeld []pnr.Segment // this node's own seats, as they were held
 		for i := range rec.Segments {
 			s := &rec.Segments[i]
 			if s.Type != pnr.SegmentAir || s.Status == "XX" {
@@ -86,7 +87,13 @@ func (g *Gateway) Cancel(ctx context.Context, locator string, opts CancelOptions
 			if len(want) > 0 && !want[s.Ref] {
 				continue
 			}
-			carriers[s.Carrier] = append(carriers[s.Carrier], s.Ref)
+			if g.Own(s.Carrier) {
+				// The node's own seat: nobody to tell, and the seat goes
+				// back to the node's own inventory.
+				ownHeld = append(ownHeld, *s)
+			} else {
+				carriers[s.Carrier] = append(carriers[s.Carrier], s.Ref)
+			}
 			doomed = append(doomed, s)
 		}
 		if len(doomed) == 0 {
@@ -122,6 +129,7 @@ func (g *Gateway) Cancel(ctx context.Context, locator string, opts CancelOptions
 		}
 
 		g.Bus.Publish(EvPNR, g.pnrView(rec))
+		g.releaseOwn(ctx, ownHeld)
 		res := g.notifyCancel(ctx, rec, outbound, buildErrs, opts)
 		// Unreachable is the number worth alerting on: it is how often this
 		// node and a partner end up disagreeing about what is held.

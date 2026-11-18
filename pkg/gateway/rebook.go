@@ -89,6 +89,13 @@ func (g *Gateway) AddSegment(ctx context.Context, locator string, s BookingSegme
 		g.Bus.Publish(EvPNR, g.pnrView(rec))
 		g.Log.Info("segment added", "locator", locator, "segment", seg.Describe(), "by", by)
 
+		if g.Own(seg.Carrier) {
+			// The node's own seat: decided here, with nothing sent.
+			if _, err := g.sellOwn(ctx, rec, by, func(x pnr.Segment) bool { return x.Ref == newRef }); err != nil {
+				g.Log.Warn("could not decide the added own segment", "locator", locator, "err", err)
+			}
+			return rec, nil
+		}
 		if _, err := g.requestSegments(ctx, rec, seg.Carrier, func(x pnr.Segment) bool { return x.Ref == newRef }); err != nil {
 			// The record holds the leg; the carrier does not know yet. That
 			// is exactly the divergence the queue exists to surface, and the

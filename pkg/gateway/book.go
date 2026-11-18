@@ -288,8 +288,17 @@ func (g *Gateway) Book(ctx context.Context, req *BookingRequest) (*BookResult, e
 	g.Bus.Publish(EvPNR, g.pnrView(rec))
 	g.Log.Info("booking created", "locator", rec.RecordLocator, "segments", len(rec.Segments))
 
+	// The node's own carrier's seats are its own to sell: decided here,
+	// with nothing sent.
+	if _, err := g.sellOwn(ctx, rec, req.Agent, nil); err != nil {
+		g.Log.Warn("could not decide an own sale", "locator", rec.RecordLocator, "err", err)
+	}
+
 	res := &BookResult{PNR: rec, Carriers: rec.Carriers()}
 	for _, carrier := range rec.Carriers() {
+		if g.Own(carrier) {
+			continue
+		}
 		id, err := g.RequestFromCarrier(ctx, rec, carrier)
 		if err != nil {
 			// A link being down must not undo a booking. The record stays at
