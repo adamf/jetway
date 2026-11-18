@@ -33,7 +33,10 @@ func startHelloListener(t *testing.T, c config.Ingress) (*TCP, framer, chan Mess
 		got <- m
 		return Receipt{ID: "m"}, nil
 	})
-	waitListening(t, tcp.Addr())
+	// No probe dial to see that it listens: Listen has bound the socket
+	// already, and a probe is itself a connection. It counted against
+	// max_connections until its session noticed the hang-up, so a test
+	// that dialled two peers at once found one of the two places taken.
 	f, _ := FramerFor(c.Framing)
 	return tcp, f, got
 }
