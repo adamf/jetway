@@ -129,7 +129,10 @@ tariff. `pkg/fare` is the structure of a filing and carries no fare of its own.
 The fare basis is on every segment, because a ticket needs it there. The
 record also keeps the fare calculation line and the fare components, and it is
 priced for its point of sale: the country, channel, agency and account that
-booked it.
+booked it. An order that arrives over NDC is a sale in the `ndc` channel. A
+node that sells for a shopping engine it trusts can set `AcceptQuotes`. The
+booking then carries the engine's own quote, and the node stores it after it
+checks the quote against the passengers, the segments and the classes.
 
 Below the itinerary is everything issued against it. There are 2 flight
 tickets, with a coupon per segment. An **EMD-A** for excess baggage is
