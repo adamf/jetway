@@ -5,6 +5,43 @@ what is fixed below was found by [wholesky](https://github.com/adamf/wholesky)
 driving hundreds of embedded jetway assemblies through a simulated day of
 global airline traffic -- the widening exercise surface is the test plan.
 
+## v0.1.105 — A forecast learned from a flight's own departures
+- `pkg/inventory` had the optimiser, EMSR-b, and no forecaster. The
+  caller gave the demand by class. `inventory.History` is now the
+  forecaster: the booking record of one flight's cabin over its past
+  departures, and the class controls that the record gives.
+- The record is kept by time frame and by strategy. A strategy is the
+  lowest class on sale. For each one the record holds how long it was in
+  force and what was sold in all classes meanwhile. `Log.Expose` and
+  `Log.Sale` write a departure, and `History.Record` adds it.
+- Bookings are divided by the time on sale. A class that was closed took
+  no bookings, and a forecast that reads those sales as demand protects
+  fewer seats at each departure. The division is the maximum-likelihood
+  rate of a Poisson stream that was observed for part of the time.
+- `MarginalRevenue` is the marginal revenue transformation of Fiig,
+  Isler, Hopperstad and Belobaba (2010). It turns the demand and revenue
+  of each strategy into independent demands at adjusted fares, which
+  EMSR-b can take. A traveller who would pay a higher fare buys the lower
+  fare when it is on sale, and the adjusted fare of the lower class
+  counts that loss. The tests hold `MarginalRevenue` and `EMSRb` against
+  tables 1 and 2 of the paper.
+- `History.Controls` gives each class's value, the seats to hold back
+  from it, and whether to sell it, at the start of a time frame.
+  `Authorizations` turns the controls into the nested limits that an
+  `Inventory` sells under. `History.ToCome` gives the demand still to
+  come by class.
+- `History.Method` selects how the record is read, so that the 3 ways can
+  be measured against each other: fare adjusted, unconstrained class by
+  class, or sales read as demand. A test runs example 5 of Cooper,
+  Homem-de-Mello and Kleywegt's spiral-down paper. The manager's own
+  model protects 70 seats and the best level is 95, as the paper has
+  them. From 70, sales read as demand end at 7 seats protected and a
+  revenue of 72. Fare adjustment ends at 94 seats and a revenue of 96.5.
+- A strategy that is no longer used is forgotten after about 3 weeks of
+  departures, and its class is then tried again at its fare.
+  `History.Salt` spreads that over 2 weeks, so the flights of a carrier
+  do not all try their closed classes again on one day.
+
 ## v0.1.104 — A split store exports its records
 - `store.Split` did not implement `store.Exporter`. A caller that asked
   a store for its records one by one found that a hosted carrier's
